@@ -13,7 +13,8 @@
          dark-mode phones. -->
     <meta name="color-scheme" content="only light" />
     <meta name="generator" content="bento-slides" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='6' fill='%2316273E'/%3E%3Crect x='6' y='6' width='6' height='20' rx='2' fill='%235E7699'/%3E%3Crect x='14' y='6' width='12' height='9' rx='2' fill='%23FF9E8A'/%3E%3Crect x='14' y='17' width='12' height='9' rx='2' fill='%23F0EBE0'/%3E%3C/svg%3E" />
+    <!-- BETA FORK: the design system's favicon-32.png (beta/logo/), base64; src/beta/marks.ts carries the same URI and scripts/test-beta-marks.ts keeps them identical -->
+    <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABb0lEQVR4nO3Uv0vVURjH8Vc/CO5tKkihIRCqoaWlIGhy1Qa3iEAaG4TmlvSPcAiCoMT+g4a2GkKRSLThciFDmgqpEIuQihsHPsIXiXvVFofzhi98z/c5z3M+z+c8fKlUKpXKIWMJHRw5QO4ZnPpfAev4dsDcX1jYb9Lxf3z7gmHcxTE8wVojfhV38BWP8BHj+J28e5jDD4zhCr7jOVYHCeok8Q9eo5fnWuLTWc/jTd4v4n7ei3ufMIJzqfMiTZX45CABy9l4Iet2ChZrhxIrzsicLGdujuaQV7vqnchzEu/SXF8+4POub09T/Ca28Tb7iltbEdXK/DQFjGZfuaKXqbG5Fwe2cTrrMgPvo/58DnuQA1uZ/HYc2Mi17cxWL+J3KOJ+DhKwnsTS2UzjnicSf5b1bdyIG0WYdFpijzMzXazgEm415qkvDzGL6+m82zhcOp2KS72ILA4ULmMxV1P+B2fjyFZyZtJApVKpVCqa/AWMqGJeIiGNyQAAAABJRU5ErkJggg==" />
     <title>beta/slides</title> <!-- BETA FORK -->
     <!--
       NOTICE — bento/slides
@@ -60,32 +61,42 @@
   </head>
   <body>
     <!-- splash: pure CSS, paints before the bundle parses; main.ts dismisses it -->
+    <!-- BETA FORK: the mark is the <svg> element of beta/logo/wordmark.svg, verbatim (test-beta-marks.ts), charcoal on cream -->
     <div id="bento-splash" aria-hidden="true">
-      <div class="bs-mark"><i class="bs-a"></i><i class="bs-b"></i><i class="bs-c"></i></div>
-      <div class="bs-word"><b>Bento</b>/Slides</div>
+      <div class="bs-mark"><svg xmlns="http://www.w3.org/2000/svg" viewBox="140 185 215 82" fill="currentColor" role="img" aria-label="Beta">
+  <g transform="matrix(1, 0, 0, -1, -49.3461, 868.292)">
+    <g transform="translate(318.3633 620.9612)">
+      <path d="M 0 0 L 0 26.582 L -6.699 26.582 L -6.699 40.193 L 0 40.193 L 0 54.532 L 15.912 54.532 L 15.912 40.193 L 29.096 40.193 L 29.096 26.582 L 15.912 26.582 L 15.912 2.616 C 15.912 -1.048 17.48 -2.829 21.034 -2.829 C 23.966 -2.829 26.582 -2.097 28.892 -0.839 L 28.892 -13.611 C 25.542 -15.596 21.665 -16.853 16.329 -16.853 C 6.597 -16.853 0 -12.98 0 0"/>
+    </g>
+    <g transform="translate(387.3595 624.8306)">
+      <path d="M 0 0 L 0 2.829 C -2.727 4.082 -6.281 4.922 -10.159 4.922 C -16.96 4.922 -21.145 2.199 -21.145 -3.034 C -21.145 -7.325 -17.591 -9.839 -12.46 -9.839 C -5.028 -9.839 0 -5.757 0 0 M -36.536 -3.452 C -36.536 8.795 -27.221 14.446 -13.926 14.446 C -8.275 14.446 -4.193 13.504 -0.213 12.145 L -0.213 13.086 C -0.213 19.679 -4.295 23.343 -12.247 23.343 C -18.324 23.343 -22.611 22.193 -27.741 20.305 L -31.721 32.45 C -25.542 35.169 -19.474 36.95 -9.946 36.95 C -1.261 36.95 5.02 34.644 9 30.669 C 13.184 26.484 15.068 20.305 15.068 12.771 L 15.068 -19.781 L -0.315 -19.781 L -0.315 -13.709 C -4.193 -18 -9.528 -20.829 -17.275 -20.829 C -27.843 -20.829 -36.536 -14.757 -36.536 -3.452"/>
+    </g>
+    <g transform="translate(235.8703 633.1508)">
+      <path d="M 0 0 C 0 9.315 -6.281 15.494 -13.713 15.494 C -21.145 15.494 -27.315 9.315 -27.315 -0.209 C -27.315 -9.524 -21.145 -15.699 -13.713 -15.699 C -6.281 -15.699 0 -9.626 0 0 M -27.11 -20.829 L -27.11 -28.154 L -43.022 -28.154 L -43.022 48.255 L -27.11 48.255 L -27.11 19.888 C -23.233 25.12 -17.898 28.994 -9.631 28.994 C 3.452 28.994 15.912 18.737 15.912 -0.209 C 15.912 -18.942 3.665 -29.203 -9.631 -29.203 C -18.111 -29.203 -23.343 -25.329 -27.11 -20.829"/>
+    </g>
+    <g transform="translate(295.1933 637.4419)">
+      <path d="M 0 0 C -0.946 7.121 -5.131 11.932 -11.829 11.932 C -18.426 11.932 -22.713 7.223 -23.974 0 Z M -39.562 -4.5 C -39.562 11.514 -28.159 24.703 -11.829 24.703 C 6.903 24.703 15.486 10.155 15.486 -5.757 C 15.486 -7.01 15.383 -8.476 15.281 -9.942 L -23.761 -9.942 C -22.193 -17.165 -17.165 -20.932 -10.048 -20.932 C -4.713 -20.932 -0.835 -19.257 3.554 -15.175 L 12.665 -23.233 C 7.432 -29.723 -0.102 -33.703 -10.261 -33.703 C -27.11 -33.703 -39.562 -21.873 -39.562 -4.5"/>
+    </g>
+  </g>
+</svg></div>
+      <div class="bs-word"><b>Beta</b>/Slides</div>
       <div class="bs-bar"><i></i></div>
     </div>
     <style>
-#bento-splash{position:fixed;inset:0;z-index:9999;display:grid;place-content:center;justify-items:center;gap:26px;background:radial-gradient(130% 90% at 50% 38%,#1c2c44 0%,#101c2c 58%,#0a1220 100%);pointer-events:none;transition:opacity .5s ease;animation:bsAuto .6s ease 9s both}
+#bento-splash{position:fixed;inset:0;z-index:9999;display:grid;place-content:center;justify-items:center;gap:26px;background:#F5F3EF;color:#1A1A1A;pointer-events:none;transition:opacity .5s ease;animation:bsAuto .6s ease 9s both}
 #bento-splash.done{opacity:0}
-.bs-mark{position:relative;width:104px;height:104px;border-radius:24px;background:#16273e;box-shadow:0 0 56px rgba(255,238,214,.26),0 10px 34px rgba(0,0,0,.55);overflow:hidden;animation:bsIn .7s cubic-bezier(.22,1.4,.36,1) both,bsFloat 3.4s ease-in-out .9s infinite}
-.bs-mark i{position:absolute;border-radius:9px;opacity:0;animation:bsTile .55s cubic-bezier(.25,1.5,.45,1) both}
-.bs-b{left:12px;top:12px;width:24px;height:80px;background:#5e7699;animation-delay:.18s}
-.bs-a{right:12px;top:12px;width:50px;height:37px;background:#ff9e8a;animation-delay:.3s}
-.bs-c{right:12px;bottom:12px;width:50px;height:37px;background:#f0ebe0;animation-delay:.42s}
-.bs-mark:after{content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 38%,rgba(255,255,255,.35) 50%,transparent 62%);transform:translateX(-130%);animation:bsSheen 1s ease 1.05s both}
-.bs-word{font:600 15px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#e8edf4;letter-spacing:.42em;text-transform:uppercase;text-indent:.42em;animation:bsUp .6s ease .55s both}
-.bs-word b{color:#ff9e8a;font-weight:800}
-.bs-bar{width:124px;height:2px;border-radius:1px;background:rgba(255,255,255,.13);overflow:hidden;animation:bsUp .5s ease .85s both}
-.bs-bar i{display:block;width:44%;height:100%;border-radius:1px;background:linear-gradient(90deg,#ff9e8a,#ffbca8);animation:bsScan 1.1s cubic-bezier(.45,0,.55,1) 1s infinite alternate}
-@keyframes bsIn{from{transform:scale(.55) rotate(-8deg);opacity:0}}
-@keyframes bsTile{from{transform:translateY(28px) scale(.6);opacity:0}to{transform:none;opacity:1}}
-@keyframes bsSheen{to{transform:translateX(130%)}}
+.bs-mark{width:168px;animation:bsIn .7s cubic-bezier(.22,1.4,.36,1) both,bsFloat 3.4s ease-in-out .9s infinite}
+.bs-mark svg{display:block;width:100%;height:auto}
+.bs-word{font:600 15px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1A1A1A;letter-spacing:.42em;text-transform:uppercase;text-indent:.42em;animation:bsUp .6s ease .55s both}
+.bs-word b{font-weight:800}
+.bs-bar{width:124px;height:2px;border-radius:1px;background:rgba(26,26,26,.13);overflow:hidden;animation:bsUp .5s ease .85s both}
+.bs-bar i{display:block;width:44%;height:100%;border-radius:1px;background:#1A1A1A;animation:bsScan 1.1s cubic-bezier(.45,0,.55,1) 1s infinite alternate}
+@keyframes bsIn{from{transform:scale(.55);opacity:0}}
 @keyframes bsFloat{50%{transform:translateY(-5px)}}
 @keyframes bsUp{from{opacity:0;transform:translateY(10px)}}
 @keyframes bsScan{from{transform:translateX(-30%)}to{transform:translateX(210%)}}
 @keyframes bsAuto{to{opacity:0;visibility:hidden}}
-@media (prefers-reduced-motion:reduce){#bento-splash,#bento-splash *,.bs-mark:after{animation-duration:.01ms;animation-delay:0ms;animation-iteration-count:1}}
+@media (prefers-reduced-motion:reduce){#bento-splash,#bento-splash *{animation-duration:.01ms;animation-delay:0ms;animation-iteration-count:1}}
     </style>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>

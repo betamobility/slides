@@ -348,6 +348,12 @@ if (app.ownsSiteContent) {
     .replace(/__APP_VERSION__/g, version)
     .replace(/__SHELL_KB__/g, String(Math.round(statSync(shellSrc).size / 1024 / 10) * 10))
   writeFileSync(join(site, 'index.html'), landing)
+  // Beta's favicons, vendored from the design system in beta/logo/ and linked
+  // by landing.html and 404.html as /logo/*.png (plan U5, KTD13). The shell's
+  // own favicon is the same favicon-32.png inlined; scripts/test-beta-marks.ts
+  // pins every copy to the design-system bytes.
+  mkdirSync(join(site, 'logo'), { recursive: true })
+  for (const f of ['favicon-16.png', 'favicon-32.png', 'apple-touch-icon.png']) cpSync(join(root, `beta/logo/${f}`), join(site, `logo/${f}`))
   for (const f of ['robots.txt', 'sitemap.xml']) cpSync(join(root, `site-src/${f}`), join(site, f))
 
   cpSync(join(site, `${app.dir}/agents.md`), join(site, 'agents.md'))

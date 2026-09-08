@@ -254,6 +254,15 @@ jobs:
         # configured host, platform default; no throw before configureApp).
         run: node scripts/test-beta-appconfig.ts
 
+      - name: Beta marks rig
+        # v1.1 U5: beta/logo/* hash to the design-system originals; the
+        # favicon data URI (index.html, marks.ts) decodes to favicon-32.png,
+        # the splash and marks.ts inline wordmark.svg's element verbatim,
+        # upstream's svg mark is gone, the site pages link /logo/*.png and
+        # release.mjs copies them; the built shell (from the build step
+        # above) carries the same favicon tag.
+        run: node scripts/test-beta-marks.ts
+
       - name: Beta plugin and skill rig
         # Static claims of plugins/beta-slides: published URLs, template names,
         # manifests, inherited rules, and the as-of stamp shape (AE3).
@@ -264,6 +273,15 @@ jobs:
           slides/node_modules/.bin/esbuild scripts/test-beta-embed.ts --bundle --platform=node --format=esm \
             --outfile="$RUNNER_TEMP/test-beta-embed.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-embed.mjs"
+
+      - name: Beta deck store rig
+        # U7: server/deck-store under Miniflare (a devDependency of slides/,
+        # so after `npm ci`): every route is 401 without a verified Access
+        # assertion, writes are shape-validated, a served deck is the uploaded
+        # bytes with the KTD9 headers, and Plausible sees surface + outcome
+        # only. Verifies Access for real against a stub JWKS and keys minted
+        # at run time.
+        run: node scripts/test-beta-store.ts
 
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
