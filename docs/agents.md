@@ -475,3 +475,116 @@ keywords}` object — great for title slides and footers that fill from one plac
 
 Working examples of everything above: the template decks at
 [bento.page](https://bento.page) — open one and read its JSON block.
+
+## Beta build
+
+This guide is served from `slides.betamobility.ai` by Beta Mobility's fork
+of bento/slides (`appId: beta-slides`). Everything above applies unchanged.
+This section is what the fork adds; the `beta-slides` Claude Code plugin
+points here.
+
+### Design system through the deck's own keys
+
+- A Beta deck carries the design system in `theme`, `fonts`, `assets` and
+  `layouts`, generated from `Tools/design-system` tokens (`beta/theme.json`
+  in the fork). Cream `bg1`, charcoal `tx1`, sage `accent1`, teal `accent2`,
+  greys `accent3..5`, cream-dark `accent6`; Playfair Display as
+  `theme.headingFamily`, Inter as `theme.fontFamily`, DM Mono embedded for
+  kickers, numbers and tags. All three faces are in `doc.assets` as woff2.
+- **Colours are palette slots, never hex in content.** Every painted property
+  on an element records its slot in `themeRefs` (`{ "color": "tx1" }`,
+  `{ "fill": "accent1" }`, `{ "fill": "accent1 -20%" }`) and the literal is
+  filled from `theme`. Re-pointing one slot restyles the deck. The slot names
+  are the ones this guide lists under Layouts and `role`.
+- Six layouts ship in every Beta template's `doc.layouts`: `beta-title`,
+  `beta-section`, `beta-two-col`, `beta-chart-text`, `beta-hero`,
+  `beta-closing`. Each text element has a `role` and a `placeholder`; footer
+  chrome shares ids so it morphs. Start from a template at
+  `/templates/client-pitch.bento.html`, `/templates/insight-brief.bento.html`
+  or `/templates/workshop.bento.html`.
+- `meta.company` is `Beta Mobility`; set `meta.author`. Title slides and
+  footers use `{{company}}`, `{{author}}`, `{{date}}`, `{{page:2}}`.
+- A deck records the design-system version it was generated from in a
+  top-level `beta: { designSystem, tokens }` key. `validate()` reports it as
+  an unknown key; that one warning is expected.
+
+### Data refreshed at edit time
+
+A deck opened on stage never fetches anything. When a figure comes from a
+Beta source, write the value into the document and add a `kicker`-role text
+element on that slide reading `Data as of YYYY-MM-DD` (the ISO date it was
+fetched). `beta-chart-text` carries a placeholder for it (`beta-asof`).
+
+### Export PPTX and its report
+
+The editor has **Export PPTX** beside Export PDF. It writes an editable
+PowerPoint file: real text boxes, shapes, tables and charts, in the theme's
+chart palette, with speaker notes; state and hidden slides travel hidden.
+What cannot make the trip degrades to a picture and is named in a report,
+shown as a toast (per-reason counts above eight entries) and in full in the
+browser console:
+
+| reason | what happened |
+|---|---|
+| `gradient` | a fill or text gradient was flattened to its first stop |
+| `svg` | SVG artwork became a picture |
+| `media` | a video or audio element became its poster |
+| `embed` | an `embed` element became a picture of its `view` |
+| `code-colour` | a code block lost syntax colouring |
+| `path-arc` | arc segments in a path were flattened |
+| `image-remote` | an image not embedded in the file became a placeholder |
+| `chart`, `chart-mixed` | a series type the mapper cannot draw |
+| `motion` (once per deck) | morph, effects, hover and state interactions do not exist in PowerPoint |
+| `fonts` (once per deck) | faces are referenced by name; install Inter, Playfair Display and DM Mono |
+
+Read the report to the person before they send the file. The session
+(`collab`) never enters the export.
+
+### Embed
+
+The Beta build of Bento Slides adds one element type. It is built to the
+`bento/embed` shape upstream settled in `docs/DECISIONS.md` (2026-08-19), so
+a deck carrying one opens in an upstream shell without breaking.
+
+```json
+{ "id": "em1", "type": "embed", "x": 120, "y": 100, "w": 1040, "h": 520,
+  "rotation": 0, "opacity": 1,
+  "app": "web", "url": "https://example.com/dashboard", "live": true,
+  "view": "asset:dash-view" }
+```
+
+- **`view` (required)** is the static render: inline `<svg …>` markup, or an
+  `"asset:<key>"` whose value is that markup. It ALWAYS paints: offline, in
+  thumbnails, in print, and in any shell that has never heard of the `app`.
+  `validate()` reports a missing view as `embed-missing-view` (error) and a
+  URL in `view` as `embed-remote-view` (warning). A raster screenshot goes in
+  as `<svg viewBox="0 0 W H"><image href="data:image/png;base64,…"/></svg>`.
+  The view is untrusted markup and goes through the svg element's sanitiser:
+  scripts, handlers and foreign content are stripped.
+- **`app`** names what made it: `bento/dash`, `bento/type`, … or `web` for a
+  plain page. Unknown values are rendered (their view), never rejected.
+- **`doc`** (optional) is the source: pure JSON, or an `"asset:<key>"`.
+- **`url` and `live`** (optional, `app: "web"` only): with `live: true` and an
+  http(s) `url`, the shell layers a sandboxed iframe (no `allow-same-origin`,
+  no top navigation) over the view. The frame is created only while
+  `navigator.onLine` is true AND Bento's offline switch is off; either kind
+  of offline shows the view. The frame's `error` handler removes it so the
+  view shows again (browsers report most failed navigations as `load`, not
+  `error`, so treat that as a safety net, not a guarantee). Thumbnails never
+  create a frame. Default to `live` absent:
+  a slide that needs the network to make sense is a slide that fails on
+  conference wifi.
+
+**How an upstream shell treats it** (read against a pristine upstream
+checkout, 2026-09-08). `parseDoc` (`slides/src/model.ts:1152`) accepts any
+JSON whose `format` matches and keeps unknown elements through open and save,
+so the deck loads and the embed survives a round trip. `renderElement`
+(`slides/src/render.ts:1020`) switches on `el.type` with no `default`, so an
+embed becomes an empty, positioned `div.bento-el-embed`: a hole at the right
+place and size, with no view painted. `validate()`
+(`slides/src/validate.ts:269`) looks the type up in `MODEL_KEYS.element`, finds
+nothing, and says nothing, not even `unknown-key`. On paste, `sanitizeElement`
+(`slides/src/untrusted.ts:460`) drops the element outright. Every other element
+on the slide renders normally. The DECISIONS promise of "never a hole" covers
+an unknown `app` inside a known embed element, not an unknown element type,
+which is why the consumer side of this shape is Beta's upstream pull request.

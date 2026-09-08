@@ -35,12 +35,11 @@
 // rebuild producing different bytes than what was signed.)
 
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spliceDoc } from './guestbook-deck.mjs'
 import { gateShell } from './shell-gate.mjs'
-import { APPS, RELEASE_MARKER, tagFor } from './apps.mjs'
+import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
@@ -157,6 +156,13 @@ if (app.agents && existsSync(join(root, app.agents))) {
 gateShell(join(site, `releases/${app.dir}/${app.shell}`))
 
 const key = opt('key', null)
+// BETA FORK: a real release (not a rehearsal into --out) needs the fork's
+// public key in the registry and the shell, or every shipped file would refuse
+// the manifest this run is about to sign. scripts/apps.mjs says how to set it.
+if (appKey === 'slides' && !app.publicKeyJwk && !args.includes('--out')) {
+  console.error('✗ APPS.slides.publicKeyJwk is null: shipped files would verify against the platform key and refuse this release.\n  Run node scripts/keygen.mjs, paste the PUBLIC half into scripts/apps.mjs and slides/src/main.ts (configureApp publicKeyJwk), rebuild, then release.')
+  process.exit(1)
+}
 
 /**
  * Release notes for the manifest, lifted from this version's CHANGELOG entry.
@@ -274,7 +280,7 @@ const signArgs = [
   join(site, `releases/${app.dir}/${app.shell}`),
   '--app', app.appId,
   '--version', version,
-  '--url', `https://bento.page/releases/${app.dir}/${app.shell}`,
+  '--url', `${SITE.origin}/releases/${app.dir}/${app.shell}`,
   '--out', join(site, `releases/${app.dir}/manifest.json`),
 ]
 if (notes) signArgs.push('--notes', notes)
@@ -319,7 +325,7 @@ if (app.packs) {
   console.log(`packs: ${app.appId} has no signed pack channel yet — skipped`)
 }
 
-writeFileSync(join(site, 'CNAME'), 'bento.page\n')
+writeFileSync(join(site, 'CNAME'), `${SITE.host}\n`)
 // The site is fully pre-built static — disable Jekyll so every file is served
 // verbatim. Without this, GitHub Pages' Jekyll processes .md files that carry
 // YAML front matter (e.g. skills/*/SKILL.md) into .html, 404-ing the .md URL.
@@ -332,83 +338,37 @@ writeFileSync(join(site, '.nojekyll'), '')
 // shell it did not build, so it leaves the seeded copies in place untouched.
 // When spaces gets its own landing slot, it gets its own entry here.
 if (app.ownsSiteContent) {
-  // The real landing page — assembled from site-src/landing.html with the
-  // deck's embedded typefaces injected (scripts/build-landing.mjs).
-  execFileSync('node', [join(root, 'scripts/build-landing.mjs'), join(site, 'index.html')], { stdio: 'inherit' })
+  // BETA FORK (docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md,
+  // U8 and KTD12): the site is a one-page landing plus the release tree and
+  // the agent guide. Upstream's gallery, 404 deck, QR page, announcement deck
+  // and guestbook are bento.page content and are not assembled here; the
+  // scripts stay in the tree for the weekly merge. `site-src/landing.html`
+  // is self-contained, so no build step and no embedded typefaces.
+  const landing = readFileSync(join(root, 'site-src/landing.html'), 'utf8')
+    .replace(/__APP_VERSION__/g, version)
+    .replace(/__SHELL_KB__/g, String(Math.round(statSync(shellSrc).size / 1024 / 10) * 10))
+  writeFileSync(join(site, 'index.html'), landing)
+  for (const f of ['robots.txt', 'sitemap.xml']) cpSync(join(root, `site-src/${f}`), join(site, f))
 
-  // The gallery — four template decks spliced from the same staged shell
-  // (each carries template:true; opening one mints a fresh, independent deck).
-  execFileSync('node', [join(root, 'scripts/build-example-decks.mjs'), join(site, 'gallery')], { stdio: 'inherit' })
-
-  // The agent guide at the SITE ROOT — the compat URL. The per-app copy at
-  // /slides/agents.md is written above, from the same source; this one exists
-  // because the README and the harness SKILL.md point at /agents.md, and that
-  // SKILL.md ships inside a zip people upload to claude.ai.
   cpSync(join(site, `${app.dir}/agents.md`), join(site, 'agents.md'))
-  // The harness skill (canonical home: the Claude Code plugin at
-  // plugins/bento-slides). Published three ways: the raw SKILL.md (curl
-  // one-liner), a claude.ai-uploadable zip (must contain bento-slides/SKILL.md,
-  // folder-inside-zip), and a compat copy at the old bento-deck URL.
-  const skillSrc = join(root, 'plugins/bento-slides/skills/bento-slides/SKILL.md')
-  mkdirSync(join(site, 'skills/bento-slides'), { recursive: true })
-  cpSync(skillSrc, join(site, 'skills/bento-slides/SKILL.md'))
-  mkdirSync(join(site, 'skills/bento-deck'), { recursive: true })
-  cpSync(skillSrc, join(site, 'skills/bento-deck/SKILL.md'))
-  execFileSync('zip', ['-q', '-X', '-o', 'bento-slides.zip', 'bento-slides/SKILL.md'], { cwd: join(site, 'skills') })
+  // The skill is published for `/plugin marketplace add`-less installs: a zip
+  // people upload to claude.ai. Beta's plugin (plugins/beta-slides) replaces
+  // upstream's here once U7 lands; until then upstream's skill is what ships.
+  const skillSrc = [
+    join(root, 'plugins/beta-slides/skills/beta-slides/SKILL.md'),
+    join(root, 'plugins/bento-slides/skills/bento-slides/SKILL.md'),
+  ].find(existsSync)
+  mkdirSync(join(site, 'skills/beta-slides'), { recursive: true })
+  cpSync(skillSrc, join(site, 'skills/beta-slides/SKILL.md'))
+  execFileSync('zip', ['-q', '-X', '-o', 'beta-slides.zip', 'beta-slides/SKILL.md'], { cwd: join(site, 'skills') })
 
-  // MIT license — travels to the public site repo so the published tree carries it.
   cpSync(join(root, 'LICENSE'), join(site, 'LICENSE'))
-
-  // /help — the user-facing guide (linked from the editor's ? overlay).
-  mkdirSync(join(site, 'help'), { recursive: true })
-  cpSync(join(root, 'site-src/help.html'), join(site, 'help/index.html'))
-
-  // 404 — of course it's a deck (see build-404-deck.mjs + site-src/404.html).
-  execFileSync('node', [join(root, 'scripts/build-404-deck.mjs'), join(site, '404.bento.html')], { stdio: 'inherit' })
   cpSync(join(root, 'site-src/404.html'), join(site, '404.html'))
 
-  // /q — "this QR code is a presentation" (deck lives in the URL fragment).
-  execFileSync('node', [join(root, 'scripts/build-qr-page.mjs'), join(site, 'q/index.html')], { stdio: 'inherit' })
-
-  // /hello.bento.html — the launch announcement, itself a Bento deck (U1). This
-  // is the Show HN link target: opening it boots the editor with the pitch
-  // loaded as a live, editable template deck.
-  execFileSync('node', [join(root, 'scripts/build-announcement-deck.mjs'), join(site, 'hello.bento.html')], { stdio: 'inherit' })
-
-  // The guestbook LANDING page is an authored source (site-src/guestbook.html),
-  // tracked in this repo, so it ships on every release. It used to be written
-  // only inside the `existsSync(guestbook)` branch below, which depends on a
-  // GITIGNORED epoch file — so a release built from a clean checkout of the tag
-  // (which is what RELEASING.md now tells you to do) produced a site/ with no
-  // guestbook/index.html, and publish-site.mjs mirrors with `rsync --delete`.
-  // That deleted the live landing page during the v1.0.12 publish. The deck below
-  // genuinely needs the epoch; this page never did.
-  mkdirSync(join(site, 'guestbook'), { recursive: true })
-  cpSync(join(root, 'site-src/guestbook.html'), join(site, 'guestbook/index.html'))
-
-  // The Guestbook DECK (U2) — ships only once an epoch has been minted into
-  // working/guestbook-live/ (scripts/build-guestbook.mjs). Kill switch:
-  // delete that file and re-release.
-  const guestbook = join(root, 'working/guestbook-live/guestbook.bento.html')
-  if (existsSync(guestbook)) {
-    // RE-SHELL the current epoch onto the freshly-built shell (don't just copy a
-    // deck that may embed an old shell). The document — room creds, docId, wall
-    // seed — is shell-independent, so re-splicing it into the new shell keeps the
-    // SAME live room and walls while updating the runtime. This is why the
-    // guestbook never lags a release. (An epoch ROLL, with fresh creds, is a
-    // separate deliberate act: scripts/build-guestbook.mjs / the daemon.)
-    const freshShell = readFileSync(join(site, 'releases/slides/Bento_Slides.bento.html'), 'utf8')
-    const gbHtml = readFileSync(guestbook, 'utf8')
-    const m = gbHtml.match(/<script type="application\/bento\+json" id="bento-doc">\s*([\s\S]*?)\s*<\/script>/)
-    if (!m) throw new Error('guestbook: no #bento-doc block in working/guestbook-live/')
-    const gbDoc = JSON.parse(m[1].replace(/\\u003c/g, '<'))
-    const reshelled = spliceDoc(freshShell, gbDoc)
-    writeFileSync(guestbook, reshelled) // keep the working epoch file on the fresh shell too
-    cpSync(guestbook, join(site, 'guestbook.bento.html'))
-    console.log(`guestbook: re-shelled current epoch onto the fresh shell (room ${gbDoc.collab?.room?.split('/').pop() ?? '?'})`)
-  } else {
-    console.log('guestbook: not armed (working/guestbook-live/ empty) — skipped')
-  }
+  // Beta starter decks (plan U4), at the URLs the beta-slides skill names.
+  // They embed the shell this release built (build-beta-templates.mjs reads
+  // slides/dist-single), so they and the release always share a runtime.
+  execFileSync('node', [join(root, 'scripts/build-beta-templates.mjs'), '--shell', shellSrc, '--out', join(site, 'templates')], { stdio: 'inherit' })
 } else {
   console.log(`site content: owned by slides — left as published (${app.appId} release)`)
 }

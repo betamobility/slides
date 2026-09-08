@@ -37,7 +37,7 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APPS, RELEASE_MARKER, tagFor } from './apps.mjs'
+import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
 import { gateShell } from './shell-gate.mjs'
 import { verifyEnvelope } from './sign-payload.mjs'
 
@@ -152,7 +152,7 @@ ok(payload.version === JSON.parse(readFileSync(join(root, `${app.dir}/package.js
 ok(/^[0-9a-f]{64}$/.test(payload.sha256), 'the manifest pins a sha256 of the shell')
 ok(payload.sha256 === createHash('sha256').update(readFileSync(stagedShell)).digest('hex'),
   'the pinned sha256 is the sha256 of the shell actually staged (signed bytes = served bytes)')
-ok(payload.url === `https://bento.page/releases/${app.dir}/${app.shell}`,
+ok(payload.url === `${SITE.origin}/releases/${app.dir}/${app.shell}`,
   `the download URL is under the path the shell fetches (${payload.url})`)
 ok(typeof payload.at === 'string', 'the payload is stamped with a time')
 
@@ -284,6 +284,49 @@ await throws(
   'DOMParser',
   'the untouched shell gets PAST the integrity check (and then needs a browser)',
 )
+
+// ---- 5. BETA FORK: the AppConfig key lift ------------------------------------
+// Everything above swapped the kernel CONSTANT. A fork sets the key through
+// configureApp({ publicKeyJwk }) instead (kernel/src/app.ts). Prove that path
+// on an UNMODIFIED kernel: the configured key accepts the manifest this run
+// signed; without the field the platform constant refuses it; and a manifest
+// signed by some other key is refused even with the field set.
+console.log('\nthe configured key (AppConfig.publicKeyJwk, unmodified kernel)')
+{
+  const pristine = join(work, 'kernel-pristine')
+  mkdirSync(pristine, { recursive: true })
+  cpSync(join(root, 'kernel/src'), pristine, { recursive: true })
+  const pApp = await import(join(pristine, 'app.ts'))
+  const pUpdate = await import(join(pristine, 'update.ts'))
+  const base = { appId: app.appId, appName: app.label, manifestUrl: MANIFEST_URL }
+  serve({ [MANIFEST_URL]: manifestRaw })
+  pApp.configureApp({ ...base })
+  {
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+      `NEGATIVE CONTROL: without publicKeyJwk the platform constant REFUSES the throwaway-signed manifest (${r.status})`)
+  }
+  pApp.configureApp({ ...base, publicKeyJwk: { kty: 'EC', crv: 'P-256', x: pubJwk.x, y: pubJwk.y } })
+  {
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'update' && r.release.version === payload.version,
+      `with publicKeyJwk configured the same kernel ACCEPTS it and offers v${payload.version}`)
+  }
+  {
+    const otherKey = join(work, 'other-throwaway-key.json')
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    writeFileSync(otherKey, JSON.stringify({ kind: 'bento-release-key-THROWAWAY', private: privateKey.export({ format: 'jwk' }), public: publicKey.export({ format: 'jwk' }) }))
+    execFileSync('node', [
+      join(root, 'scripts/sign-release.mjs'), stagedShell,
+      '--app', app.appId, '--version', payload.version,
+      '--url', payload.url, '--key', otherKey, '--out', join(work, 'other-key.json'),
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    serve({ [MANIFEST_URL]: readFileSync(join(work, 'other-key.json'), 'utf8') })
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+      `NEGATIVE CONTROL: a manifest signed by ANOTHER key is REFUSED by the configured-key shell (${r.status})`)
+  }
+}
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

@@ -1,23 +1,29 @@
 # bento-sync relay — Cloudflare Worker + one Durable Object room per docId.
 # Deploy:  npx wrangler deploy          (needs `npx wrangler login` once)
 # Dev:     npx wrangler dev --port 8787 (fully local, no account needed)
-# Then point sync.bento.page at the worker (Custom Domain below, or a route).
-name = "bento-sync"
+#
+# BETA FORK: this is Beta Mobility's relay, deployed under Beta's Cloudflare
+# account as `beta-sync` at sync.betamobility.ai (the host slides/src/main.ts
+# configures). The worker source is upstream's, unchanged; only this config
+# differs. See docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md U2.
+name = "beta-sync"
 main = "src/worker.js"
 compatibility_date = "2026-07-01"
 
-# workers.dev URL is fine to start; add the custom domain when ready:
 routes = [
-  { pattern = "sync.bento.page", custom_domain = true }
+  { pattern = "sync.betamobility.ai", custom_domain = true }
 ]
 
 # Encrypted asset blobs (docs/blob-offload.md). The relay pipes ciphertext
-# straight through — it never buffers a blob and cannot read one. OPTIONAL: if
-# the binding is absent the /b/ routes answer 501 and clients fall back to
-# inlining small assets, so a self-hoster without R2 still works.
+# straight through; it never buffers a blob and cannot read one. NOT optional
+# for Beta: without the binding the /b/ routes answer 501 and an asset over
+# BLOB_INLINE_MAX (64 KB, kernel/src/sync/crdt.ts) is silently left out of
+# live sync, so a pasted photo never reaches the other author. Create the
+# bucket once (`npx wrangler r2 bucket create beta-slides-blobs`) before the
+# first deploy.
 [[r2_buckets]]
 binding = "BLOBS"
-bucket_name = "bento-blobs"
+bucket_name = "beta-slides-blobs"
 
 [[durable_objects.bindings]]
 name = "ROOM"

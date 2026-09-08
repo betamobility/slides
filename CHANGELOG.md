@@ -11,6 +11,37 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.9.1] — 2026-09-08
+
+Beta Mobility's first build of bento/slides, from the fork at
+`betamobility/slides` on upstream 1.0.19. Beta builds are versioned by date
+(`YYYY.M.N`) so their tags never collide with upstream's `v1.0.x` line, and a
+Beta deck only ever checks Beta's own signed channel at `slides.betamobility.ai`.
+
+- **Beta identity and a Beta update channel.** The shell is `beta-slides`:
+  it fetches its manifest from `slides.betamobility.ai`, verifies it against
+  Beta's own release key, and refuses upstream's manifests (as upstream's decks
+  refuse Beta's). Live collaboration goes through Beta's relay at
+  `sync.betamobility.ai`.
+- **Beta theme, fonts and palette from the design system.** `doc.theme`,
+  `doc.fonts` and the chart palette are generated from
+  `design-system/tokens.json` (`scripts/build-beta-theme.mjs`), so a deck is
+  branded through Bento's own keys, never a parallel theme layer.
+- **Beta layouts and three starter templates.** Title, section, statement,
+  two-column, figure, table and closing layouts carry `role`s, so content rides
+  across when a layout is re-applied. Client pitch, insight brief and workshop
+  templates ship built on this shell, and the starter deck at boot is Beta's.
+- **Export PPTX beside Export PDF.** An editable PowerPoint export with a
+  degrade report that names every element it could only approximate (embeds,
+  charts as images, motion dropped).
+- **The `embed` element, to the upstream `bento/embed` shape.** A static view
+  and the source always present, a sandboxed live iframe opt-in, hidden by the
+  offline toggle. Offered upstream as a pull request.
+- **A `beta-slides` plugin and skill.** `/plugin marketplace add
+  betamobility/slides` installs a skill that downloads this shell, starts from
+  Beta templates, applies the design rules and exports PPTX; the published
+  agent guide carries a Beta build section.
+
 ## [1.0.19] — 2026-09-04
 
 - **Bento Slides works on a phone.** Eight changes land together, because

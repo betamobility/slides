@@ -177,7 +177,8 @@ console.log('\nexports')
 
 // Everything that hands the document to somebody else. Named rather than
 // discovered so that a DELETED strip and a deleted export do not look alike.
-const EXPORTS = ['savePresentationPackage', 'saveReaderCopy', 'saveEditorCopy', 'saveAsTemplate', 'copyDocJson']
+// BETA FORK: exportPptx() is the fourth export path (plan U5, KTD7).
+const EXPORTS = ['savePresentationPackage', 'saveReaderCopy', 'saveEditorCopy', 'saveAsTemplate', 'copyDocJson', 'exportPptx']
 for (const name of EXPORTS) {
   ok(/stripCollabSecrets\(/.test(body(name)),
     `${name}() strips the session before the copy leaves`)

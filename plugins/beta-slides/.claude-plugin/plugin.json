@@ -1,0 +1,20 @@
+{
+  "name": "beta-slides",
+  "description": "Author Beta Mobility presentations: self-contained .bento.html decks from the Beta build of bento/slides, branded from the design system, with data refreshed at edit time and editable-PowerPoint export. Installs INSTEAD of bento-slides: both trigger on the same phrases and upstream's downloads the wrong shell.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Beta Mobility",
+    "url": "https://betamobility.ai"
+  },
+  "homepage": "https://slides.betamobility.ai",
+  "repository": "https://github.com/betamobility/slides",
+  "license": "MIT",
+  "keywords": [
+    "slides",
+    "presentation",
+    "deck",
+    "bento",
+    "powerpoint",
+    "beta"
+  ]
+}

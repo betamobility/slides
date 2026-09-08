@@ -21,7 +21,7 @@ import { parseDoc, type BentoDoc, type TextElement } from './model'
 import { validateDoc, type ValidateOpts } from './validate'
 import { resolveThemeRefs } from './palette'
 import { measureText, measureElement, type TextMeasureSpec } from './measure'
-import { starterDoc } from './starterdeck'
+import { betaStarterDoc } from './betastarter'
 import { injectFonts } from './fonts'
 import { Store } from './store'
 import { Editor } from './editor/editor'
@@ -31,10 +31,21 @@ import { onlineTransport, startSharing, stopSharing } from './sync/online'
 
 // Tell the kernel who this app is — must precede any kernel module use
 // (window title suffix, save-picker label, update manifest + its `app` check).
+//
+// BETA FORK IDENTITY (docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md, U1).
+// `appId` is what a shipped file checks the manifest's `app` against, so a
+// Beta deck never self-updates from bento.page. `appName` keeps upstream's
+// lowercase product name: the fork is a build of bento/slides, not a new app.
+// `publicKeyJwk` is the Beta release key's PUBLIC half — generated offline by
+// the maintainer with `node scripts/keygen.mjs` (docs/RELEASING.md) and pasted
+// here, and in scripts/apps.mjs (test-release-apps.mjs pins the pair). Every
+// shipped Beta deck verifies its update manifest against this key.
 configureApp({
-  appId: 'bento-slides',
+  appId: 'beta-slides',
   appName: 'bento/slides',
-  manifestUrl: 'https://bento.page/releases/slides/manifest.json',
+  publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'o1ZkClAbOuGbFc-xHuTCgeUH5tS5ciHrKiQ6UPxvHN4', y: '00pSDB4EwBZiCctbTzWNC_anUHjpS_RTkUVsGiMgibg' },
+  manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
+  syncHost: 'wss://sync.betamobility.ai',
 })
 
 // Every save writes a static rendering of page one into the shell, so file
@@ -80,7 +91,8 @@ if (envelope) {
   // Whether this is OUR starter or someone's document is knowable only here —
   // downstream the two are indistinguishable, and the difference is what stops
   // the return gate appearing over real work.
-  bootWith(parsed || starterDoc(), !parsed)
+  // BETA FORK: a bare shell opens on the Beta starter, not upstream's showcase.
+  bootWith(parsed || betaStarterDoc(), !parsed)
 }
 
 /** Encrypted file: ask for the password (looping on failure), then boot. */

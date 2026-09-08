@@ -16,6 +16,9 @@ import type { InPlaceOutcome } from '../update'
 import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
+import { mapDeck } from '../export/pptx'
+import { BETA_WORDMARK_SVG } from './brand'
+import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
 import { PropsPanel } from './panels'
@@ -229,13 +232,8 @@ export class Editor {
     // topbar
     const bar = div('ed-topbar')
     const logo = div('ed-logo')
-    logo.innerHTML =
-      `<svg class="ed-logo-mark" viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">` +
-      `<rect width="32" height="32" rx="7" fill="#16273E"/>` +
-      `<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>` +
-      `<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>` +
-      `<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>` +
-      `</svg> <b>bento<span style="color:#FF9E8A">/</span>slides</b>`
+    // BETA FORK: the Beta wordmark replaces upstream's mark + "bento/slides".
+    logo.innerHTML = BETA_WORDMARK_SVG
     logo.title = t('About bento/slides — version, updates, licenses')
     logo.style.cursor = 'pointer'
     logo.addEventListener('click', () => this.openAbout())
@@ -318,6 +316,7 @@ export class Editor {
       : t('Save — download an updated copy (⌘S). This browser can’t rewrite the open file.'))
     saveB.appendChild(this.dirtyDot) // the amber unsaved-changes dot lives ON Save
     const pdfB = btn(ICONS.pdf, '', () => this.exportPdf(), t('Export PDF (print)'))
+    const pptxB = btn(ICONS.pptx, '', () => { void this.exportPptx() }, t('Export PPTX (editable PowerPoint)'))
     const helpB = btn('<b class="ed-help-q">?</b>', '', () => this.openHelp(), t('Shortcuts & tips (?)'))
     helpB.classList.add('ed-btn-help')
     this.avatarsBox = div('ed-avatars')
@@ -330,7 +329,7 @@ export class Editor {
     saveGroup.append(saveB, this.saveDropdown())
     const shareD = this.shareDropdown()
     const langD = this.languageDropdown()
-    actions.append(pdfB, this.avatarsBox, shareD, saveGroup, langD, helpB)
+    actions.append(pdfB, pptxB, this.avatarsBox, shareD, saveGroup, langD, helpB)
 
     // Phone chrome: two menus that stay EMPTY on a wide screen. Nothing is
     // duplicated — applyPhoneChrome moves the real buttons in and out, so every
@@ -1959,6 +1958,56 @@ export class Editor {
     setTimeout(() => window.print(), 250)
   }
 
+  /**
+   * BETA FORK (plan U5). Export the deck as an editable PowerPoint file: real
+   * text boxes, shapes, tables and charts, through the pure mapper in
+   * src/export/pptx.ts. Every slide travels, state and hidden slides as hidden.
+   *
+   * The mapper gets a CLONE with the session stripped (KTD7): a .pptx leaves
+   * this file and lands in someone else's inbox, and `collab` is the room key.
+   * The degrade report is what makes the export honest: the toast names every
+   * element that became a picture or lost a gradient, and the console carries
+   * the full list.
+   */
+  async exportPptx() {
+    this.canvas.commitTextEdit()
+    const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
+    stripCollabSecrets(clone)
+    let pptx: Awaited<ReturnType<typeof mapDeck>>['pptx']
+    let report: Awaited<ReturnType<typeof mapDeck>>['report']
+    let blob: Blob
+    try {
+      ;({ pptx, report } = await mapDeck(clone, { rasterize: rasterizeSvg }))
+      blob = (await pptx.write({ outputType: 'blob' })) as Blob
+    } catch (e) {
+      // A mapper throw used to mean no file and no message. Say so.
+      console.error('PPTX export failed', e)
+      this.toast(t('PPTX export failed: {msg}', { msg: (e as Error)?.message ?? String(e) }), 6000)
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${fileBase(suggestedFileName(this.store.doc))}.pptx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    const named = report.filter((r) => r.elementId !== '*')
+    if (report.length) console.table(report)
+    if (!named.length) { this.toast(t('PPTX exported with no degradations')); return }
+    // A handful of elements are named; a showcase deck with sixty rasterised
+    // SVGs gets a count per reason instead, and the console has every row.
+    let list: string
+    if (named.length <= 8) list = named.map((r) => `${r.elementId} (${r.reason})`).join(', ')
+    else {
+      const counts = new Map<string, number>()
+      for (const r of named) counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1)
+      list = [...counts].sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${n} × ${reason}`).join(', ')
+    }
+    this.toast(t('PPTX exported. Degraded: {list}', { list }), 6000)
+  }
+
   // --- insert image ------------------------------------------------------------------
 
   private pickImage() {
@@ -3381,7 +3430,7 @@ export class Editor {
     if (runCheck || this.updateFound) checkB.click()
   }
 
-  toast(message: string) {
+  toast(message: string, ms = 2200) {
     document.querySelector('.ed-toast')?.remove()
     const t = div('ed-toast')
     t.textContent = message
@@ -3390,7 +3439,7 @@ export class Editor {
     setTimeout(() => {
       t.classList.remove('show')
       setTimeout(() => t.remove(), 300)
-    }, 2200)
+    }, ms)
   }
 }
 

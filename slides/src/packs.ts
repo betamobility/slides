@@ -35,7 +35,7 @@ import { lsGet } from '../../kernel/src/storage.ts'
  * without a rebuild. (A URL, not pack data: nothing durable lives here.)
  */
 const channel = (): string =>
-  lsGet('bento-packs-url') ?? 'https://bento.page/releases/slides'
+  lsGet('bento-packs-url') ?? 'https://slides.betamobility.ai/releases/slides'
 
 export interface PackListing {
   lang: string

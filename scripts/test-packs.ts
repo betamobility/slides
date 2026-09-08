@@ -91,7 +91,10 @@ Object.defineProperty(globalThis, 'crypto', {
 })
 
 // --- the channel ------------------------------------------------------------
-const CHANNEL = 'https://bento.page/releases/slides'
+// BETA FORK: the channel is wherever apps.mjs says the site is, so this rig
+// follows the fork's packs.ts default instead of restating bento.page.
+const { SITE } = await import('./apps.mjs')
+const CHANNEL = `${SITE.origin}/releases/slides`
 const PACK_URL = 'packs/bento-slides-1.0.0-xx.pack.json'
 
 const pack = {

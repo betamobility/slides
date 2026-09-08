@@ -9,7 +9,8 @@ permissions:
 
 jobs:
   measure:
-    if: github.event.action != 'edited' || github.event.changes.base != null
+    # BETA FORK: disabled — builds spaces and dash, which the fork does not ship.
+    if: github.repository == 'nyblnet/bento' && (github.event.action != 'edited' || github.event.changes.base != null)
     concurrency:
       # Keep unrelated title/body edits from cancelling a real measurement.
       group: pr-build-size-${{ github.event.pull_request.number }}
