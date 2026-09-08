@@ -24,6 +24,7 @@ The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-pla
 
 - **App:** TypeScript, Vite, single-file build (`slides/dist-single/Bento_Slides.bento.html`)
 - **Relay:** Cloudflare Worker + Durable Object (`server/sync-worker`), deployed as `sync.betamobility.ai`
+- **Deck store:** Cloudflare Worker + R2 behind Cloudflare Access (`server/deck-store`), deployed as `decks.betamobility.ai`
 - **Release site:** static tree published by `scripts/publish-site.mjs` into `betamobility/slides-site`, served by Cloudflare Pages at `slides.betamobility.ai`
 - **Tests:** upstream's `node scripts/test-*.ts` rigs; Beta rigs are `scripts/test-beta-*`
 - **Deploy:** releases are cut locally and signed with an offline ECDSA key (`docs/RELEASING.md`)
@@ -38,7 +39,7 @@ The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-pla
 ├── beta/            Beta zone upstream never sees: tokens, fonts, theme, templates
 ├── plugins/         beta-slides Claude Code plugin (skill)
 ├── scripts/         build, release, rigs; Beta additions are build-beta-* and test-beta-*
-├── server/          sync relay worker
+├── server/          sync relay worker (sync-worker) and the deck store (deck-store)
 ├── docs/            upstream docs + docs/plans (Beta) + docs/upstream-prs (Beta)
 ├── spaces/ dash/ type/ home/   upstream apps, unbuilt here
 ```
@@ -48,6 +49,7 @@ The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-pla
 | Service | Used for | Credentials |
 |---------|----------|-------------|
 | Cloudflare Workers | sync relay at `sync.betamobility.ai` | `CLOUDFLARE_API_TOKEN` (wrangler) |
+| Cloudflare Workers + R2 + Access | deck store at `decks.betamobility.ai` | wrangler OAuth login; Access apps in the dashboard |
 | Cloudflare Pages | release site at `slides.betamobility.ai` | dashboard |
 | GitHub `betamobility/slides-site` | published release tree | `gh` auth |
 | `Tools/design-system/tokens.json` | source of `beta/tokens.json` | none (sibling repo) |
@@ -89,6 +91,17 @@ The full gate list is the Verification Contract in the plan; CI runs the `beta` 
 
   Project `beta-slides-site`, custom domain `slides.betamobility.ai` (a proxied CNAME to `beta-slides-site.pages.dev`). Wrangler needs `wrangler login` (OAuth); the DNS-only `CLOUDFLARE_API_TOKEN` in the shell cannot deploy Workers or Pages, so run wrangler with `env -u CLOUDFLARE_API_TOKEN`.
 - **Pages answers `.html` URLs with a 308 to the extensionless path.** `…/Bento_Slides.bento.html` redirects to `…/Bento_Slides.bento`; `fetch` and `curl -L` follow it and the bytes match the manifest hash, so shipped decks and the skill are unaffected. A client that does not follow redirects gets an empty 308.
+
+## Deck store
+
+`server/deck-store/` is a worker at `decks.betamobility.ai` that stores decks in an R2 bucket (`beta-decks`) and serves them unchanged behind Cloudflare Access: one Access application on the hostname for people (Google Workspace, `@betamobility.io`), one path-scoped to `/api/harness/` for a service token so Claude can save from a file harness. The worker verifies the `Cf-Access-Jwt-Assertion` itself against the team JWKS and refuses everything without one, including `GET /d/<id>`. Any signed-in Beta identity can open, list and edit any deck; only delete is the owner's.
+
+```sh
+cd server/deck-store
+env -u CLOUDFLARE_API_TOKEN npx wrangler deploy      # after R2 is enabled and the bucket exists
+```
+
+Setup order (R2, SSL Full (Strict), deploy, the two Access applications, the `ACCESS_TEAM_DOMAIN`/`ACCESS_AUDS` vars) and the route table are in `server/deck-store/README.md`. The rig is `node scripts/test-beta-store.ts` (Miniflare, from `slides/` after `npm ci`).
 
 ## Upstream pull requests
 
