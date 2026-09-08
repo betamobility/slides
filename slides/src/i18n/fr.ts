@@ -795,4 +795,13 @@ export const fr: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Inclut reveal.js, Moveable, Selecto (MIT) · polices Inter, Playfair Display et DM Mono (OFL-1.1) — les mentions complètes voyagent dans la source de ce fichier.",
   "Up to date, {v}": "À jour, {v}",
   "The update check did not run ({m}). Check manually below.": "La vérification des mises à jour n’a pas eu lieu ({m}). Vérifiez manuellement ci-dessous.",
+  "Save to Beta…": "Enregistrer chez Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "Enregistre cette présentation sur decks.betamobility.ai, derrière la connexion Beta, et vous donne un lien que vos collègues ouvrent à la place d’un fichier.",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "Lien copié — toute personne de Beta qui l’ouvre modifie cette présentation en direct avec vous",
+  "Saved to Beta — link copied: {url}": "Enregistré chez Beta — lien copié : {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Déconnecté de Beta — reconnectez-vous sur {host}, puis enregistrez à nouveau",
+  "The store refused the deck ({status}{why})": "Le dépôt a refusé la présentation ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Impossible d’ouvrir l’onglet du dépôt — autorisez les fenêtres surgissantes pour ce fichier, puis réessayez.",
+  "The store tab gave no answer — timed out": "L’onglet du dépôt n’a pas répondu — délai dépassé",
+  "The store tab was closed before the deck was saved": "L’onglet du dépôt a été fermé avant l’enregistrement de la présentation",
 }

@@ -793,4 +793,13 @@ export const pt: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Inclui reveal.js, Moveable, Selecto (MIT) · fontes Inter, Playfair Display e DM Mono (OFL-1.1) — os avisos completos viajam no código-fonte deste arquivo.",
   "Up to date, {v}": "Atualizado, {v}",
   "The update check did not run ({m}). Check manually below.": "A verificação de atualizações não foi executada ({m}). Verifique manualmente abaixo.",
+  "Save to Beta…": "Salvar no Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "Salva esta apresentação em decks.betamobility.ai, atrás do login do Beta, e dá a você um link que colegas abrem em vez de um arquivo.",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "Link copiado — qualquer pessoa do Beta que o abrir edita esta apresentação ao vivo com você",
+  "Saved to Beta — link copied: {url}": "Salvo no Beta — link copiado: {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Desconectado do Beta — entre novamente em {host} e salve de novo",
+  "The store refused the deck ({status}{why})": "O repositório recusou a apresentação ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Não foi possível abrir a aba do repositório — permita pop-ups para este arquivo e tente de novo.",
+  "The store tab gave no answer — timed out": "A aba do repositório não respondeu — tempo esgotado",
+  "The store tab was closed before the deck was saved": "A aba do repositório foi fechada antes de a apresentação ser salva",
 }

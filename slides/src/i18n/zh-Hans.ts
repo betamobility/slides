@@ -795,4 +795,13 @@ export const zhHans: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "包含 reveal.js、Moveable、Selecto（MIT）· 字体 Inter、Playfair Display 和 DM Mono（OFL-1.1）— 完整声明随本文件源码一起提供。",
   "Up to date, {v}": "已是最新，{v}",
   "The update check did not run ({m}). Check manually below.": "更新检查未运行（{m}）。请在下方手动检查。",
+  "Save to Beta…": "保存到 Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "将此演示文稿保存到 Beta 登录保护的 decks.betamobility.ai，并生成一个同事可直接打开的链接，无需传文件。",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "链接已复制 — Beta 的任何人打开它都可与你一起实时编辑此演示文稿",
+  "Saved to Beta — link copied: {url}": "已保存到 Beta — 链接已复制：{url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "已退出 Beta 登录 — 请在 {host} 重新登录，然后再次保存",
+  "The store refused the deck ({status}{why})": "存储库拒绝了此演示文稿（{status}{why}）",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "无法打开存储库标签页 — 请允许此文件的弹出窗口，然后重试。",
+  "The store tab gave no answer — timed out": "存储库标签页没有响应 — 已超时",
+  "The store tab was closed before the deck was saved": "演示文稿保存前存储库标签页已被关闭",
 }
