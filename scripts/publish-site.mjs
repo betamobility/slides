@@ -24,13 +24,13 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { gatePackIndex } from './sign-packs.mjs'
 import { walk, plannedDeletions, groupDeletions, supersededPacks } from './site-inventory.mjs'
 import { APPS, RELEASE_MARKER, tagFor } from './apps.mjs'
+import { embeddedShellDecks, staleEmbeddedDecks } from './lib/beta-shell-payload.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const site = join(root, 'site')
@@ -97,26 +97,19 @@ if (doGallery) {
 }
 
 // ---- gate: example decks MUST embed the shell being published --------------
-// The gallery templates, the 404 deck AND the guestbook EMBED the shell, so
-// they have to be rebuilt/re-shelled whenever the shell changes (release.mjs
-// does this — the guestbook is re-shelled in place, preserving its room). Hash
-// the shell's app payload (the bento/deflate-b64 blocks) and refuse to publish
-// if any embedded-shell deck carries a different one — otherwise a stale deck
-// would ship on top of a fresh shell.
+// The gallery templates, the 404 deck, the guestbook AND the Beta templates
+// (site/templates/*, BETA FORK) EMBED the shell, so they have to be rebuilt/
+// re-shelled whenever the shell changes (release.mjs does this — the guestbook
+// is re-shelled in place, preserving its room). Hash the shell's app payload
+// (the bento/deflate-b64 blocks) and refuse to publish if any embedded-shell
+// deck carries a different one — otherwise a stale deck would ship on top of a
+// fresh shell. The list and the hash live in scripts/lib/beta-shell-payload.mjs
+// so scripts/test-beta-templates-current.ts and test-publish-gate.mjs check
+// exactly what this publish checks.
 const shellFile = join(site, 'releases/slides/Bento_Slides.bento.html')
 if (existsSync(shellFile)) {
-  const appHash = (file) => {
-    const blocks = [...readFileSync(file, 'utf8').matchAll(/type="bento\/deflate-b64"[^>]*>([A-Za-z0-9+/=]+)</g)].map((m) => m[1])
-    return blocks.length ? createHash('sha256').update(blocks.join('')).digest('hex') : null
-  }
-  const shellHash = appHash(shellFile)
-  const galleryDir = join(site, 'gallery')
-  const decks = [
-    ...(existsSync(galleryDir) ? readdirSync(galleryDir).filter((f) => f.endsWith('.bento.html')).map((f) => join(galleryDir, f)) : []),
-    join(site, '404.bento.html'),
-    join(site, 'guestbook.bento.html'),
-  ].filter(existsSync)
-  const stale = decks.filter((d) => appHash(d) !== shellHash)
+  const decks = embeddedShellDecks(site)
+  const stale = staleEmbeddedDecks(shellFile, decks)
   if (stale.length) {
     die(
       'example decks are on a DIFFERENT shell than the release — rebuild them\n' +

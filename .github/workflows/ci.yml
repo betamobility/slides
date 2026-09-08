@@ -226,17 +226,27 @@ jobs:
       - name: Beta theme rig
         run: node scripts/test-beta-theme.ts
 
+      - name: Beta templates build
+        # beta/templates/ is GENERATED and gitignored (v1.1 U1): each starter
+        # deck is spliced into the shell this job just built. This step MUST
+        # precede every rig that reads beta/templates/ — the PPTX rig exports
+        # client-pitch, the skill rig lists the directory — or they die on
+        # ENOENT in a clean checkout.
+        run: node scripts/build-beta-templates.mjs
+
       - name: Beta PPTX export rig
         # The degrade report for a fixture carrying every element kind is pinned
         # before the mapper; the file it writes is unzipped and its XML read.
         run: node scripts/test-beta-pptx.ts
 
-      - name: Beta templates build and layouts rig
-        # Templates are rebuilt from the shell this job just built, then the
-        # rig checks fit, roles, validate() and the by-role re-layout (AE5).
+      - name: Beta layouts and templates rigs
+        # Fit, roles, validate() and the by-role re-layout (AE5); then that
+        # every built template embeds THIS build's runtime (payload hash equal
+        # to the shell's — the same check publish-site.mjs runs), so a template
+        # built from an older shell can never pass as current.
         run: |
-          node scripts/build-beta-templates.mjs
           node scripts/test-beta-layouts.ts
+          node scripts/test-beta-templates-current.ts
           node scripts/build-beta-starter.mjs --check
 
       - name: Beta AppConfig rig
