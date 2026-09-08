@@ -77,7 +77,7 @@ export const zhHans: Catalog = {
   "<b>Morph</b> animates elements that appear on both this slide and the previous one (copy a slide, then move things around).": "<b>变形</b>会为同时出现在此幻灯片和上一张中的元素做动画（复制一张幻灯片，然后移动内容试试）。",
   "A <b>state</b> is hidden from arrow-key flow — viewers reach it by clicking a linked element. Shared element ids morph between states.": "<b>状态</b>不出现在方向键流程中 — 观众通过点击链接元素到达。共享 id 的元素会在状态间变形。",
   "A deck needs at least one slide": "演示文稿至少需要一张幻灯片",
-  "About bento/slides — version, updates, licenses": "关于 bento/slides — 版本、更新、许可证",
+  "About beta/slides — version, updates, licenses": "关于 beta/slides — 版本、更新、许可证",
   "Align": "对齐",
   "Ambient": "氛围",
   "Angle": "角度",

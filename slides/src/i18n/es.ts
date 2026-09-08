@@ -77,7 +77,7 @@ export const es: Catalog = {
   "<b>Morph</b> animates elements that appear on both this slide and the previous one (copy a slide, then move things around).": "<b>Morph</b> anima los elementos presentes en esta diapositiva y en la anterior (duplica una diapositiva y mueve cosas).",
   "A <b>state</b> is hidden from arrow-key flow — viewers reach it by clicking a linked element. Shared element ids morph between states.": "Un <b>estado</b> queda fuera del flujo de flechas — se llega haciendo clic en un elemento enlazado. Los ids compartidos se transforman entre estados.",
   "A deck needs at least one slide": "Una presentación necesita al menos una diapositiva",
-  "About bento/slides — version, updates, licenses": "Acerca de bento/slides — versión, actualizaciones, licencias",
+  "About beta/slides — version, updates, licenses": "Acerca de beta/slides — versión, actualizaciones, licencias",
   "Align": "Alinear",
   "Ambient": "Ambiente",
   "Angle": "Ángulo",

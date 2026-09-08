@@ -77,7 +77,7 @@ export const ja: Catalog = {
   "<b>Morph</b> animates elements that appear on both this slide and the previous one (copy a slide, then move things around).": "<b>モーフ</b>は、このスライドと前のスライドの両方にある要素をアニメーションします（スライドを複製してから配置を変えてみてください）。",
   "A <b>state</b> is hidden from arrow-key flow — viewers reach it by clicking a linked element. Shared element ids morph between states.": "<b>ステート</b>は矢印キーの流れに現れません — リンクされた要素のクリックで到達します。共有 id の要素はステート間でモーフします。",
   "A deck needs at least one slide": "デッキには最低1枚のスライドが必要です",
-  "About bento/slides — version, updates, licenses": "bento/slides について — バージョン・更新・ライセンス",
+  "About beta/slides — version, updates, licenses": "beta/slides について — バージョン・更新・ライセンス",
   "Align": "整列",
   "Ambient": "アンビエント",
   "Angle": "角度",

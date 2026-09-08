@@ -235,7 +235,7 @@ export class Editor {
     const logo = div('ed-logo')
     // BETA FORK: the Beta wordmark replaces upstream's mark + "bento/slides".
     logo.innerHTML = BETA_WORDMARK_SVG
-    logo.title = t('About bento/slides — version, updates, licenses')
+    logo.title = t('About beta/slides — version, updates, licenses')
     logo.style.cursor = 'pointer'
     logo.addEventListener('click', () => this.openAbout())
     const title = document.createElement('input')

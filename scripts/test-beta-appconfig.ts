@@ -60,5 +60,22 @@ ok(syncHost() === 'ws://localhost:8787', "the localStorage 'bento-sync-url' dev 
 store.delete('bento-sync-url')
 ok(syncHost() === 'wss://sync.example.test', 'clearing the override returns to the configured host')
 
+console.log('\nproduct name (v1.1)')
+{
+  // CI runs this rig from the repo root, a developer from slides/; the TS
+  // strip copies the file to a temp dir, so import.meta.url cannot locate the
+  // tree. Resolve the slides/ directory from whichever cwd we are in.
+  const { readFileSync, existsSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const slidesDir = existsSync(join(process.cwd(), 'slides/src/main.ts')) ? join(process.cwd(), 'slides')
+    : existsSync(join(process.cwd(), 'src/main.ts')) ? process.cwd()
+      : null
+  ok(slidesDir !== null, 'rig can locate slides/ from the repo root or from slides/')
+  const main = slidesDir ? readFileSync(join(slidesDir, 'src/main.ts'), 'utf8') : ''
+  ok(/appName:\s*'beta\/slides'/.test(main), "slides/src/main.ts configures appName 'beta/slides' (window title, file picker, About)")
+  const html = slidesDir ? readFileSync(join(slidesDir, 'index.html'), 'utf8') : ''
+  ok(/<title>beta\/slides<\/title>/.test(html), 'slides/index.html <title> is beta/slides')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)
