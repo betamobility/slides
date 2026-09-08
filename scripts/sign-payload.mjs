@@ -23,6 +23,7 @@
 // never enters the repo or CI (docs/RELEASING.md).
 
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto'
+import { APPS } from './apps.mjs'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -68,6 +69,11 @@ export const envelopeJson = (envelope) => JSON.stringify(envelope, null, 2) + '\
  * verifies" is talking about the key the files in the wild actually hold.
  */
 export function releasePublicKey() {
+  // BETA FORK: the fork's own key, when the registry carries one, is what its
+  // shipped files verify against (configureApp publicKeyJwk); the kernel
+  // constant is the platform default and stays the fallback.
+  const fork = APPS.slides?.publicKeyJwk
+  if (fork && fork.kty === 'EC' && fork.x && fork.y) return { kty: 'EC', crv: 'P-256', x: fork.x, y: fork.y }
   const src = readFileSync(join(root, 'kernel/src/update.ts'), 'utf8')
   const m = src.match(/const PUBLIC_KEY_JWK = \{([\s\S]*?)\} as const/)
   if (!m) throw new Error('could not find PUBLIC_KEY_JWK in kernel/src/update.ts')

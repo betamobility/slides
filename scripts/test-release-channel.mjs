@@ -285,5 +285,48 @@ await throws(
   'the untouched shell gets PAST the integrity check (and then needs a browser)',
 )
 
+// ---- 5. BETA FORK: the AppConfig key lift ------------------------------------
+// Everything above swapped the kernel CONSTANT. A fork sets the key through
+// configureApp({ publicKeyJwk }) instead (kernel/src/app.ts). Prove that path
+// on an UNMODIFIED kernel: the configured key accepts the manifest this run
+// signed; without the field the platform constant refuses it; and a manifest
+// signed by some other key is refused even with the field set.
+console.log('\nthe configured key (AppConfig.publicKeyJwk, unmodified kernel)')
+{
+  const pristine = join(work, 'kernel-pristine')
+  mkdirSync(pristine, { recursive: true })
+  cpSync(join(root, 'kernel/src'), pristine, { recursive: true })
+  const pApp = await import(join(pristine, 'app.ts'))
+  const pUpdate = await import(join(pristine, 'update.ts'))
+  const base = { appId: app.appId, appName: app.label, manifestUrl: MANIFEST_URL }
+  serve({ [MANIFEST_URL]: manifestRaw })
+  pApp.configureApp({ ...base })
+  {
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+      `NEGATIVE CONTROL: without publicKeyJwk the platform constant REFUSES the throwaway-signed manifest (${r.status})`)
+  }
+  pApp.configureApp({ ...base, publicKeyJwk: { kty: 'EC', crv: 'P-256', x: pubJwk.x, y: pubJwk.y } })
+  {
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'update' && r.release.version === payload.version,
+      `with publicKeyJwk configured the same kernel ACCEPTS it and offers v${payload.version}`)
+  }
+  {
+    const otherKey = join(work, 'other-throwaway-key.json')
+    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    writeFileSync(otherKey, JSON.stringify({ kind: 'bento-release-key-THROWAWAY', private: privateKey.export({ format: 'jwk' }), public: publicKey.export({ format: 'jwk' }) }))
+    execFileSync('node', [
+      join(root, 'scripts/sign-release.mjs'), stagedShell,
+      '--app', app.appId, '--version', payload.version,
+      '--url', payload.url, '--key', otherKey, '--out', join(work, 'other-key.json'),
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    serve({ [MANIFEST_URL]: readFileSync(join(work, 'other-key.json'), 'utf8') })
+    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
+    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+      `NEGATIVE CONTROL: a manifest signed by ANOTHER key is REFUSED by the configured-key shell (${r.status})`)
+  }
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

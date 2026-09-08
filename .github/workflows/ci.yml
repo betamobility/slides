@@ -239,6 +239,11 @@ jobs:
           node scripts/test-beta-layouts.ts
           node scripts/build-beta-starter.mjs --check
 
+      - name: Beta AppConfig rig
+        # syncHost() precedence for the kernel lift (localStorage override,
+        # configured host, platform default; no throw before configureApp).
+        run: node scripts/test-beta-appconfig.ts
+
       - name: Beta plugin and skill rig
         # Static claims of plugins/beta-slides: published URLs, template names,
         # manifests, inherited rules, and the as-of stamp shape (AE3).

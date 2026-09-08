@@ -37,7 +37,7 @@ export interface DegradeEntry {
   slideId: string
   /** `*` for a deck-wide degradation */
   elementId: string
-  /** stable machine key: gradient | svg | media | embed | code-colour | motion | fonts | path-arc | image-remote | chart | background | unknown:<type> */
+  /** stable machine key: gradient | svg | media | embed | code-colour | motion | fonts | path-arc | image-remote | chart | chart-mixed | table | background | unknown:<type> */
   reason: string
   /** one human sentence, shown in the editor toast and printed by the rig */
   detail: string
@@ -173,9 +173,26 @@ export function htmlToRuns(html: string): Run[] {
   return runs.length ? runs : [{ text: '' }]
 }
 
-function resolveFields(html: string, fields: Record<string, string>): string {
-  return html.replace(/\{\{\s*([a-z]+)\s*\}\}/gi, (m, k: string) => fields[k.toLowerCase()] ?? m)
+/**
+ * Dynamic field tokens, resolved the way render.ts resolves them on screen:
+ * {{page}}/{{pages}} with an optional zero-pad width ({{page:2}} -> "06"),
+ * {{title}}, {{date}}, {{time}} and the document properties. A token this
+ * mapper does not know is left as written, so the report reader sees it.
+ */
+export function resolveFields(html: string, fields: Record<string, string>, page: number, pages: number): string {
+  if (html.indexOf('{{') < 0) return html
+  const pad = (n: number, arg?: string) => { const w = parseInt(arg ?? '', 10); return w > 0 ? String(n).padStart(w, '0') : String(n) }
+  return html.replace(/\{\{\s*(page|pages|title|date|time|author|company|subject|event|year)(?::([^}]*))?\s*\}\}/gi, (_m, name: string, arg?: string) => {
+    const k = name.toLowerCase()
+    if (k === 'page') return pad(page, arg)
+    if (k === 'pages') return pad(pages, arg)
+    return fields[k] ?? ''
+  })
 }
+
+/** Which slides take a page number: same rule as render.ts's fieldContext. */
+const paginates = (s: { stateOf?: string; hidden?: boolean }, doc: BentoDoc): boolean =>
+  !s.stateOf && (!s.hidden || !!doc.present?.numberHidden)
 
 // ---- svg path -> custom geometry ---------------------------------------------
 
@@ -250,7 +267,8 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
     company: doc.meta?.company ?? '',
     subject: doc.meta?.subject ?? '',
     event: doc.meta?.event ?? '',
-    date: today.toISOString().slice(0, 10),
+    date: today.toLocaleDateString(),
+    time: today.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     year: String(today.getFullYear()),
     title: doc.title ?? '',
     ...(opts.fields ?? {}),
@@ -295,10 +313,14 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
 
   const isData = (src: string | undefined) => !!src && /^data:/.test(src)
 
+  const pages = slides.filter((sl) => paginates(sl, doc)).length
+  let page = 0
   for (const slide of slides) {
     const s = pptx.addSlide()
     const hidden = !!slide.stateOf || !!slide.hidden
     if (hidden) s.hidden = true
+    if (paginates(slide, doc)) page++
+    const resolve = (html: string) => resolveFields(html, fields, page, pages)
 
     const bg = parseColour(slide.background)
     if (bg) s.background = { color: bg.hex }
@@ -314,7 +336,7 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
       switch (el.type) {
         case 'text': {
           const t = el as TextElement
-          const runs = htmlToRuns(resolveFields(t.html, fields))
+          const runs = htmlToRuns(resolve(t.html))
           const colour = parseColour(t.color)
           const face = fontFace(t.fontFamily, /playfair|serif/i.test(t.fontFamily ?? '') ? headingFace : bodyFace)
           const props: PptxGenJS.TextPropsOptions = {
@@ -412,7 +434,12 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
           break
         }
         case 'table': {
-          addTable(s, el as TableElement, box, bodyFace, themeColour)
+          const tb = el as TableElement
+          if (!tb.rows?.length || !tb.columns?.length) {
+            degrade(slide.id, el.id, 'table', 'Table has no rows or columns; nothing exported.')
+            break
+          }
+          addTable(s, tb, box, bodyFace, themeColour, resolve)
           break
         }
         case 'media': {
@@ -534,7 +561,7 @@ function addChart(
 
 // ---- table -----------------------------------------------------------------------
 
-function addTable(s: PptxGenJS.Slide, el: TableElement, box: { x: number; y: number; w: number; h: number }, face: string, colour: string) {
+function addTable(s: PptxGenJS.Slide, el: TableElement, box: { x: number; y: number; w: number; h: number }, face: string, colour: string, resolve: (html: string) => string) {
   const st = el.style
   const weights = el.columns.map((c) => Math.max(0.01, c.w || 1))
   const total = weights.reduce((a, b) => a + b, 0)
@@ -547,7 +574,7 @@ function addTable(s: PptxGenJS.Slide, el: TableElement, box: { x: number; y: num
     const isHeader = el.header && r === 0
     const zebra = !isHeader && st.zebra && ((el.header ? r - 1 : r) % 2 === 1)
     return row.cells.map((cell) => {
-      const runs = htmlToRuns(cell.html ?? '')
+      const runs = htmlToRuns(resolve(cell.html ?? ''))
       const fill = isHeader ? parseColour(st.headerBg) : parseColour(cell.bg) ?? (zebra ? parseColour(st.zebra) : null)
       const text = runs.map((rn) => ({ text: rn.text, options: { bold: rn.bold || cell.bold || isHeader, italic: rn.italic, breakLine: rn.breakLine } }))
       const cellOpt: PptxGenJS.TableCellProps = {

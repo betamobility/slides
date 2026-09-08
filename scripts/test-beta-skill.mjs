@@ -85,6 +85,13 @@ const deck = betaTemplates(fragment)['insight-brief']
 const slide = deck.slides.find((s) => s.elements.some((e) => e.type === 'chart'))
 const asOf = slide.elements.find((e) => e.role === 'kicker' && /Data as of/.test(e.placeholder ?? e.html ?? ''))
 ok(!!asOf, 'the chart slide of insight-brief carries a Data as of kicker (role kicker)')
+// the SHIPPED templates and starter never carry a live token in the as-of slot:
+// '{{date}}' would re-date itself on every open, which is the opposite of a
+// fetch date. Checked on the unmodified library output, before any rewrite.
+const { betaStarter } = await import('./lib/beta-layouts.mjs')
+const shipped = [...Object.values(betaTemplates(fragment)), betaStarter(fragment)]
+const liveAsOf = shipped.flatMap((d) => d.slides.flatMap((s) => s.elements)).filter((e) => e.id === 'beta-asof' && /\{\{/.test(e.html ?? ''))
+ok(liveAsOf.length === 0, `no shipped as-of kicker carries a live token (placeholder stays a placeholder)${liveAsOf.length ? ': ' + liveAsOf.length : ''}`)
 // a deck per the rules: fill the kicker with an ISO date and check the shape
 const filled = JSON.parse(JSON.stringify(deck))
 for (const s of filled.slides) for (const e of s.elements) if (e.id === 'beta-asof') { e.html = 'Data as of 2026-09-03'; delete e.placeholder }

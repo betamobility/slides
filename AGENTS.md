@@ -127,7 +127,8 @@ verbatim; this section is what the fork adds. The plan of record is
 
 ## Rules for the fork
 
-1. **Kernel-zone edits are two, named, and offered upstream.**
+1. **Kernel-zone edits are three files, named, and offered upstream.**
+   `kernel/src/app.ts` (the two optional `AppConfig` fields),
    `kernel/src/update.ts` (signing key from `AppConfig`) and
    `kernel/src/sync/online.ts` (relay host from `AppConfig`). Any other change
    under `kernel/src/` stops the unit and becomes an upstream pull request
@@ -142,7 +143,7 @@ verbatim; this section is what the fork adds. The plan of record is
    Colours are palette slots via `themeRefs`, never hex literals in content.
 4. **Upstream tracking is weekly, by merge.** `git fetch upstream && git merge
    upstream/main` on `main`, or before a release. The predictable conflicts are
-   the two kernel files, `CLAUDE.md`/`AGENTS.md` (see below) and `render.ts`.
+   the three kernel files, `CLAUDE.md`/`AGENTS.md` (see below), `render.ts`, the i18n catalogs, `scripts/release.mjs` and `.github/workflows/ci.yml`.
 5. **CI is the `beta` job** in `.github/workflows/ci.yml`. Upstream's
    `validate` job is gated off with `if:`, not deleted, so
    `test-ci-registered.ts` still sees every rig.

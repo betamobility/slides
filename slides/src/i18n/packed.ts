@@ -150,6 +150,7 @@ export const PACKED: Record<string, ReadonlyArray<string | 0>> = {
   "Export PPTX (editable PowerPoint)": ["PPTX を書き出す（編集可能な PowerPoint）","导出 PPTX（可编辑的 PowerPoint）","匯出 PPTX（可編輯的 PowerPoint）","Exportar PPTX (PowerPoint editable)","Exporter en PPTX (PowerPoint modifiable)","PPTX exportieren (bearbeitbares PowerPoint)","Esporta PPTX (PowerPoint modificabile)","Exportar PPTX (PowerPoint editável)"],
   "PPTX exported with no degradations": ["PPTX を書き出しました。簡略化なし","已导出 PPTX，无降级","已匯出 PPTX，無降級","PPTX exportado sin simplificaciones","PPTX exporté sans simplification","PPTX exportiert, nichts vereinfacht","PPTX esportato senza semplificazioni","PPTX exportado sem simplificações"],
   "PPTX exported. Degraded: {list}": ["PPTX を書き出しました。簡略化: {list}","已导出 PPTX。已降级：{list}","已匯出 PPTX。已降級：{list}","PPTX exportado. Simplificado: {list}","PPTX exporté. Simplifié : {list}","PPTX exportiert. Vereinfacht: {list}","PPTX esportato. Semplificato: {list}","PPTX exportado. Simplificado: {list}"],
+  "PPTX export failed: {msg}": ["PPTX の書き出しに失敗しました: {msg}","PPTX 导出失败：{msg}","PPTX 匯出失敗：{msg}","Error al exportar PPTX: {msg}","Échec de l'export PPTX : {msg}","PPTX-Export fehlgeschlagen: {msg}","Esportazione PPTX non riuscita: {msg}","Falha ao exportar PPTX: {msg}"],
   "Extra bold": ["エクストラボールド","特粗","特粗","Extra negrita","Extra gras","Extrafett","Extra grassetto","Extranegrito"],
   "Extra light": ["エクストラライト","特细","特細","Extra fina","Extra fin","Extraleicht","Extra leggero","Extrafino"],
   "Fill": ["塗り","填充","填色","Relleno","Remplissage","Füllung","Riempimento","Preenchimento"],

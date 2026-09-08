@@ -40,6 +40,7 @@
 // checks, key by key, through `checkElementProp`.
 
 import type { Slide, SlideElement } from './model'
+import { isWebUrl } from './model'
 import { parseThemeRef } from './palette.ts'
 import { MODEL_KEYS } from './modelkeys.generated'
 
@@ -320,12 +321,11 @@ const chartOption: Check = (v) => {
  * `doc` is the source: an asset ref, or the same bounded plain JSON a chart
  * option is held to: a source is data, never code (docs/format.md).
  */
-const WEB_URL = /^https?:\/\//i
 // Not held to CSS_BREAKOUT: a query string legitimately carries `;` and
 // quotes, and the one consumer assigns it as a DOM property (`iframe.src`),
 // where it is a value and never re-parsed as markup (the mediaRef argument).
 const webUrl: Check = (v) =>
-  typeof v === 'string' && v.length <= LIMITS.prose && WEB_URL.test(v) ? v : DROP
+  typeof v === 'string' && v.length <= LIMITS.prose && isWebUrl(v) ? v : DROP
 const embedDoc: Check = (v) => (typeof v === 'string' ? cssValue()(v) : chartOption(v))
 
 // `el` is required: a connector end with no element to anchor to is dangling,

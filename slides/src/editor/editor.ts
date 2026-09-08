@@ -1973,8 +1973,18 @@ export class Editor {
     this.canvas.commitTextEdit()
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
     stripCollabSecrets(clone)
-    const { pptx, report } = await mapDeck(clone, { rasterize: rasterizeSvg })
-    const blob = (await pptx.write({ outputType: 'blob' })) as Blob
+    let pptx: Awaited<ReturnType<typeof mapDeck>>['pptx']
+    let report: Awaited<ReturnType<typeof mapDeck>>['report']
+    let blob: Blob
+    try {
+      ;({ pptx, report } = await mapDeck(clone, { rasterize: rasterizeSvg }))
+      blob = (await pptx.write({ outputType: 'blob' })) as Blob
+    } catch (e) {
+      // A mapper throw used to mean no file and no message. Say so.
+      console.error('PPTX export failed', e)
+      this.toast(t('PPTX export failed: {msg}', { msg: (e as Error)?.message ?? String(e) }), 6000)
+      return
+    }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

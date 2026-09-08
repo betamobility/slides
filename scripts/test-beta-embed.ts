@@ -232,7 +232,7 @@ try {
     && !hostile.querySelector('[onload]') && !(window as any).__pwn)
 
   // 2. live, online, switch off: a sandboxed frame over the view
-  const live = draw({ url: O + '/frame-online.html' })
+  const live = draw({ url: O + '/frame-online.html' }, { liveMedia: true })
   const frame = live.querySelector('iframe')
   check('online with the switch off: an iframe exists', !!frame)
   check('its src is the url', frame?.getAttribute('src') === O + '/frame-online.html')
@@ -249,17 +249,23 @@ try {
 
   // 4. AE2: no network
   setOnLine(false)
-  const noNet = draw({ url: O + '/frame-offline.html' })
+  const noNet = draw({ url: O + '/frame-offline.html' }, { liveMedia: true })
   check('navigator.onLine false: no iframe, view present',
     !noNet.querySelector('iframe') && !!noNet.querySelector('svg rect#pic'))
   setOnLine(true)
 
   // 5. the privacy switch, with a network
   setOffline(true)
-  const switched = draw({ url: O + '/frame-switch.html' })
+  const switched = draw({ url: O + '/frame-switch.html' }, { liveMedia: true })
   check('offline switch on, network up: no iframe, view present',
     !switched.querySelector('iframe') && !!switched.querySelector('svg rect#pic'))
   setOffline(false)
+
+  // 5b. the editor canvas (no liveMedia) never creates a frame: it re-renders
+  // on every edit, and a frame there would re-navigate each time
+  const canvas = draw({ url: O + '/frame-canvas.html' })
+  check('a plain renderSlide (editor canvas) has no iframe and shows the view',
+    !canvas.querySelector('iframe') && !!canvas.querySelector('svg rect#pic'))
 
   // 6. thumbnails never carry a frame
   const thumb = draw({ url: O + '/frame-thumb.html' }, { svgAsImage: true })

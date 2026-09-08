@@ -344,6 +344,10 @@ export interface MediaElement extends ElementBase {
  * (render.ts:liveFrameAllowed); otherwise the view shows. Unknown `app`
  * values are RENDERED (their view), never rejected.
  */
+/** The one scheme test for an embed's `url`, shared by the paste gate
+ *  (untrusted.ts) and the live-frame gate (render.ts) so they cannot drift. */
+export const isWebUrl = (v: string): boolean => /^https?:\/\//i.test(v)
+
 export interface EmbedElement extends ElementBase {
   type: 'embed'
   /** the app that made it: 'bento/dash', 'bento/type', … or 'web' for a page */

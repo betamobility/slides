@@ -93,10 +93,16 @@ editing an existing deck, never regenerate `docId`.
 3. Author from a Beta template or the bare shell, under the Beta rules.
 4. `window.bento.validate()` clean, then **open the deck and look at every
    slide** (upstream's rule; a deck nobody rendered is not finished).
-5. **Export PPTX** (the button beside Export PDF, or `Export PPTX` in the
-   Save menu on a phone) and read the report to the user: every element that
+5. **Export PPTX** and read the report to the user: every element that
    became a picture or lost a gradient is named there. Say it before they
-   send the file.
+   send the file. In a browser it is the button beside Export PDF; from a
+   file harness (no browser) run the same mapper headlessly:
+
+   ```bash
+   node scripts/export-pptx.mjs "<Topic>.bento.html"    # from a checkout of betamobility/slides
+   ```
+
+   It writes `<Topic>.pptx` beside the deck and prints the report.
 6. Write back the `#bento-doc` block, or return the replacement JSON.
 
 ## Self-audit (Beta additions to upstream's list)

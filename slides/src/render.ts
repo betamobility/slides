@@ -5,7 +5,7 @@
 
 import { offlineEnabled, isRemoteUrl, remoteSrcBlocked } from '../../kernel/src/net.ts'
 import type { BentoDoc, EmbedElement, ShapeElement, Slide, SlideElement, SvgElement, TableElement } from './model'
-import { morphKey, paginates } from './model'
+import { morphKey, paginates, isWebUrl } from './model'
 import { chartSnapshotSvg } from './charts'
 import temml from 'temml'
 import { renderCodeInto } from './code'
@@ -141,7 +141,6 @@ function svgMarkup(el: SvgElement, doc: BentoDoc): string {
 
 /** The only url a live frame will load. Judged here as well as at the paste
  *  boundary, because a deck opened from disk never passes through untrusted.ts. */
-const WEB_URL = /^https?:\/\//i
 
 /**
  * May this embed get a live iframe right now?
@@ -156,7 +155,7 @@ const WEB_URL = /^https?:\/\//i
 export function liveFrameAllowed(el: EmbedElement): boolean {
   if (el.live !== true || el.app !== 'web') return false
   const url = typeof el.url === 'string' ? el.url.trim() : ''
-  if (!WEB_URL.test(url) || remoteSrcBlocked(url)) return false
+  if (!isWebUrl(url) || remoteSrcBlocked(url)) return false
   const nav = typeof navigator !== 'undefined' ? navigator : undefined
   return !nav || nav.onLine !== false
 }
@@ -1289,7 +1288,10 @@ export function renderElement(el: SlideElement, doc: BentoDoc, opts: RenderOpts 
         ph.textContent = el.app === 'web' && el.url ? el.url : `⧉ ${el.app || 'embed'}`
         node.appendChild(ph)
       }
-      if (!opts.svgAsImage && liveFrameAllowed(el)) node.appendChild(liveFrame(el, opts))
+      // ...and only on a LIVE surface (present mode passes liveMedia). The
+      // editor canvas re-renders on every edit; a frame there would navigate
+      // to the author's URL on each repaint, inert or not.
+      if (!opts.svgAsImage && opts.liveMedia && liveFrameAllowed(el)) node.appendChild(liveFrame(el, opts))
       break
     }
     case 'code': {

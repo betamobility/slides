@@ -60,6 +60,9 @@ const EXPECTED_REPORT: Array<Pick<DegradeEntry, 'elementId' | 'slideId' | 'reaso
   { slideId: 's3', elementId: 'code-1', reason: 'code-colour' },
   { slideId: 's3', elementId: 'embed-1', reason: 'embed' },
   { slideId: 's3', elementId: 'svg-hostile', reason: 'svg' },
+  { slideId: 's2', elementId: 'sh-arc', reason: 'path-arc' },
+  { slideId: 's2', elementId: 'img-remote', reason: 'image-remote' },
+  { slideId: 's3', elementId: 'tbl-empty', reason: 'table' },
   { slideId: '*', elementId: '*', reason: 'motion' },
   { slideId: '*', elementId: '*', reason: 'fonts' },
 ]
@@ -131,6 +134,34 @@ ok((s2.match(/<p:pic>/g) ?? []).length >= 2, 'image and rasterised svg are pictu
 // notes
 const notesAll = notesXml.map(read).join('')
 ok(/Title notes for slide one\./.test(notesAll), 'speaker notes survive')
+
+// ---- 2a. dynamic field tokens resolve per slide ------------------------------
+console.log('\ntokens')
+ok(!all.some((x) => /\{\{/.test(x)), 'no {{token}} survives into any slide XML')
+ok(/01\/3/.test(s1), 'the footer reads 01/3: page zero-padded, pages counts linear slides only')
+ok(/Beta Mobility/.test(s1) && /Beta export fixture/.test(s1), '{{company}} and {{title}} resolve')
+const chartAll = list.filter((p) => /^ppt\/charts\/chart\d+\.xml$/.test(rel(p))).map(read).join('')
+ok(/<c:lineChart>/.test(chartAll) && /<c:pieChart>/.test(chartAll), 'line and pie charts export as native charts')
+
+// ---- 2c. a real Beta template exports with no token and a sane report ---------
+console.log('\nBeta template')
+const { betaTemplates } = await import('./lib/beta-layouts.mjs')
+const fragment = JSON.parse(readFileSync(join(root, 'beta/theme.json'), 'utf8'))
+const tpl = betaTemplates(fragment)['client-pitch'] as BentoDoc
+const tplMap = await mapDeck(tpl)
+const tplBytes = Buffer.from(await tplMap.pptx.write({ outputType: 'nodebuffer' }) as Uint8Array)
+writeFileSync(join(work, 'tpl.pptx'), tplBytes)
+execFileSync('unzip', ['-q', '-o', join(work, 'tpl.pptx'), '-d', join(work, 't')])
+const tplXml = execFileSync('find', [join(work, 't/ppt/slides'), '-name', 'slide*.xml'], { encoding: 'utf8' }).split('\n').filter(Boolean).map(read).join('\n')
+ok(!/\{\{/.test(tplXml), 'client-pitch template exports with every footer and byline token resolved')
+ok(tplMap.report.filter((r) => r.elementId !== '*').every((r) => r.reason === 'gradient' || r.reason === 'svg'), `template report carries only expected reasons (${[...new Set(tplMap.report.map((r) => r.reason))].join(', ')})`)
+
+// ---- 2d. the headless CLI the skill points at -------------------------------
+console.log('\nCLI')
+const cliOut = join(work, 'cli.pptx')
+const cli = execFileSync(process.execPath, [join(root, 'scripts/export-pptx.mjs'), join(root, 'beta/templates/client-pitch.bento.html'), '--out', cliOut], { encoding: 'utf8' })
+ok(existsSync(cliOut) && readFileSync(cliOut)[0] === 0x50, 'scripts/export-pptx.mjs writes a pptx from a .bento.html file')
+ok(/degraded|no degradations/i.test(cli), 'the CLI prints the degrade report')
 
 // ---- 2b. hostile markup never reaches the zip --------------------------------
 console.log('\nhostile svg')

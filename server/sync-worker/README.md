@@ -1,6 +1,6 @@
 # Beta relay (`beta-sync`)
 
-Beta Mobility's deployment of upstream's blind sync relay: a Cloudflare Worker plus one Durable Object room per document, serving `wss://sync.betamobility.ai`. The worker source in `src/` is upstream's, unchanged. Only `wrangler.toml` differs: the worker name, the custom domain, and no R2 blob binding (the `/b/` routes answer 501 and clients inline small assets instead, which upstream documents as supported).
+Beta Mobility's deployment of upstream's blind sync relay: a Cloudflare Worker plus one Durable Object room per document, serving `wss://sync.betamobility.ai`. The worker source in `src/` is upstream's, unchanged. Only `wrangler.toml` differs: the worker name, the custom domain, and the R2 bucket name. The R2 binding is required: assets over 64 KB (`BLOB_INLINE_MAX` in `kernel/src/sync/crdt.ts`) never ride in an op, and with the `/b/` routes answering 501 the client drops them from live sync without a message. Create the bucket once with `npx wrangler r2 bucket create beta-slides-blobs`.
 
 The relay stores ciphertext only. It has no Beta auth and needs none: the file is the capability (`docs/PLATFORM.md` §5, `docs/relay-design.md`).
 

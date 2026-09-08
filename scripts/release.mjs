@@ -38,7 +38,6 @@ import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spliceDoc } from './guestbook-deck.mjs'
 import { gateShell } from './shell-gate.mjs'
 import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
 
@@ -157,6 +156,13 @@ if (app.agents && existsSync(join(root, app.agents))) {
 gateShell(join(site, `releases/${app.dir}/${app.shell}`))
 
 const key = opt('key', null)
+// BETA FORK: a real release (not a rehearsal into --out) needs the fork's
+// public key in the registry and the shell, or every shipped file would refuse
+// the manifest this run is about to sign. scripts/apps.mjs says how to set it.
+if (appKey === 'slides' && !app.publicKeyJwk && !args.includes('--out')) {
+  console.error('✗ APPS.slides.publicKeyJwk is null: shipped files would verify against the platform key and refuse this release.\n  Run node scripts/keygen.mjs, paste the PUBLIC half into scripts/apps.mjs and slides/src/main.ts (configureApp publicKeyJwk), rebuild, then release.')
+  process.exit(1)
+}
 
 /**
  * Release notes for the manifest, lifted from this version's CHANGELOG entry.

@@ -72,6 +72,16 @@ for (const [key, app] of Object.entries(APPS)) {
     const url = main.match(/manifestUrl:\s*'([^']+)'/)?.[1] ?? ''
     ok(url.includes(`/releases/${app.dir}/`),
       `${key}: shell fetches /releases/${app.dir}/ (found "${url}")`)
+    // BETA FORK: the signing public key is one fact. The shell's configureApp
+    // and the registry must agree, or a release signs with a key the files
+    // refuse. Both absent is the pre-key state and is allowed (release.mjs
+    // refuses a real release then); one present without the other is not.
+    if ('publicKeyJwk' in app) {
+      const pk = main.match(/publicKeyJwk:\s*\{[^}]*x:\s*'([^']+)'[^}]*y:\s*'([^']+)'/)
+      const reg = app.publicKeyJwk
+      ok((!pk && !reg) || (!!pk && !!reg && pk[1] === reg.x && pk[2] === reg.y),
+        `${key}: publicKeyJwk in main.ts and scripts/apps.mjs agree (${reg ? 'set' : 'unset'} in registry, ${pk ? 'set' : 'unset'} in main.ts)`)
+    }
   }
 
   // Exactly one app may own the shared bento.page content, or a release either

@@ -131,6 +131,7 @@ export const pt: Catalog = {
   "Export PPTX (editable PowerPoint)": "Exportar PPTX (PowerPoint editável)",
   "PPTX exported with no degradations": "PPTX exportado sem simplificações",
   "PPTX exported. Degraded: {list}": "PPTX exportado. Simplificado: {list}",
+  "PPTX export failed: {msg}": "Falha ao exportar PPTX: {msg}",
   "Extra bold": "Extranegrito",
   "Extra light": "Extrafino",
   "Fill": "Preenchimento",

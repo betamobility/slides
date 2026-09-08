@@ -23,6 +23,17 @@ export const APPS = {
     // in slides/src/main.ts (the rig below pins it). A Beta deck therefore
     // refuses upstream's manifests and upstream decks refuse Beta's.
     appId: 'beta-slides',
+    /**
+     * BETA FORK: the release-signing PUBLIC key shipped files verify against
+     * (P-256 JWK: { kty:'EC', crv:'P-256', x, y }). ONE fact: `configureApp()`
+     * in slides/src/main.ts must carry the same value (test-release-apps.mjs
+     * pins it), sign-payload.mjs verifies against it, and release.mjs refuses
+     * a real release while it is null, because a manifest signed with the key
+     * the maintainer holds would then be refused by every shipped file.
+     * Set both from `node scripts/keygen.mjs` (public half only; the private
+     * half stays offline, docs/RELEASING.md).
+     */
+    publicKeyJwk: null,
     dir: 'slides',
     shell: 'Bento_Slides.bento.html',
     /**

@@ -139,6 +139,7 @@ export const zhHans: Catalog = {
   "Export PPTX (editable PowerPoint)": "导出 PPTX（可编辑的 PowerPoint）",
   "PPTX exported with no degradations": "已导出 PPTX，无降级",
   "PPTX exported. Degraded: {list}": "已导出 PPTX。已降级：{list}",
+  "PPTX export failed: {msg}": "PPTX 导出失败：{msg}",
   "Extra bold": "特粗",
   "Extra light": "特细",
   "Fill": "填充",

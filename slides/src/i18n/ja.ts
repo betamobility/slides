@@ -139,6 +139,7 @@ export const ja: Catalog = {
   "Export PPTX (editable PowerPoint)": "PPTX を書き出す（編集可能な PowerPoint）",
   "PPTX exported with no degradations": "PPTX を書き出しました。簡略化なし",
   "PPTX exported. Degraded: {list}": "PPTX を書き出しました。簡略化: {list}",
+  "PPTX export failed: {msg}": "PPTX の書き出しに失敗しました: {msg}",
   "Extra bold": "エクストラボールド",
   "Extra light": "エクストラライト",
   "Fill": "塗り",
