@@ -99,7 +99,7 @@ ${rows}
 <body>
 <main>
 <header>
-<div><div class="mark">bento/slides · Beta</div><h1>Decks</h1></div>
+<div><div class="mark">beta/slides</div><h1>Decks</h1></div>
 <div class="who">${esc(who)}</div>
 </header>
 <p class="muted">Every deck saved to Beta, newest first. Anyone signed in here can open and edit any of them; the link is the invitation.</p>
@@ -123,7 +123,7 @@ export function newPage(who) {
 <body>
 <main>
 <header>
-<div><div class="mark">bento/slides · Beta</div><h1>Save to Beta</h1></div>
+<div><div class="mark">beta/slides</div><h1>Save to Beta</h1></div>
 <div class="who">${esc(who)}</div>
 </header>
 <div class="card">
