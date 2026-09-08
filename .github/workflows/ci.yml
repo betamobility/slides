@@ -226,6 +226,11 @@ jobs:
       - name: Beta theme rig
         run: node scripts/test-beta-theme.ts
 
+      - name: Beta PPTX export rig
+        # The degrade report for a fixture carrying every element kind is pinned
+        # before the mapper; the file it writes is unzipped and its XML read.
+        run: node scripts/test-beta-pptx.ts
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.

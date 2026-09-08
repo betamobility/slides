@@ -1,0 +1,458 @@
+{
+ "format": "bento/slides",
+ "version": 1,
+ "docId": "fixture-beta-export",
+ "title": "Beta export fixture",
+ "meta": {
+  "author": "Beta",
+  "company": "Beta Mobility"
+ },
+ "size": {
+  "width": 1280,
+  "height": 720
+ },
+ "theme": {
+  "background": "#F5F3EF",
+  "color": "#1A1A1A",
+  "accent": "#4A7C59",
+  "fontFamily": "'Inter', system-ui, sans-serif",
+  "headingFamily": "'Playfair Display', Georgia, serif",
+  "chartPalette": [
+   "#4A7C59",
+   "#40916C",
+   "#333333"
+  ]
+ },
+ "assets": {
+  "pixel": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "logo": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><rect width='10' height='10' fill='#4A7C59'/></svg>"
+ },
+ "fonts": [
+  {
+   "family": "Inter",
+   "asset": "pixel"
+  }
+ ],
+ "slides": [
+  {
+   "id": "s1",
+   "background": "#F5F3EF",
+   "transition": "morph",
+   "notes": "Title notes for slide one.",
+   "elements": [
+    {
+     "id": "t-title",
+     "x": 96,
+     "y": 120,
+     "w": 1088,
+     "h": 200,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "text",
+     "html": "The deck is <b>one</b> file",
+     "fontSize": 88,
+     "fontFamily": "'Playfair Display', Georgia, serif",
+     "fontWeight": 700,
+     "color": "#1A1A1A",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.1
+    },
+    {
+     "id": "t-sub",
+     "x": 96,
+     "y": 340,
+     "w": 700,
+     "h": 80,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "text",
+     "html": "Subtitle with <i>emphasis</i><br>and a line break",
+     "fontSize": 28,
+     "fontFamily": "'Inter', system-ui, sans-serif",
+     "fontWeight": 400,
+     "color": "#666666",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.2,
+     "letterSpacing": 1
+    },
+    {
+     "id": "sh-grad",
+     "x": 900,
+     "y": 400,
+     "w": 280,
+     "h": 200,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "shape",
+     "shape": "rect",
+     "fill": "#4A7C59",
+     "fillGradient": {
+      "angle": 45,
+      "stops": [
+       {
+        "at": 0,
+        "color": "#4A7C59"
+       },
+       {
+        "at": 1,
+        "color": "#40916C"
+       }
+      ]
+     },
+     "stroke": "none",
+     "strokeWidth": 0,
+     "radius": 12
+    },
+    {
+     "id": "sh-ellipse",
+     "x": 96,
+     "y": 560,
+     "w": 120,
+     "h": 120,
+     "rotation": 0,
+     "opacity": 0.5,
+     "type": "shape",
+     "shape": "ellipse",
+     "fill": "#1A1A1A",
+     "stroke": "none",
+     "strokeWidth": 0,
+     "radius": 0
+    },
+    {
+     "id": "sh-line",
+     "x": 300,
+     "y": 600,
+     "w": 500,
+     "h": 0,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "shape",
+     "shape": "line",
+     "fill": "none",
+     "stroke": "#1A1A1A",
+     "strokeWidth": 3,
+     "radius": 0,
+     "lineEnd": "arrow"
+    },
+    {
+     "id": "sh-path",
+     "x": 850,
+     "y": 80,
+     "w": 300,
+     "h": 200,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "shape",
+     "shape": "path",
+     "fill": "#40916C",
+     "stroke": "none",
+     "strokeWidth": 0,
+     "radius": 0,
+     "d": "M0 0 L300 0 L150 200 Z",
+     "pathBox": [
+      0,
+      0,
+      300,
+      200
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s2",
+   "background": "#F5F3EF",
+   "transition": "morph",
+   "notes": "",
+   "elements": [
+    {
+     "id": "t-title",
+     "x": 96,
+     "y": 60,
+     "w": 1088,
+     "h": 100,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "text",
+     "html": "The deck is <b>one</b> file",
+     "fontSize": 44,
+     "fontFamily": "'Playfair Display', Georgia, serif",
+     "fontWeight": 700,
+     "color": "#1A1A1A",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.1
+    },
+    {
+     "id": "img-1",
+     "x": 96,
+     "y": 200,
+     "w": 300,
+     "h": 200,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "image",
+     "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+     "fit": "contain",
+     "radius": 0
+    },
+    {
+     "id": "svg-1",
+     "x": 450,
+     "y": 200,
+     "w": 200,
+     "h": 200,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "svg",
+     "asset": "logo"
+    },
+    {
+     "id": "chart-1",
+     "x": 700,
+     "y": 180,
+     "w": 480,
+     "h": 300,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "chart",
+     "option": {
+      "xAxis": {
+       "type": "category",
+       "data": [
+        "Q1",
+        "Q2",
+        "Q3"
+       ]
+      },
+      "yAxis": {
+       "type": "value"
+      },
+      "series": [
+       {
+        "type": "bar",
+        "name": "Oslo",
+        "data": [
+         4,
+         7,
+         6
+        ]
+       },
+       {
+        "type": "bar",
+        "name": "Bergen",
+        "data": [
+         2,
+         5,
+         9
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "id": "table-1",
+     "x": 96,
+     "y": 440,
+     "w": 600,
+     "h": 240,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "table",
+     "header": true,
+     "columns": [
+      {
+       "w": 2
+      },
+      {
+       "w": 1
+      },
+      {
+       "w": 1
+      }
+     ],
+     "rows": [
+      {
+       "cells": [
+        {
+         "html": "City"
+        },
+        {
+         "html": "Trips"
+        },
+        {
+         "html": "Share"
+        }
+       ]
+      },
+      {
+       "cells": [
+        {
+         "html": "Oslo"
+        },
+        {
+         "html": "12 400"
+        },
+        {
+         "html": "41 %"
+        }
+       ]
+      },
+      {
+       "cells": [
+        {
+         "html": "Bergen"
+        },
+        {
+         "html": "8 100"
+        },
+        {
+         "html": "27 %"
+        }
+       ]
+      },
+      {
+       "cells": [
+        {
+         "html": "Trondheim"
+        },
+        {
+         "html": "5 300"
+        },
+        {
+         "html": "18 %"
+        }
+       ]
+      }
+     ],
+     "style": {
+      "headerBg": "#1A1A1A",
+      "headerColor": "#F5F3EF",
+      "zebra": "#F0EDE8",
+      "borderColor": "rgba(26,26,26,0.15)",
+      "borderWidth": 1,
+      "cellPadX": 12,
+      "cellPadY": 8,
+      "fontSize": 16,
+      "color": "#1A1A1A",
+      "radius": 0
+     }
+    }
+   ]
+  },
+  {
+   "id": "s3",
+   "background": "#1A1A1A",
+   "transition": "fade",
+   "notes": "Media, code and embed.",
+   "elements": [
+    {
+     "id": "media-1",
+     "x": 96,
+     "y": 80,
+     "w": 500,
+     "h": 280,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "media",
+     "kind": "video",
+     "src": "https://example.com/clip.mp4",
+     "poster": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    },
+    {
+     "id": "code-1",
+     "x": 650,
+     "y": 80,
+     "w": 530,
+     "h": 280,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "code",
+     "fontSize": 18,
+     "fontFamily": "'DM Mono', 'Courier New', monospace",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.4,
+     "color": "#F5F3EF",
+     "content": "const deck = 'one file'\nexport default deck"
+    },
+    {
+     "id": "embed-1",
+     "x": 96,
+     "y": 400,
+     "w": 1088,
+     "h": 280,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "embed",
+     "app": "web",
+     "url": "https://example.com/live",
+     "view": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 50'><rect width='100' height='50' fill='#F0EDE8'/></svg>",
+     "live": true
+    }
+   ]
+  },
+  {
+   "id": "s3-state",
+   "stateOf": "s3",
+   "background": "#1A1A1A",
+   "transition": "fade",
+   "notes": "",
+   "elements": [
+    {
+     "id": "t-state",
+     "x": 96,
+     "y": 400,
+     "w": 600,
+     "h": 80,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "text",
+     "html": "A state reached by interaction",
+     "fontSize": 24,
+     "fontFamily": "'Inter', system-ui, sans-serif",
+     "fontWeight": 400,
+     "color": "#F5F3EF",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.2
+    }
+   ]
+  },
+  {
+   "id": "s4",
+   "background": "#F5F3EF",
+   "transition": "fade",
+   "notes": "",
+   "hidden": true,
+   "elements": [
+    {
+     "id": "t-hidden",
+     "x": 96,
+     "y": 300,
+     "w": 800,
+     "h": 80,
+     "rotation": 0,
+     "opacity": 1,
+     "type": "text",
+     "html": "Hidden material",
+     "fontSize": 24,
+     "fontFamily": "'Inter', system-ui, sans-serif",
+     "fontWeight": 400,
+     "color": "#1A1A1A",
+     "align": "left",
+     "valign": "top",
+     "lineHeight": 1.2
+    }
+   ]
+  }
+ ],
+ "collab": {
+  "room": "wss://sync.betamobility.ai/d/wFIXTUREROOM",
+  "key": "FIXTURE-ROOM-KEY-SECRET",
+  "ownerPriv": "FIXTURE-OWNER-PRIV-SECRET",
+  "writerPriv": "FIXTURE-WRITER-PRIV-SECRET",
+  "writerPub": "FIXTURE-WRITER-PUB"
+ }
+}

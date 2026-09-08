@@ -16,6 +16,8 @@ import type { InPlaceOutcome } from '../update'
 import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
+import { mapDeck } from '../export/pptx'
+import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
 import { PropsPanel } from './panels'
@@ -318,6 +320,7 @@ export class Editor {
       : t('Save — download an updated copy (⌘S). This browser can’t rewrite the open file.'))
     saveB.appendChild(this.dirtyDot) // the amber unsaved-changes dot lives ON Save
     const pdfB = btn(ICONS.pdf, '', () => this.exportPdf(), t('Export PDF (print)'))
+    const pptxB = btn(ICONS.pptx, '', () => { void this.exportPptx() }, t('Export PPTX (editable PowerPoint)'))
     const helpB = btn('<b class="ed-help-q">?</b>', '', () => this.openHelp(), t('Shortcuts & tips (?)'))
     helpB.classList.add('ed-btn-help')
     this.avatarsBox = div('ed-avatars')
@@ -330,7 +333,7 @@ export class Editor {
     saveGroup.append(saveB, this.saveDropdown())
     const shareD = this.shareDropdown()
     const langD = this.languageDropdown()
-    actions.append(pdfB, this.avatarsBox, shareD, saveGroup, langD, helpB)
+    actions.append(pdfB, pptxB, this.avatarsBox, shareD, saveGroup, langD, helpB)
 
     // Phone chrome: two menus that stay EMPTY on a wide screen. Nothing is
     // duplicated — applyPhoneChrome moves the real buttons in and out, so every
@@ -1959,6 +1962,46 @@ export class Editor {
     setTimeout(() => window.print(), 250)
   }
 
+  /**
+   * BETA FORK (plan U5). Export the deck as an editable PowerPoint file: real
+   * text boxes, shapes, tables and charts, through the pure mapper in
+   * src/export/pptx.ts. Every slide travels, state and hidden slides as hidden.
+   *
+   * The mapper gets a CLONE with the session stripped (KTD7): a .pptx leaves
+   * this file and lands in someone else's inbox, and `collab` is the room key.
+   * The degrade report is what makes the export honest: the toast names every
+   * element that became a picture or lost a gradient, and the console carries
+   * the full list.
+   */
+  async exportPptx() {
+    this.canvas.commitTextEdit()
+    const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
+    stripCollabSecrets(clone)
+    const { pptx, report } = await mapDeck(clone, { rasterize: rasterizeSvg })
+    const blob = (await pptx.write({ outputType: 'blob' })) as Blob
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${fileBase(suggestedFileName(this.store.doc))}.pptx`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    const named = report.filter((r) => r.elementId !== '*')
+    if (report.length) console.table(report)
+    if (!named.length) { this.toast(t('PPTX exported with no degradations')); return }
+    // A handful of elements are named; a showcase deck with sixty rasterised
+    // SVGs gets a count per reason instead, and the console has every row.
+    let list: string
+    if (named.length <= 8) list = named.map((r) => `${r.elementId} (${r.reason})`).join(', ')
+    else {
+      const counts = new Map<string, number>()
+      for (const r of named) counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1)
+      list = [...counts].sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${n} × ${reason}`).join(', ')
+    }
+    this.toast(t('PPTX exported. Degraded: {list}', { list }), 6000)
+  }
+
   // --- insert image ------------------------------------------------------------------
 
   private pickImage() {
@@ -3381,7 +3424,7 @@ export class Editor {
     if (runCheck || this.updateFound) checkB.click()
   }
 
-  toast(message: string) {
+  toast(message: string, ms = 2200) {
     document.querySelector('.ed-toast')?.remove()
     const t = div('ed-toast')
     t.textContent = message
@@ -3390,7 +3433,7 @@ export class Editor {
     setTimeout(() => {
       t.classList.remove('show')
       setTimeout(() => t.remove(), 300)
-    }, 2200)
+    }, ms)
   }
 }
 
