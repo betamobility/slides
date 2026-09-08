@@ -64,7 +64,7 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 | R7 | The browser tab, the boot splash and the release site show Beta's mark. |
 | R8 | `.claude/settings.json` is committed so the plugin is enabled for anyone who opens the repo. |
 | R9 | A worker at `decks.betamobility.ai` stores decks in R2 and serves them unchanged. Every route requires a valid Cloudflare Access assertion; a request without one gets the Access login, never a deck. |
-| R10 | The store lists a signed-in author's decks (title, updated time, size, link) on its index page. |
+| R10 | The store's index page lists every deck in the store (title, owner, updated time, size, link), because every signed-in identity is a trusted editor. |
 | R11 | "Save to Beta" in the editor's Share panel stores the current deck and shows its link. A deck opened from a store link saves back to the store in place with ⌘S; a deck opened from disk hands its document to the store through a store tab. |
 | R12 | "Invite to edit" on a stored deck copies the deck's link. The recipient opens it behind the same login and joins the live session through the relay as today. |
 | R13 | Deck opens and saves are counted in Plausible under the `betamobility.ai` site with the canonical properties only. No deck id, title or content leaves the worker. |
@@ -127,6 +127,7 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - Wrangler runs with the OAuth login and `env -u CLOUDFLARE_API_TOKEN`, as recorded in `docs/solutions/workflow-issues/agent-run-first-release-rollout-traps.md` in the claude-config repository.
 - Decks stay under a few megabytes. R2 object size is not a constraint; the worker's request body limit is 100 MB on the paid plan and the plan sets its own cap of 32 MB.
 - A deck served from `https://decks.betamobility.ai` runs on that origin, so same-origin `fetch` with the Access cookie works from inside the deck. A deck on `file://` has a null origin and cannot call the store with credentials, which is why F2 goes through a store tab and `postMessage`.
+- When the Access session has expired, Access answers a `fetch` with a redirect to the team login page, not a 401; `fetch` follows it and returns HTML from another origin. The editor therefore treats any store response that is not JSON from `storeHost` (`response.redirected`, or a non-JSON content type) as "signed out" and falls back to the file save with a sign-in prompt. The worker's own 401 covers only the case where Access is misconfigured and the assertion is missing.
 
 ### Outstanding Questions
 
@@ -160,8 +161,8 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - **KTD5. One optional `AppConfig` field, `storeHost`.** `kernel/src/app.ts` is one of the three kernel files the fork may edit. `storeHost?: string` mirrors `syncHost`: optional, absent upstream, read lazily through `appConfig()`. `slides/src/main.ts` sets it to `https://decks.betamobility.ai`. It is offered upstream with the next `AppConfig` pull request revision.
 - **KTD6. The layout picker always opens beside its anchor, clamped, with a viewport-bound max height.** Drop the "open upward from the add button" branch. Both anchors use the beside branch: left is the anchor's right edge plus a gutter, clamped to the window; top is clamped so the picker fits; `max-height` becomes `calc(100vh - 16px)` so scrolling inside the picker covers the rest. This is the change offered upstream.
 - **KTD7. The store is a sibling worker, `server/deck-store/`.** Same shape as `server/sync-worker/`: `wrangler.toml` with a custom domain, one R2 binding `DECKS`, no Durable Object. Routes: `GET /` index page, `GET /api/decks` list, `POST /api/decks` create, `PUT /api/decks/:id` replace, `GET /d/:id` serve, `DELETE /api/decks/:id`. Objects are keyed `decks/<id>.bento.html` with custom metadata for title, owner email, `docId`, updated time and size; the list reads metadata only. Ids are 10 base62 characters from `crypto.getRandomValues`.
-- **KTD8. Access is verified in the worker, not assumed from the header.** Every request validates the `Cf-Access-Jwt-Assertion` JWT against the team's JWKS with the application's audience, exactly as `Docs/auth-setup.md` prescribes. The email claim is the owner on create and the actor on every write. Service-token callers (Claude from a harness) arrive on a path-scoped application and identify through `common_name`. Anonymous requests never reach the worker's handlers because Access sits in front, and the worker still refuses if the assertion is missing, so a misconfigured Access policy fails closed.
-- **KTD9. Serving is a stream of the stored bytes.** `GET /d/:id` streams the R2 object with `Content-Type: text/html; charset=utf-8`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` and a `Content-Security-Policy` that permits what the shell already needs (inline scripts and styles, blob and data URLs, the relay's WebSocket host, the manifest host). No body transformation, no HTMLRewriter.
+- **KTD8. Access is verified in the worker, not assumed from the header.** Every request validates the `Cf-Access-Jwt-Assertion` JWT against the team's JWKS with the application's audience, exactly as `Docs/auth-setup.md` prescribes. The email claim is recorded as owner on create and as the last writer on every `PUT`. Any valid identity may read, list and `PUT`, because the store's premise is that every `@betamobility.io` identity is a trusted editor; only `DELETE` is restricted to the owner. Service-token callers (Claude from a harness) arrive on a path-scoped application and identify through `common_name`. Anonymous requests never reach the worker's handlers because Access sits in front, and the worker still refuses if the assertion is missing, so a misconfigured Access policy fails closed.
+- **KTD9. Serving is a stream of the stored bytes.** `GET /d/:id` streams the R2 object with `Content-Type: text/html; charset=utf-8`, `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. No body transformation, no HTMLRewriter. A `Content-Security-Policy` ships in v1.1 as `Content-Security-Policy-Report-Only`, derived from what the shell does: inline scripts and styles, `script-src blob:` for the inflated runtime, `data:` for fonts and images, `connect-src` for the relay's WebSocket host, the manifest host and the store itself, and `frame-src https:` because the fork's `embed` element layers a sandboxed iframe over any https URL. It is enforced only after the U8 browser smoke shows no reports.
 - **KTD10. Two save paths, chosen by origin.** A new file `slides/src/beta/store.ts` exports `isStoreOrigin()`, `saveToStore(doc)` and `handoffToStore(doc)`. On the store origin, `saveToStore` is a same-origin `PUT` with the Access cookie and the editor's ⌘S calls it instead of the file write (one branch in the save path, gated on `isStoreOrigin()`). On `file://`, `handoffToStore` opens `<storeHost>/new` in a tab and, on a `ready` message from that tab, posts the serialized document; the tab uploads and replies with the link. Origin checks on both sides: the deck accepts messages only from `storeHost`; the store page accepts a document only from an opener and only once.
 - **KTD11. Share panel wiring is one action each.** "Save to Beta" is a new `action()` in `renderSharePanel`. "Invite to edit" on a store-origin deck copies the link; off the store it keeps upstream's behaviour. Both are single `if` branches in the existing builders.
 - **KTD12. Analytics is server-side.** The worker posts `deck_open` and `deck_save` events to Plausible's events API with `surface: deck-store` and `outcome`, using the request's user agent and no identifying fields. The index page loads the Plausible script. Nothing is injected into a deck.
@@ -260,7 +261,7 @@ scripts/
 
 - **R2 stays disabled.** Then U7 cannot deploy. Mitigation: U7 is testable end to end under Miniflare, and the Product Contract names the enablement as Johan's action before U9.
 - **Access cookie and CORS.** A `file://` deck cannot call the store; the design routes that case through a store tab. If a browser blocks `postMessage` from a null-origin opener to a first-party tab, the fallback is a paste box on `/new` that accepts the document JSON. Decide after the first smoke in U8.
-- **CSP too tight for the shell.** The shell inflates its runtime from `blob:` and loads fonts from `data:`. U7's CSP is derived from what the shell does today and the browser smoke in U8 must show no CSP violations in the console.
+- **CSP too tight for the shell or the embed element.** The shell inflates its runtime from `blob:`, loads fonts from `data:`, and the `embed` element frames https URLs. KTD9 ships the policy report-only; the U8 smoke must show no reports on a deck that carries a live embed before it is enforced.
 - **Upstream conflict in `openAbout`.** Contained by KTD2: the diff replaces five literals with five calls.
 - **Deleting tracked template files** looks like a regression in review. The pull request for U1 explains that they are rebuilt in CI and by the release script.
 
@@ -445,11 +446,11 @@ scripts/
 
 **Test scenarios:**
 - Happy path: `POST /api/decks` with a valid assertion and a minimal deck returns 201 with an id and url; `GET /d/:id` returns byte-identical content with the expected headers. Covers AE4.
-- Happy path: `GET /api/decks` lists only decks whose owner is the assertion's email, newest first.
-- Happy path: `PUT /api/decks/:id` replaces the object, keeps `created`, updates `updated`.
+- Happy path: `GET /api/decks` lists every deck with owner and last writer, newest first.
+- Happy path: `PUT /api/decks/:id` from a different valid identity than the owner replaces the object, keeps `created` and `owner`, sets `updated` and `writer`.
 - Error path: no assertion, expired assertion, wrong audience, wrong issuer: 401 with no body, on every route including `GET /d/:id`.
 - Error path: body over 32 MB, body without a `#bento-doc` block, block whose JSON does not parse, `format` not `bento/slides`: 400 with a one-word reason.
-- Error path: unknown id: 404 with no body; `PUT` on an id owned by another email: 403.
+- Error path: unknown id: 404 with no body; `DELETE` on an id owned by another email: 403.
 - Edge case: a deck whose `#bento-doc` holds a `bento/enc` envelope stores and serves fine (the worker only checks the block exists and parses).
 - Edge case: a service-token assertion with empty `sub` is identified by `common_name`.
 - Integration: each successful serve posts one `deck_open` event with `surface` and `outcome` and nothing else; a Plausible failure does not fail the response. Covers AE7.
@@ -482,7 +483,7 @@ scripts/
 - Happy path: on the store origin, ⌘S issues one `PUT` to `/api/decks/<id>` with the serialized document and shows "Saved". Covers AE5.
 - Happy path: on `file://`, Save to Beta opens `storeHost/new`, waits for `ready` from that window, posts the document to `storeHost` only, and shows the returned link. Covers AE6.
 - Error path: a `ready` message from a different origin or a different window is ignored; a document message arriving at the store page from a non-opener is ignored; a second document message is ignored.
-- Error path: the `PUT` returns 401 (session expired): the editor falls back to the file save and tells the author to sign in again.
+- Error path: the Access session has expired, so the `PUT` follows a redirect and returns login HTML: the editor detects the non-JSON response, falls back to the file save and tells the author to sign in again. A bare 401 from the worker is handled the same way.
 - Edge case: an encrypted deck round-trips through the store still encrypted; the store never sees plaintext for it.
 - Edge case: Invite to edit on a store-origin deck copies the link and downloads nothing; off the store it behaves as before.
 - Integration: a colleague opening the link in a second browser joins the live session and both replicas converge, exactly as two disk copies do.
@@ -501,6 +502,7 @@ scripts/
 - `slides/package.json` (version)
 - `CHANGELOG.md`
 - `AGENTS.md`, `README.md`
+- `docs/DECISIONS.md` (one appended entry: Beta-internal hosting is in, reversing the v1 scope line, with the reason)
 
 **Approach:** the release procedure in `README.md` "Releasing (Beta)" unchanged. Order: deploy the store worker, verify it behind Access, then cut the release so the shell's `storeHost` points at a live host. Johan signs and publishes.
 
