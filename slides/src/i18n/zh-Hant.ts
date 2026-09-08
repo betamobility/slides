@@ -77,7 +77,7 @@ export const zhHant: Catalog = {
   "<b>Morph</b> animates elements that appear on both this slide and the previous one (copy a slide, then move things around).": "<b>變形</b>會為同時出現在此投影片與上一張的元素製作動畫（複製一張投影片，然後移動內容試試）。",
   "A <b>state</b> is hidden from arrow-key flow — viewers reach it by clicking a linked element. Shared element ids morph between states.": "<b>狀態</b>不會出現在方向鍵流程中 — 觀眾透過點按連結元素到達。共享 id 的元素會在狀態間變形。",
   "A deck needs at least one slide": "簡報至少需要一張投影片",
-  "About bento/slides — version, updates, licenses": "關於 bento/slides — 版本、更新、授權",
+  "About beta/slides — version, updates, licenses": "關於 beta/slides — 版本、更新、授權",
   "Align": "對齊",
   "Ambient": "氛圍",
   "Angle": "角度",
