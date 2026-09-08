@@ -114,6 +114,16 @@ for (const name of ['client-pitch', 'insight-brief', 'workshop']) {
   ok(doc.slides.some((s) => s.elements.some((e) => !!(e as { fx?: unknown }).fx)), `${name}: the cover has a motion moment`)
 }
 
+console.log('\nstarter')
+const { betaStarter } = await import('./lib/beta-layouts.mjs')
+const starter = betaStarter(fragment) as BentoDoc & { template?: boolean }
+ok(!starter.template && !('docId' in starter) && !('collab' in starter), 'the Beta starter is not a template and carries no docId or collab')
+ok(starter.slides.length >= 3 && starter.layouts!.length === 6, `the starter has ${starter.slides.length} slides and all six layouts`)
+const sres = validateDoc(JSON.parse(JSON.stringify({ ...starter, docId: 'starter' })) as BentoDoc)
+ok(!sres.findings.some((f: { severity: string }) => f.severity === 'error'), 'the starter validates with no errors')
+const gen = readFileSync(join(root, 'slides/src/starter/beta.generated.ts'), 'utf8')
+ok(gen.includes(JSON.stringify(JSON.stringify(starter).replace(/</g, '\\u003c'))), 'slides/src/starter/beta.generated.ts is current (run build-beta-starter.mjs)')
+
 console.log('\nAE5: content rides across layouts by role')
 const twoCol = slideFrom(layouts, 'beta-two-col', 's', { 'beta-title-h': 'Kept title', 'beta-col-right': 'Kept body' }) as Slide
 const chartText = layouts.find((l) => l.id === 'beta-chart-text')!

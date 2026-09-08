@@ -21,7 +21,7 @@ import { parseDoc, type BentoDoc, type TextElement } from './model'
 import { validateDoc, type ValidateOpts } from './validate'
 import { resolveThemeRefs } from './palette'
 import { measureText, measureElement, type TextMeasureSpec } from './measure'
-import { starterDoc } from './starterdeck'
+import { betaStarterDoc } from './betastarter'
 import { injectFonts } from './fonts'
 import { Store } from './store'
 import { Editor } from './editor/editor'
@@ -90,7 +90,8 @@ if (envelope) {
   // Whether this is OUR starter or someone's document is knowable only here —
   // downstream the two are indistinguishable, and the difference is what stops
   // the return gate appearing over real work.
-  bootWith(parsed || starterDoc(), !parsed)
+  // BETA FORK: a bare shell opens on the Beta starter, not upstream's showcase.
+  bootWith(parsed || betaStarterDoc(), !parsed)
 }
 
 /** Encrypted file: ask for the password (looping on failure), then boot. */

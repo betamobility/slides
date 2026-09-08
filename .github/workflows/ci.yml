@@ -237,6 +237,7 @@ jobs:
         run: |
           node scripts/build-beta-templates.mjs
           node scripts/test-beta-layouts.ts
+          node scripts/build-beta-starter.mjs --check
 
       - name: Beta plugin and skill rig
         # Static claims of plugins/beta-slides: published URLs, template names,

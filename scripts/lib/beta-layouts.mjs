@@ -92,7 +92,7 @@ export function betaLayouts(theme) {
         text(pal, 'beta-title-sub', 'One sentence on what this deck is for', { x: M, y: 488, w: 720, h: 72 },
           { fontSize: 24, colorSlot: 'accent4', lineHeight: 1.4, role: 'subtitle' }),
         text(pal, 'beta-title-byline', '', { x: M, y: 620, w: 720, h: 28 },
-          { html: '{{company}} · {{author}} · {{date}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
+          { html: '{{company}} · {{date}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
       ],
     },
     {
@@ -214,5 +214,31 @@ export function betaTemplates(fragment) {
       S('beta-two-col', 'decisions', { 'beta-title-h': 'Decisions', 'beta-col-left': '<b>Decided</b><br>Fill in live.', 'beta-col-right': '<b>Parked</b><br>Fill in live.' }, ''),
       S('beta-closing', 'close', { 'beta-title-h': 'Thank you', 'beta-title-sub': 'Notes go out within two days.' }, ''),
     ]),
+  }
+}
+
+/**
+ * What a bare Beta shell opens with (no `#bento-doc` on disk): a short deck in
+ * the design system that shows the layouts and says how to use the thing.
+ * NOT a template: the app mints its docId at boot (slides/src/betastarter.ts).
+ */
+export function betaStarter(fragment) {
+  const layouts = betaLayouts(fragment.theme)
+  const S = (layoutId, id, fill, notes) => slideFrom(layouts, layoutId, id, fill, notes)
+  return {
+    format: 'bento/slides', version: 1, title: 'Beta Slides',
+    meta: { ...fragment.meta, author: '', subject: 'Beta Slides' },
+    size: { ...CANVAS },
+    theme: fragment.theme, fonts: fragment.fonts, assets: fragment.assets, beta: fragment.beta,
+    layouts,
+    slides: [
+      S('beta-title', 'cover', { 'beta-kicker': 'Beta Slides', 'beta-title-h': 'The deck is one file.', 'beta-title-sub': 'Deck, viewer and editor in one HTML file, in the Beta design system. Press Esc to edit, or ask Claude.' },
+        'This is the starter deck a fresh Beta shell opens with. Save it under the deck\'s own name.'),
+      S('beta-two-col', 'how', { 'beta-title-h': 'How this works', 'beta-col-left': '<b>Edit here</b><br>Esc opens the editor. Apply a Beta layout from the slide panel; text rides across by role.', 'beta-col-right': '<b>Or ask Claude</b><br>Install the beta-slides plugin and describe the deck. It starts from a Beta template and exports PowerPoint.' },
+        'The two ways a deck gets made. Both end in the same file.'),
+      S('beta-chart-text', 'numbers', { 'beta-title-h': 'Numbers are charts', 'beta-col-right': 'A chart element, in the theme\'s palette. Refresh figures when you edit and keep the date.', 'beta-asof': 'Data as of {{date}}' },
+        'Replace the placeholder series with the real figures and update the as-of date.'),
+      S('beta-closing', 'close', { 'beta-title-h': 'Start writing', 'beta-title-sub': 'Delete these slides, keep the layouts. Export PPTX sits beside Export PDF.' }, ''),
+    ],
   }
 }
