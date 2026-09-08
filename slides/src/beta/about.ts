@@ -58,10 +58,13 @@ export function changelogAnchor(headingText: string): string {
     .replace(/ /g, '-')
 }
 
-/** The "What's new" link for a version: the fork changelog at that
- *  version's `## [<version>]` heading. */
-export function whatsNewUrl(version: string): string {
-  return `${BETA_CHANGELOG_URL}#${changelogAnchor(`[${version}]`)}`
+/** The "What's new" link for a version. The fork's changelog headings carry a
+ *  date (`## [2026.9.1] — 2026-09-08`), which GitHub folds into the anchor, so
+ *  a version-only anchor opens the file but misses the heading. The newest
+ *  release is the first section, so the link goes to the top of the file;
+ *  `changelogAnchor` stays for a heading whose full text is known. */
+export function whatsNewUrl(_version: string): string {
+  return BETA_CHANGELOG_URL
 }
 
 /** The licence line: the MIT libraries upstream credits, and the three OFL

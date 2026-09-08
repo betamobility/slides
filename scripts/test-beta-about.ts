@@ -144,10 +144,10 @@ ok(!/bento\.page|nyblnet|New to Bento/.test(promo), 'promo: no upstream copy')
 ok(about.changelogAnchor('[2026.9.2]') === '202692', 'anchor: "[2026.9.2]" → "202692"')
 ok(about.changelogAnchor('[2026.10.11]') === '20261011', 'anchor: "[2026.10.11]" → "20261011"')
 ok(about.changelogAnchor('Hello World — 1.0') === 'hello-world--10', 'anchor: lowercase, punctuation dropped, spaces → hyphens')
-ok(about.whatsNewUrl('2026.9.2') === 'https://github.com/betamobility/slides/blob/main/CHANGELOG.md#202692',
-  `whatsNewUrl("2026.9.2") = ${about.whatsNewUrl('2026.9.2')}`)
-ok(about.whatsNewUrl('2026.10.11') === 'https://github.com/betamobility/slides/blob/main/CHANGELOG.md#20261011',
-  `whatsNewUrl("2026.10.11") = ${about.whatsNewUrl('2026.10.11')}`)
+ok(about.changelogAnchor('[2026.9.1] — 2026-09-08') === '202691--2026-09-08', 'anchor: a dated heading folds the date in, which is why the link avoids anchors')
+ok(about.whatsNewUrl('2026.9.2') === 'https://github.com/betamobility/slides/blob/main/CHANGELOG.md',
+  `whatsNewUrl("2026.9.2") is the changelog top (newest release first) = ${about.whatsNewUrl('2026.9.2')}`)
+ok(about.whatsNewUrl('2026.10.11') === about.whatsNewUrl('2026.9.2'), 'whatsNewUrl is the same for every version')
 // The real CHANGELOG headings carry a date after an em dash; the anchor of
 // such a heading differs from the version-only anchor the plan specifies.
 // Reported, not asserted: U9 owns the heading format.
