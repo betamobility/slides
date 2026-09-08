@@ -1,163 +1,82 @@
-<p align="center">
-  <a href="https://bento.page" title="bento.page — try it in your browser">
-    <img src="docs/assets/bento-logo.svg" alt="Bento" width="96" height="96">
-  </a>
-</p>
+# Beta Slides
 
-# [Bento — the office suite that fits in a file](https://bento.page/)
+Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**This PowerPoint alternative is a single HTML file.** A Bento deck carries
-its own viewer, presenter, and editor inside the document — open it in any
-browser, edit it, present it, send it. The person you send it to needs
-nothing: the file *is* the software.
+**Production:** https://slides.betamobility.ai (release channel, not yet live; see Status)
+**Client:** Internal
+**Status:** Active, phase one
 
-**Try it in 10 seconds:** open [bento.page/slides](https://bento.page/slides)
-— that's the entire app, running on a starter deck that doubles as the
-feature tour. Or grab a designed template from the
-[gallery](https://bento.page/) and make it yours.
+## Overview
 
-**Download the app:** grab the single `Bento_Slides.bento.html` from the
-[GitHub Releases](https://github.com/nyblnet/bento/releases) page or straight
-from [bento.page](https://bento.page/releases/slides/Bento_Slides.bento.html)
-(~560 KB, no account, no installer). Open it in any modern browser and it *is*
-the editor. Save, and it rewrites itself with your deck inside.
+Beta had no presentation system: decks were made ad hoc, the design system was re-applied by hand each time, and Claude could not create or revise a deck the way it revises a repo. Bento is the only substrate where the document is plain JSON an agent edits directly, the file works from `file://` with no backend, collaboration is end-to-end encrypted with the file itself as the capability, and shipped documents keep opening by explicit platform contract. This fork adds the two things the format lacks, an editable-PPTX path and a live `embed` element, and expresses the Beta design system in Bento's own `theme`, `fonts`, `layouts` and `meta` keys rather than in a parallel layer.
 
-## Why this exists
+The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md`. Upstream's own README is kept verbatim at `docs/upstream-README.md`.
 
-Office documents used to be things you *had*. Now they're things you rent —
-locked in someone's cloud, behind someone's login, readable only while a
-company keeps its servers on. Bento takes the other path:
+## This is a fork
 
-- **One file, forever.** Deck, fonts, images, charts, animations, and the
-  full editor travel together. A copy from 2026 will open in 2036.
-- **View-source honest.** Your data sits in a plain, readable JSON block at
-  the top of the file. No binary formats, no lock-in, no archaeology.
-- **It saves itself.** The file rewrites its own data block on save (File
-  System Access API, with a download fallback). No app to install, ever.
-- **Local-first, provably.** Flip on Offline mode and nothing leaves your
-  machine — updates and collaboration are hard-blocked, and the app says so.
+- **Upstream:** `nyblnet/bento`, tracked as the `upstream` git remote. Only `slides/` and `kernel/` are built; Spaces, Dash, Type and `home/` ride along unbuilt with their CI disabled, not deleted.
+- **Cadence:** `main` merges `upstream/main` weekly, or before a release, whichever is sooner. Merge, never rebase.
+- **Kernel divergence:** exactly two files, `kernel/src/update.ts` and `kernel/src/sync/online.ts`, which read the signing key and relay host from `AppConfig` instead of constants. That lift is offered upstream as a pull request (see `docs/upstream-prs/`). Any further kernel change stops the work and becomes an upstream PR first.
+- **Identity:** `appId: 'beta-slides'`, so a Beta deck never self-updates from bento.page and an upstream deck never updates from Beta.
+- **Upstream invariants win.** `docs/PLATFORM.md` and `docs/PARALLEL-WORK.md` apply unchanged. Where this fork and an invariant disagree, the fork is wrong.
 
-## What's inside
+## Tech Stack
 
-| Feature | Description |
-|---|---|
-| **Morph presenting** | Elements that share an id animate between slides — position, size, color, even gradients. Duplicate a slide, rearrange, and the motion designs itself. |
-| **Live collaboration** | E2EE (AES-GCM) with keys that live in your file, never on a server. The file itself is the invitation: anyone who opens a copy joins. Offline edits merge back precisely — our own CRDT, character-level text merging included. |
-| **A blind relay** | The optional sync relay ([`server/sync-worker/`](server/sync-worker/)) stores ciphertext and learns nothing. Read the source; it's about one file. |
-| **Charts, built in** | Bar / line / pie / scatter drawn by our own dependency-free engine, live during presentations: tooltips, zoom, and data that morphs when a bar chart becomes a pie. |
-| **Designed for AI** | The document is plain JSON in the file, so agents edit `.bento.html` files in place and chatbots round-trip the JSON (`window.bento.loadDoc`). See [docs/agents.md](docs/agents.md). |
-| **Signed self-updates** | Releases are ECDSA-signed and offered in-app. Updating writes a *new* file — the old one stays as your rollback. No server ever touches your documents. |
-| **Everything else** | Speaker view, comments, layouts, hidden interactive states, hover reveals, motion paths, PDF export, page sizes, 8 UI languages — in a ~560 KB shell. |
+- **App:** TypeScript, Vite, single-file build (`slides/dist-single/Bento_Slides.bento.html`)
+- **Relay:** Cloudflare Worker + Durable Object (`server/sync-worker`), deployed as `sync.betamobility.ai`
+- **Release site:** static tree published by `scripts/publish-site.mjs` into `betamobility/slides-site`, served by Cloudflare Pages at `slides.betamobility.ai`
+- **Tests:** upstream's `node scripts/test-*.ts` rigs; Beta rigs are `scripts/test-beta-*`
+- **Deploy:** releases are cut locally and signed with an offline ECDSA key (`docs/RELEASING.md`)
 
-## Use it with AI
+> **Deviations from default stack:** no Next.js, no Supabase, no Vercel. The product is one HTML file that runs from disk; the only services are a blind relay and a static release site. Tests use upstream's script rigs, not Vitest, so the fork stays mergeable.
 
-Because the document is plain JSON living in one plaintext block near the top
-of the file, any assistant that can read and write a file can edit your deck —
-no plugin, no API. Two ways in:
+## Architecture
 
-- **File harnesses** edit the `#bento-doc` JSON in place:
-  [Claude Code](https://claude.com/claude-code), Cursor, Aider, or any agent
-  with filesystem access. Claude Code users get a packaged `bento-slides`
-  skill (installable from this repo's plugin marketplace: `/plugin marketplace
-  add nyblnet/bento`) that even downloads the latest Bento app by itself.
-- **Chat round-trip** for any chatbot: copy the document JSON out (*Save →
-  Copy document JSON*), let the assistant rewrite it, paste it back.
-
-**It works fully offline with local open-weight models** — point
-[Ollama](https://ollama.com), llama.cpp, or LM Studio at the deck and nothing
-leaves your machine. The agent guide is a single page you can drop into any
-model's context: [bento.page/agents.md](https://bento.page/agents.md) (also in
-this repo at [docs/agents.md](docs/agents.md)).
-
-## Architecture in one paragraph
-
-`slides/src/model.ts` defines the JSON document model; one renderer
-(`render.ts`) draws it for the editor canvas, thumbnails, and present mode
-(Reveal.js drives navigation; morphs are computed from the model, not the
-DOM). Animation is an in-house engine (`anim.ts`), charts are in-house
-(`charts.ts`), collaboration is an in-house CRDT (`sync/crdt.ts` — pure
-data, fuzz-tested by `scripts/test-sync.ts` across hundreds of thousands of
-convergence checks). The shell compresses to ~560 KB with the document block
-left as plaintext so old files and outside tools can always splice it. The
-deep dive: [docs/architecture.md](docs/architecture.md).
-
-## Security model, honestly
-
-- Collab keys are minted client-side at document creation and live only in
-  the file. Possession of the file = membership; "Rotate keys" = revocation.
-- The relay sees: ciphertext, connection timing, and a hash of the room key.
-  It cannot read content, names, or structure.
-- Presence names are claims, not proofs — fine within a shared-key room;
-  enterprise identity would need signed frames (designed, not built).
-- Update checks fetch a static manifest and send nothing about you or your
-  document. Signature + hash + version monotonicity are verified in-app.
-- Known trade-offs: undo during live collab is snapshot-based and can revert
-  a collaborator's concurrent edit to the same property; editing is
-  desktop-first (phones view and present well).
-
-## Build from source
-
-Node 20+ and npm are all you need — the app is a single-page build with no
-backend to stand up.
-
-```bash
-cd slides
-npm install
-npm run dev            # dev server (http://localhost:5173)
-npm run build:single   # → dist-single/Bento_Slides.bento.html (the product)
+```
+├── slides/          the app (src/, single-file build)
+├── kernel/          shared kernel; two files diverge from upstream (see above)
+├── beta/            Beta zone upstream never sees: tokens, fonts, theme, templates
+├── plugins/         beta-slides Claude Code plugin (skill)
+├── scripts/         build, release, rigs; Beta additions are build-beta-* and test-beta-*
+├── server/          sync relay worker
+├── docs/            upstream docs + docs/plans (Beta) + docs/upstream-prs (Beta)
+├── spaces/ dash/ type/ home/   upstream apps, unbuilt here
 ```
 
-`node scripts/test-sync.ts` runs the CRDT convergence rig. Releases are cut
-locally so the signing key never leaves the maintainer's machine — see
-[docs/RELEASING.md](docs/RELEASING.md).
+## External Dependencies
 
-## Where to read more
+| Service | Used for | Credentials |
+|---------|----------|-------------|
+| Cloudflare Workers | sync relay at `sync.betamobility.ai` | `CLOUDFLARE_API_TOKEN` (wrangler) |
+| Cloudflare Pages | release site at `slides.betamobility.ai` | dashboard |
+| GitHub `betamobility/slides-site` | published release tree | `gh` auth |
+| `Tools/design-system/tokens.json` | source of `beta/tokens.json` | none (sibling repo) |
 
-- [CLAUDE.md](CLAUDE.md) — the deep architecture + development guide (also what
-  AI agents read to work in this repo).
-- [docs/architecture.md](docs/architecture.md) — how a `.bento.html` file is
-  built, the on-disk format, and the runtime layout.
-- [docs/format.md](docs/format.md) — the normative `bento/slides` document-model
-  spec (every element type, slide/state/layout shape, and collab fields).
-- [docs/collab-design.md](docs/collab-design.md) — the CRDT, E2EE relay, and
-  signed-write RBAC design + threat model.
-- [docs/agents.md](docs/agents.md) — the document format, for AI agents.
-- [CHANGELOG.md](CHANGELOG.md) — the version history.
-- **Layout:** `slides/` is the app (source in `slides/src/`);
-  `server/sync-worker/` is the blind relay; `docs/` and `scripts/` are the
-  guides and build tooling.
+## Environment Variables
 
-Contributions welcome — start with [CONTRIBUTING.md](CONTRIBUTING.md). Found a
-security issue? See [SECURITY.md](SECURITY.md).
+| Variable | Description |
+|----------|-------------|
+| `BENTO_SITE_DIR` | path to a clone of `betamobility/slides-site`, read by `scripts/release.mjs` and `scripts/publish-site.mjs` |
+| `CLOUDFLARE_API_TOKEN` | wrangler auth for the relay deploy |
 
-## Community
+The release signing key lives at `~/.bento/release-key.json` on the maintainer's machine only. Never in the repo, never in CI.
 
-- **Questions and help** — [Discussions →
-  Q&A](https://github.com/nyblnet/bento/discussions/categories/q-a)
-- **Ideas and feature requests** — [Discussions →
-  Ideas](https://github.com/nyblnet/bento/discussions/categories/ideas)
-- **Built something with Bento?** — [Show and
-  tell](https://github.com/nyblnet/bento/discussions/categories/show-and-tell)
-- **Bugs** — [open an issue](https://github.com/nyblnet/bento/issues).
-  Security issues go through [SECURITY.md](SECURITY.md) instead, never a
-  public issue.
+## Development
 
-Planning a substantial contribution? Check the pinned **What's in flight**
-issue and the open PRs first, and say what you're planning before you build it
-— see [CONTRIBUTING.md](CONTRIBUTING.md).
+```sh
+cd slides
+npm ci
+npm run dev                    # dev server
+npm run build:single           # → dist-single/Bento_Slides.bento.html
+node_modules/.bin/tsc -b       # typecheck
+node_modules/.bin/tsc -p ../kernel
+node ../scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html
+```
 
-## Roadmap
+The full gate list is the Verification Contract in the plan; CI runs the `beta` job in `.github/workflows/ci.yml`.
 
-**bento/slides** is the first app — a PowerPoint alternative, shipping now.
-**bento/spaces** (notes), **bento/dash** (sheets & tables) and **bento/vault**
-follow, each as its own self-contained `.bento.html` distributable. The
-current release lives on [bento.page](https://bento.page) and reaches every
-existing file through the signed update channel.
+## Upstream pull requests
 
-## License
+Offered to `nyblnet/bento` from this fork. Bodies live in `docs/upstream-prs/`.
 
-Bento is open source under the [MIT License](LICENSE) — all software here is
-MIT, © 2026 The Bento authors. Bundled runtime components (reveal.js,
-Moveable, Selecto) are MIT; the embedded typefaces (Fraunces, Instrument Sans)
-are OFL; gallery imagery is public-domain (see
-`scripts/gallery-photos/SOURCES.md`). Each component keeps its own license.
+- `AppConfig` lift: `publicKeyJwk` and `syncHost` as optional per-app config. Branch `upstream-pr/appconfig-lift`.

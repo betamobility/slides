@@ -35,7 +35,194 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # BETA FORK GATE. This repository is Beta Mobility's fork of nyblnet/bento
+  # that builds ONLY bento/slides (docs/plans/2026-09-08-001-feat-beta-slides-
+  # bento-fork-plan.md, KTD1). The upstream `validate` job below builds every
+  # app in the monorepo and is disabled here, not deleted, so weekly upstream
+  # merges stay small. This job is the slides + kernel subset of `validate`,
+  # step for step, plus the Beta rigs (scripts/test-beta-*). The rationale for
+  # each upstream step lives on its twin in `validate`; read it there.
+  #
+  # `test-ci-registered.ts` reads this whole file, so a rig referenced only in
+  # the disabled job still counts as registered — which is why `validate` is
+  # gated by `if:` rather than removed.
+  # ---------------------------------------------------------------------------
+  beta:
+    if: github.repository != 'nyblnet/bento'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: slides/package-lock.json
+
+      - name: Install
+        working-directory: slides
+        run: npm ci
+
+      - name: Which targets anim treats as elements
+        run: node scripts/test-anim-elements.ts
+
+      - name: Transforms are not silently ignored
+        run: node scripts/test-anim-inline.ts
+
+      - name: i18n packed table is current
+        run: node scripts/build-i18n.mjs --check
+
+      - name: Language coverage
+        run: node scripts/test-i18n-coverage.mjs
+
+      - name: Language packs build and index cleanly
+        run: |
+          node scripts/build-i18n.mjs --packs "$RUNNER_TEMP/packs"
+          node scripts/sign-packs.mjs "$RUNNER_TEMP/packs" --dry
+
+      - name: Typecheck
+        working-directory: slides
+        run: node_modules/.bin/tsc -b
+
+      - name: Typecheck kernel (standalone)
+        working-directory: slides
+        run: node_modules/.bin/tsc -p ../kernel
+
+      - name: Build single-file shell
+        working-directory: slides
+        run: npm run build:single
+
+      - name: Splice conformance gate
+        run: node scripts/shell-gate.mjs slides/dist-single/Bento_Slides.bento.html
+
+      - name: Release channel rehearsal (slides, throwaway key)
+        # Upstream rehearses dash; the fork's product is slides, and its appId
+        # is the one thing U1 changed that fails SILENTLY when wrong (a shipped
+        # file just declines every update). This signs a manifest with a key it
+        # throws away and proves the refusals against kernel/src/update.ts.
+        run: node scripts/test-release-channel.mjs --app slides --shell slides/dist-single/Bento_Slides.bento.html
+
+      - name: Shell sizes
+        run: node scripts/test-spaces-size.mjs
+
+      - name: Language pack verification rig
+        run: node scripts/test-packs.ts
+
+      - name: Tokenizer contract
+        run: node scripts/test-tokenize.ts
+
+      - name: Code-morph identity engine
+        run: node scripts/test-codediff.ts
+
+      - name: First-page preview rig
+        run: node scripts/test-preview.ts
+
+      - name: Media autoplay rig
+        run: node scripts/test-media-autoplay.ts
+
+      - name: Return-gate rig
+        run: node scripts/test-return-gate.ts
+
+      - name: Offline-mode rig
+        run: node scripts/test-offline.ts
+
+      - name: Untrusted-markup sanitizer rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-sanitize.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-sanitize.mjs"
+          node "$RUNNER_TEMP/test-sanitize.mjs"
+
+      - name: Export-secrets rig
+        run: node scripts/test-export-secrets.ts
+
+      - name: Blob content-address rig
+        run: node scripts/test-blobs.ts
+
+      - name: Save-intent rig
+        run: node scripts/test-savepurpose.ts
+
+      - name: Guarded storage rig
+        run: node scripts/test-storage.ts
+
+      - name: App registry rig
+        run: node scripts/test-release-apps.mjs
+
+      - name: Autosave per-app database rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-autosave.ts --bundle --platform=node --format=esm \
+            --alias:fake-indexeddb/auto=./slides/node_modules/fake-indexeddb/auto/index.js \
+            --outfile="$RUNNER_TEMP/test-autosave.mjs"
+          BENTO_TEST_APP=beta-slides node "$RUNNER_TEMP/test-autosave.mjs"
+          BENTO_TEST_APP=bento-slides node "$RUNNER_TEMP/test-autosave.mjs"
+
+      - name: Publish deletion-gate rig
+        run: node scripts/test-publish-gate.mjs
+
+      - name: Model key tables match the format
+        run: node scripts/build-modelkeys.mjs --check
+
+      - name: Document validation rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-validate.ts --bundle --platform=node --format=esm --outfile="$RUNNER_TEMP/test-validate.mjs"
+          node "$RUNNER_TEMP/test-validate.mjs"
+
+      - name: every rig is actually run
+        run: node scripts/test-ci-registered.ts
+
+      - name: Theme token gate
+        run: node scripts/test-slides-theme.mjs
+
+      - name: Brand palette rig
+        run: node scripts/test-theme.ts
+
+      - name: Built-in layout geometry rig
+        run: node scripts/test-layouts.ts
+
+      - name: slides store rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-slide-store.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-slide-store.mjs"
+          node "$RUNNER_TEMP/test-slide-store.mjs"
+
+      - name: Clipboard embedded-font rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-clipboard.ts --bundle --platform=node --format=esm --outfile="$RUNNER_TEMP/test-clipboard.mjs"
+          node "$RUNNER_TEMP/test-clipboard.mjs"
+
+      - name: CRDT property-removal rig
+        run: node scripts/test-crdt-delprop.ts
+
+      - name: CRDT convergence rig
+        run: SEEDS=300 node scripts/test-sync.ts
+
+      - name: CRDT equivalence rig (baseline vs candidate, byte for byte)
+        run: REQUIRE_LIVE=1 SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+
+      - name: CRDT document-shape seam
+        run: node scripts/test-sync-shape.ts
+
+      - name: collaborative text on a parent node
+        run: node scripts/test-sync-parent-text.ts
+
+      - name: a flat document shape
+        run: node scripts/test-sync-flat.ts
+
+      - name: the sync session layer
+        run: node --no-warnings scripts/test-sync-session.ts
+
+      - name: relay protocol — one wire format, two clients
+        run: node scripts/test-relay-protocol.ts
+
+      # ---- Beta rigs (scripts/test-beta-*), one per implementation unit ----
+      # Added by the unit that creates each rig; the plan's Verification
+      # Contract is the list.
+
   validate:
+    # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
+    # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.
+    if: github.repository == 'nyblnet/bento'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

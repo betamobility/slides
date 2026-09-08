@@ -16,7 +16,9 @@ concurrency:
 
 jobs:
   comment:
+    # BETA FORK: disabled with the measure job it comments on.
     if: >-
+      github.repository == 'nyblnet/bento' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.id != null &&

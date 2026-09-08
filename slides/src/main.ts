@@ -31,10 +31,20 @@ import { onlineTransport, startSharing, stopSharing } from './sync/online'
 
 // Tell the kernel who this app is — must precede any kernel module use
 // (window title suffix, save-picker label, update manifest + its `app` check).
+//
+// BETA FORK IDENTITY (docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md, U1).
+// `appId` is what a shipped file checks the manifest's `app` against, so a
+// Beta deck never self-updates from bento.page. `appName` keeps upstream's
+// lowercase product name: the fork is a build of bento/slides, not a new app.
+// `publicKeyJwk` is the Beta release key's PUBLIC half — generated offline by
+// the maintainer with `node scripts/keygen.mjs` (docs/RELEASING.md) and pasted
+// here; until it is, the platform key in kernel/src/update.ts applies and the
+// appId check alone keeps upstream manifests out.
 configureApp({
-  appId: 'bento-slides',
+  appId: 'beta-slides',
   appName: 'bento/slides',
-  manifestUrl: 'https://bento.page/releases/slides/manifest.json',
+  manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
+  syncHost: 'wss://sync.betamobility.ai',
 })
 
 // Every save writes a static rendering of page one into the shell, so file

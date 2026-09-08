@@ -19,7 +19,10 @@
  */
 export const APPS = {
   slides: {
-    appId: 'bento-slides',
+    // BETA FORK: 'beta-slides', not 'bento-slides'. Must match configureApp()
+    // in slides/src/main.ts (the rig below pins it). A Beta deck therefore
+    // refuses upstream's manifests and upstream decks refuse Beta's.
+    appId: 'beta-slides',
     dir: 'slides',
     shell: 'Bento_Slides.bento.html',
     /**

@@ -17,6 +17,7 @@ import { offlineEnabled } from '../update.ts'
 // Every request in the app goes through the one chokepoint (kernel/src/net.ts)
 // so the offline switch cannot be forgotten — see GHSA-5c3x-xqp6-g94r.
 import { netWebSocket } from '../net.ts'
+import { appConfig } from '../app.ts'
 
 /** the app's store, structurally — see session.ts HostStore */
 type Store = HostStore
@@ -144,12 +145,16 @@ export async function mintCollab(): Promise<CollabCreds> {
   }
 }
 
-/** dev override for the relay host (e.g. ws://localhost:8787) */
+/** The relay host: the localStorage dev override (e.g. ws://localhost:8787),
+ *  else the host the app configured (a fork running its own relay), else the
+ *  platform default. Rigs that never call configureApp() get the default. */
 export function syncHost(): string {
+  let configured: string | undefined
+  try { configured = appConfig().syncHost } catch { /* not configured: platform default */ }
   try {
-    return lsGet('bento-sync-url') || DEFAULT_SYNC_HOST
+    return lsGet('bento-sync-url') || configured || DEFAULT_SYNC_HOST
   } catch {
-    return DEFAULT_SYNC_HOST
+    return configured || DEFAULT_SYNC_HOST
   }
 }
 
