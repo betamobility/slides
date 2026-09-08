@@ -789,4 +789,10 @@ export const ja: Catalog = {
   "The web page the live frame loads while online (http or https)": "オンライン時にライブフレームが読み込むウェブページ（http または https）",
   "Load the page in a sandboxed frame while online. Offline, or with offline mode on, the captured view shows instead.": "オンライン時にページをサンドボックス化されたフレームに読み込みます。オフライン時、またはオフラインモードが有効な場合は、取り込んだビューを表示します。",
   "The live frame loads only while online. Offline mode and a missing network show the captured view instead.": "ライブフレームはオンライン時のみ読み込まれます。オフラインモードやネットワークがない場合は、取り込んだビューを表示します。",
+  // BETA FORK (U2): the About dialog's Beta fragment (slides/src/beta/about.ts)
+  "Visit slides.betamobility.ai (opens in a new tab)": "slides.betamobility.ai を開く（新しいタブ）",
+  "Templates and the agent guide live at {home}; the source and changelog are on {gh}.": "テンプレートとエージェント向けガイドは {home} に、ソースコードと変更履歴は {gh} にあります。",
+  "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "reveal.js、Moveable、Selecto（MIT）· 書体 Inter、Playfair Display、DM Mono（OFL-1.1）を含みます — 完全な表記はこのファイルのソースに含まれています。",
+  "Up to date, {v}": "最新です、{v}",
+  "The update check did not run ({m}). Check manually below.": "更新の確認は実行されませんでした（{m}）。下で手動で確認してください。",
 }

@@ -789,4 +789,10 @@ export const zhHans: Catalog = {
   "The web page the live frame loads while online (http or https)": "联网时实时框架加载的网页（http 或 https）",
   "Load the page in a sandboxed frame while online. Offline, or with offline mode on, the captured view shows instead.": "联网时在沙盒框架中加载页面。离线或开启离线模式时，改为显示截取的视图。",
   "The live frame loads only while online. Offline mode and a missing network show the captured view instead.": "实时框架仅在联网时加载。离线模式和无网络时显示截取的视图。",
+  // BETA FORK (U2): the About dialog's Beta fragment (slides/src/beta/about.ts)
+  "Visit slides.betamobility.ai (opens in a new tab)": "访问 slides.betamobility.ai（在新标签页中打开）",
+  "Templates and the agent guide live at {home}; the source and changelog are on {gh}.": "模板和智能体指南在 {home}；源代码和更新日志在 {gh}。",
+  "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "包含 reveal.js、Moveable、Selecto（MIT）· 字体 Inter、Playfair Display 和 DM Mono（OFL-1.1）— 完整声明随本文件源码一起提供。",
+  "Up to date, {v}": "已是最新，{v}",
+  "The update check did not run ({m}). Check manually below.": "更新检查未运行（{m}）。请在下方手动检查。",
 }
