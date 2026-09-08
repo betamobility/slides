@@ -11,6 +11,47 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.9.2] — 2026-09-08
+
+The review of 2026.9.1 found eight places where the build still read as
+upstream's, and one structural gap: a deck reached a colleague only as an
+attachment. This release closes the eight and adds the deck store.
+
+- **The product is beta/slides.** The window title, the file-picker label,
+  the About dialog, the boot splash, the old-browser message and the tooling
+  note in every saved deck name `beta/slides`; the document format stays
+  `bento/slides`. The tab, the splash and the release site carry the design
+  system's own favicon and wordmark, vendored from `Tools/design-system`.
+- **Beta's About dialog, quiet when the file is current.** Beta's mark, links
+  to `slides.betamobility.ai` and the fork's GitHub, credits naming Inter,
+  Playfair Display and DM Mono, and one line, "Up to date", with no buttons
+  unless a newer release exists. The dialog never opens on its own; the topbar
+  chip stays the signal.
+- **English only.** The language picker and the Languages dialog are gone and
+  the locale is pinned at boot, whatever the browser's language says.
+- **The layout picker stays on screen.** It opened upward from the New-slide
+  button and, with six Beta layouts, its top landed above the viewport. It now
+  opens beside its anchor and scrolls inside itself at small heights. Offered
+  upstream as nyblnet/bento#425.
+- **Save to Beta.** A deck store at `decks.betamobility.ai` keeps decks in R2
+  behind Cloudflare Access for `@betamobility.io` identities and serves them
+  byte for byte. "Save to Beta…" in the Share panel stores a deck from disk and
+  hands back its link; a deck opened from a link saves in place with ⌘S,
+  autosaves, takes signed updates and "Save as new deck" through the store;
+  "Invite to edit" on a stored deck copies the link instead of downloading a
+  copy. Claude can save from a file harness through a service token.
+- **Templates are built, never committed.** The three starter templates
+  under `beta/templates/` had been committed once, on the upstream 1.0.19
+  shell, and announced an update on first open. They are generated in CI and
+  at release time, gitignored, and a rig fails on any template whose runtime
+  differs from the built shell; the publish gate covers `site/templates/`.
+
+Also: the `beta-slides` plugin is enabled for anyone who opens the repository
+(`.claude/settings.json`); `postbuild-compress.mjs` takes `--fail-name` and
+`--agents-url` with upstream-identical defaults; `miniflare` is a
+devDependency for the store's tests; the About "What's new" link opens the
+changelog top because these headings carry a date.
+
 ## [2026.9.1] — 2026-09-08
 
 Beta Mobility's first build of bento/slides, from the fork at
