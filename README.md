@@ -16,7 +16,7 @@ The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-pla
 
 - **Upstream:** `nyblnet/bento`, tracked as the `upstream` git remote. Only `slides/` and `kernel/` are built; Spaces, Dash, Type and `home/` ride along unbuilt with their CI disabled, not deleted.
 - **Cadence:** `main` merges `upstream/main` weekly, or before a release, whichever is sooner. Merge, never rebase.
-- **Kernel divergence:** exactly two files, `kernel/src/update.ts` and `kernel/src/sync/online.ts`, which read the signing key and relay host from `AppConfig` instead of constants. That lift is offered upstream as a pull request (see `docs/upstream-prs/`). Any further kernel change stops the work and becomes an upstream PR first.
+- **Kernel divergence:** exactly two files, `kernel/src/update.ts` and `kernel/src/sync/online.ts`, which read the signing key and relay host from `AppConfig` instead of constants (plus the `AppConfig` fields in `kernel/src/app.ts`). That lift is offered upstream as a pull request (see `docs/upstream-prs/`). Any further kernel change stops the work and becomes an upstream PR first.
 - **Identity:** `appId: 'beta-slides'`, so a Beta deck never self-updates from bento.page and an upstream deck never updates from Beta.
 - **Upstream invariants win.** `docs/PLATFORM.md` and `docs/PARALLEL-WORK.md` apply unchanged. Where this fork and an invariant disagree, the fork is wrong.
 
@@ -80,3 +80,6 @@ The full gate list is the Verification Contract in the plan; CI runs the `beta` 
 Offered to `nyblnet/bento` from this fork. Bodies live in `docs/upstream-prs/`.
 
 - `AppConfig` lift: `publicKeyJwk` and `syncHost` as optional per-app config. Branch `upstream-pr/appconfig-lift`.
+- `embed` element, consumer side in slides, to the `bento/embed` shape. Branch `upstream-pr/embed-consumer`.
+
+Both are prepared for Johan to open: upstream's hard rule 10 declines agent-authored PRs, so they carry no agent attribution and go out under his account.
