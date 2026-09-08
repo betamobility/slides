@@ -38,11 +38,12 @@ import { onlineTransport, startSharing, stopSharing } from './sync/online'
 // lowercase product name: the fork is a build of bento/slides, not a new app.
 // `publicKeyJwk` is the Beta release key's PUBLIC half — generated offline by
 // the maintainer with `node scripts/keygen.mjs` (docs/RELEASING.md) and pasted
-// here; until it is, the platform key in kernel/src/update.ts applies and the
-// appId check alone keeps upstream manifests out.
+// here, and in scripts/apps.mjs (test-release-apps.mjs pins the pair). Every
+// shipped Beta deck verifies its update manifest against this key.
 configureApp({
   appId: 'beta-slides',
   appName: 'bento/slides',
+  publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'o1ZkClAbOuGbFc-xHuTCgeUH5tS5ciHrKiQ6UPxvHN4', y: '00pSDB4EwBZiCctbTzWNC_anUHjpS_RTkUVsGiMgibg' },
   manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
   syncHost: 'wss://sync.betamobility.ai',
 })

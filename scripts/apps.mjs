@@ -33,7 +33,7 @@ export const APPS = {
      * Set both from `node scripts/keygen.mjs` (public half only; the private
      * half stays offline, docs/RELEASING.md).
      */
-    publicKeyJwk: null,
+    publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'o1ZkClAbOuGbFc-xHuTCgeUH5tS5ciHrKiQ6UPxvHN4', y: '00pSDB4EwBZiCctbTzWNC_anUHjpS_RTkUVsGiMgibg' },
     dir: 'slides',
     shell: 'Bento_Slides.bento.html',
     /**
