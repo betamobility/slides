@@ -24,6 +24,7 @@
 // without a guestbook deck would be blocked.
 
 import { plannedDeletions, groupDeletions, walk, supersededPacks } from './site-inventory.mjs'
+import { embeddedShellDecks, staleEmbeddedDecks } from './lib/beta-shell-payload.mjs'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -149,6 +150,56 @@ ok(supersededPacks(PUBLISHED, PUBLISHED).length === 0,
   'a republish of the same versions excuses nothing (same version is not superseded)')
 ok(supersededPacks(PUBLISHED, ['releases/spaces/packs/bento-spaces-1.0.0-ko.pack.json']).length === 0,
   "another app's pack for the same language does not excuse this app's")
+
+// ---- shell-consistency gate covers the Beta templates ---------------------
+// BETA FORK. site/templates/*.bento.html embed the shell like the gallery
+// does (release.mjs builds them from the shell it just signed), so a template
+// carrying another release's payload would ship a stale runtime on top of a
+// fresh shell — which is exactly how beta/templates/ sat in git built from a
+// 1.0.19 shell while the release was 2026.9.1 (plan U1, AE1). publish-site.mjs
+// cannot be run here (it needs the real site/ and a git destination), so the
+// gate's list and hash live in scripts/lib/beta-shell-payload.mjs and the
+// rig proves them on a fixture tree.
+console.log('\nshell-consistency gate: templates')
+{
+  const shellOf = (payload) =>
+    `<!doctype html><script type="bento/deflate-b64" data-x="1">${payload}</scr` + 'ipt>' +
+    `<script type="application/bento+json" id="bento-doc">{}</scr` + 'ipt>'
+  const fx = join(tmpdir(), `bento-shell-gate-${process.pid}`)
+  try {
+    const put = (rel, text) => {
+      mkdirSync(dirname(join(fx, rel)), { recursive: true })
+      writeFileSync(join(fx, rel), text)
+    }
+    const shell = 'releases/slides/Bento_Slides.bento.html'
+    put(shell, shellOf('AAAA'))
+    put('gallery/orbital.bento.html', shellOf('AAAA'))
+    put('templates/current.bento.html', shellOf('AAAA'))
+    put('templates/stale.bento.html', shellOf('BBBB'))
+    put('templates/blockless.bento.html', '<!doctype html><script type="application/bento+json" id="bento-doc">{}</scr' + 'ipt>')
+    put('templates/notes.txt', 'BBBB')
+
+    const decks = embeddedShellDecks(fx).map((d) => d.slice(fx.length + 1))
+    ok(decks.includes('templates/current.bento.html'), 'site/templates/*.bento.html are on the gate\'s list')
+    ok(!decks.includes('templates/notes.txt'), 'only .bento.html files under templates/ are checked')
+    ok(decks.includes('gallery/orbital.bento.html'), 'the gallery is still on the list (templates were added, not swapped in)')
+
+    const stale = staleEmbeddedDecks(join(fx, shell), embeddedShellDecks(fx)).map((d) => d.slice(fx.length + 1))
+    ok(stale.includes('templates/stale.bento.html'), 'a template carrying a different payload trips the gate (AE1)')
+    ok(stale.includes('templates/blockless.bento.html'), 'a template with no payload blocks trips the gate rather than passing vacuously')
+    ok(!stale.includes('templates/current.bento.html'), 'a template built from the released shell does not trip it')
+    ok(!stale.includes('gallery/orbital.bento.html'), 'nor does a current gallery deck')
+
+    // A blockless SHELL must not "match" the blockless template: the gate
+    // throws instead of comparing null to null.
+    put(shell, '<!doctype html>')
+    let threw = false
+    try { staleEmbeddedDecks(join(fx, shell), embeddedShellDecks(fx)) } catch { threw = true }
+    ok(threw, 'a shell with no payload is rejected outright, never compared')
+  } finally {
+    rmSync(fx, { recursive: true, force: true })
+  }
+}
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
