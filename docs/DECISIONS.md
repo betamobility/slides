@@ -6390,3 +6390,27 @@ chance to run and it is cheap. Reconciliation for this cycle: 41 commits, 40
 mapped, 1 correctly absent, run by bento-team-slides.
 
 Claude-Session: https://claude.ai/code/session_01Jcfdy8A69nonyATtm8vRy8
+
+## 2026-09-08 — BETA FORK: Beta-internal deck hosting is in; client hosting stays out
+
+The v1 fork plan (`docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md`)
+listed "hosting decks behind a Beta login" as outside the product's identity:
+sharing is the file, or the `publish` pipeline. The 2026-09-08 review of
+release 2026.9.1 reversed that for Beta-internal use only, and Johan confirmed
+it. The reason is what the review showed: a deck reaches a colleague only as
+an attachment, because nothing gives it a link or a home. Upstream's model,
+the file as the invitation and a blind relay for live edits, is kept intact;
+the gap was storage and addressing, not collaboration.
+
+The store (`server/deck-store/`, `decks.betamobility.ai`) holds decks as their
+owner saved them and serves them byte for byte behind Cloudflare Access for
+`@betamobility.io` identities. It never rewrites, indexes or decrypts a deck;
+that is `bento/vault`'s territory upstream and Beta tracks it rather than
+building it. Two consequences are accepted on the same basis as Beta's other
+internal tools, that every writer is a signed-in colleague: a stored deck
+carries `ownerPriv`, so store access is owner access on its live session; and
+a script inside any stored deck runs first-party on the store origin. Client
+decks still travel as a read-only file or through `publish`; a store that
+admits a non-Beta writer is a different product and reopens this entry.
+
+Plan of record: `docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md`.
