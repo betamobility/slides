@@ -35,7 +35,7 @@ The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-pla
 ```
 ├── slides/          the app (src/, single-file build)
 ├── kernel/          shared kernel; two files diverge from upstream (see above)
-├── beta/            Beta zone upstream never sees: tokens, fonts, theme, templates
+├── beta/            Beta zone upstream never sees: tokens, fonts, theme; templates/ is generated (gitignored)
 ├── plugins/         beta-slides Claude Code plugin (skill)
 ├── scripts/         build, release, rigs; Beta additions are build-beta-* and test-beta-*
 ├── server/          sync relay worker

@@ -9,8 +9,21 @@ beta/
 ├── tokens.json          generated: design-system tokens plus the overlay, with provenance under _source
 ├── fonts/               Inter, Playfair Display, DM Mono woff2 (OFL, see fonts/LICENSES.md)
 ├── logo/                favicons + recolorable wordmark, vendored from the design system (see logo/README.md)
-└── theme.json           generated: the theme + fonts + assets fragment every Beta deck carries
+├── theme.json           generated: the theme + fonts + assets fragment every Beta deck carries
+└── templates/           generated and gitignored: the three starter decks, spliced into the built shell
 ```
+
+## Templates are built, never committed
+
+`beta/templates/*.bento.html` embed the shell they were built from, so a committed copy carries whatever runtime was in `slides/dist-single/` at the time (release 2026.9.1 shipped them on the upstream 1.0.19 runtime). The directory is gitignored; build it from the current shell and let the rig prove it:
+
+```sh
+cd slides && npm run build:single                # the shell the templates embed
+node ../scripts/build-beta-templates.mjs         # writes beta/templates/{client-pitch,insight-brief,workshop}.bento.html
+node ../scripts/test-beta-templates-current.ts   # fails on any template whose payload differs from the shell's
+```
+
+The documents themselves live in `scripts/lib/beta-layouts.mjs` (`betaTemplates`); that is the file to edit. `scripts/release.mjs` builds the same decks into `site/templates/` for `slides.betamobility.ai`, and `scripts/publish-site.mjs` refuses to publish a template that does not embed the released shell.
 
 ## Refreshing the tokens
 
