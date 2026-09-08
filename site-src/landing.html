@@ -4,109 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Beta Slides</title>
-<meta name="description" content="Beta Mobility's presentation system. One HTML file is the deck, the viewer and the editor. A build of bento/slides with the Beta design system, PPTX export and a Claude Code plugin.">
-<link rel="icon" href="https://design.betamobility.ai/public/logo/favicon-32.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
+<meta name="robots" content="noindex">
 <style>
-  :root {
-    --color-surface: #F5F3EF;
-    --color-surface-alt: #F0EDE8;
-    --color-surface-emphasis: #1A1A1A;
-    --color-on-surface: #1A1A1A;
-    --color-on-surface-muted: #666666;
-    --color-on-surface-subtle: #999999;
-    --color-on-emphasis: #FFFFFF;
-    --color-border: rgba(26, 26, 26, 0.15);
-    --font-display: 'Playfair Display', Georgia, serif;
-    --font-sans: 'Inter', system-ui, sans-serif;
-    --font-mono: 'DM Mono', 'Courier New', monospace;
-    --radius-md: 8px;
-    --radius-full: 9999px;
-  }
-  * { box-sizing: border-box; }
-  html { color-scheme: light; }
-  body {
-    margin: 0; background: var(--color-surface); color: var(--color-on-surface);
-    font-family: var(--font-sans); font-size: 1rem; line-height: 1.55;
-  }
-  main { max-width: 68rem; margin: 0 auto; padding: 4rem 1.5rem 5rem; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 5rem; }
-  header img { height: 22px; width: auto; }
-  header nav a { color: var(--color-on-surface-muted); text-decoration: none; font-size: 0.875rem; margin-left: 1.5rem; }
-  header nav a:hover { color: var(--color-on-surface); }
-  h1 {
-    font-family: var(--font-display); font-weight: 700; font-size: clamp(2.5rem, 8vw, 4rem);
-    line-height: 1.05; letter-spacing: -0.01em; margin: 0 0 1.25rem; max-width: 14ch;
-  }
-  .lead { font-size: 1.125rem; max-width: 40rem; color: var(--color-on-surface); margin: 0 0 2rem; }
-  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 4.5rem; }
-  .btn {
-    display: inline-block; padding: 0.7rem 1.25rem; border-radius: var(--radius-full);
-    background: var(--color-surface-emphasis); color: var(--color-on-emphasis);
-    text-decoration: none; font-weight: 500; transition: transform 120ms ease;
-  }
-  .btn:hover { transform: translateY(-1px); }
-  .meta { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-on-surface-muted); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; margin-bottom: 4.5rem; }
-  .card { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; background: var(--color-surface); }
-  .card h2 { font-family: var(--font-display); font-size: 1.25rem; font-weight: 700; margin: 0 0 0.5rem; }
-  .card p { margin: 0; color: var(--color-on-surface-muted); font-size: 0.9375rem; }
-  .card code, pre { font-family: var(--font-mono); font-size: 0.8125rem; }
-  pre {
-    background: var(--color-surface-alt); border: 1px solid var(--color-border); border-radius: var(--radius-md);
-    padding: 1rem; overflow-x: auto; margin: 0;
-  }
-  section h2.section { font-family: var(--font-display); font-size: clamp(1.75rem, 4vw, 2.625rem); font-weight: 700; margin: 0 0 1rem; }
-  section p { max-width: 40rem; color: var(--color-on-surface-muted); }
-  footer { border-top: 1px solid var(--color-border); margin-top: 4rem; padding-top: 1.5rem; color: var(--color-on-surface-subtle); font-size: 0.875rem; }
-  footer a { color: inherit; }
+  body { margin: 0; padding: 3rem 1.5rem; background: #F5F3EF; color: #1A1A1A; font: 1rem/1.55 'Inter', system-ui, sans-serif; max-width: 40rem; }
+  h1 { font: 700 1.5rem/1.2 'Playfair Display', Georgia, serif; margin: 0 0 1rem; }
+  code, pre { font-family: 'DM Mono', 'Courier New', monospace; font-size: 0.875rem; }
+  pre { background: #F0EDE8; border: 1px solid rgba(26,26,26,0.15); border-radius: 8px; padding: 0.75rem 1rem; overflow-x: auto; }
+  a { color: inherit; }
+  ul { padding-left: 1.2rem; }
+  small { color: #666666; }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <a href="https://betamobility.ai" title="Beta Mobility"><img src="https://design.betamobility.ai/public/logo/wordmark-dark.png" alt="Beta Mobility"></a>
-    <nav>
-      <a href="/agents.md">Agent guide</a>
-      <a href="https://github.com/betamobility/slides">Source</a>
-      <a href="https://github.com/nyblnet/bento">Upstream</a>
-    </nav>
-  </header>
-
-  <h1>The deck is one file.</h1>
-  <p class="lead">Beta Slides is Beta Mobility's presentation system: a build of bento/slides that carries the Beta design system, exports editable PowerPoint, and is written and revised by Claude. One HTML file is the deck, the viewer and the editor. It opens from disk, needs no account, and saves itself.</p>
-  <div class="actions">
-    <a class="btn" href="/releases/slides/Bento_Slides.bento.html" download>Download Beta Slides</a>
-    <span class="meta">v__APP_VERSION__ · about __SHELL_KB__ KB · signed release</span>
-  </div>
-
-  <div class="grid">
-    <div class="card">
-      <h2>Branded from the design system</h2>
-      <p>Cream, charcoal, Playfair Display, Inter and DM Mono ride inside every deck as Bento theme, fonts and layouts. Re-layout by role, restyle from one place.</p>
-    </div>
-    <div class="card">
-      <h2>Editable PowerPoint</h2>
-      <p>Export writes real text boxes, shapes, tables and charts, and reports the elements that had to degrade to an image.</p>
-    </div>
-    <div class="card">
-      <h2>Written by Claude</h2>
-      <p>The <code>beta-slides</code> plugin extends the upstream skill with Beta's design rules, data refresh with an as-of date, and PPTX export.</p>
-    </div>
-  </div>
-
-  <section>
-    <h2 class="section">For agents</h2>
-    <p>Read <a href="/agents.md">the agent guide</a> before authoring. Install the plugin in Claude Code:</p>
-    <pre>/plugin marketplace add betamobility/slides
+<h1>Beta Slides</h1>
+<p>Internal release channel for Beta Mobility's build of <a href="https://github.com/nyblnet/bento">bento/slides</a>. Shipped decks self-update from here.</p>
+<ul>
+  <li><a href="/releases/slides/Bento_Slides.bento.html" download>Bento_Slides.bento.html</a> <small>v__APP_VERSION__, about __SHELL_KB__ KB</small></li>
+  <li><a href="/agents.md">agents.md</a>, the authoring guide for Claude</li>
+  <li><a href="https://github.com/betamobility/slides">Source</a></li>
+</ul>
+<p>Claude Code plugin:</p>
+<pre>/plugin marketplace add betamobility/slides
 /plugin install beta-slides@beta-slides</pre>
-  </section>
-
-  <footer>
-    A fork of <a href="https://github.com/nyblnet/bento">nyblnet/bento</a>, MIT. Shipped files self-update from this domain through a signed release channel. <a href="https://betamobility.ai">Beta Mobility</a>.
-  </footer>
-</main>
 </body>
 </html>
