@@ -73,6 +73,15 @@ console.log('\nproduct name (v1.1)')
   ok(slidesDir !== null, 'rig can locate slides/ from the repo root or from slides/')
   const main = slidesDir ? readFileSync(join(slidesDir, 'src/main.ts'), 'utf8') : ''
   ok(/appName:\s*'beta\/slides'/.test(main), "slides/src/main.ts configures appName 'beta/slides' (window title, file picker, About)")
+  // English-only build (v1.1 U3, KTD4): the locale is pinned at boot so a
+  // German-locale browser and a stale 'bento-lang' localStorage value both
+  // render English, and the editor no longer builds a language control at
+  // any width (topbar globe, phone ⋯ menu entry).
+  ok(/setLocale\('en'\)/.test(main), "slides/src/main.ts pins setLocale('en') in the BETA FORK IDENTITY block")
+  const editor = slidesDir ? readFileSync(join(slidesDir, 'src/editor/editor.ts'), 'utf8') : ''
+  ok(!/languageDropdown\(/.test(editor), 'slides/src/editor/editor.ts has no languageDropdown() (no globe button in the topbar)')
+  ok(!/openLanguages\(/.test(editor), 'slides/src/editor/editor.ts has no openLanguages() (no Manage languages dialog)')
+  ok(!/\blangD\b/.test(editor), "slides/src/editor/editor.ts has no langD entry in actions.append or the phone-chrome demote list")
   const pkg = slidesDir ? readFileSync(join(slidesDir, 'package.json'), 'utf8') : ''
   ok(/--title beta\/slides/.test(pkg) && /--fail-name 'beta\/slides presentation'/.test(pkg) && /--agents-url https:\/\/slides\.betamobility\.ai\/agents\.md/.test(pkg),
     "build:single passes --title, --fail-name and --agents-url to postbuild-compress.mjs (loader and tooling note name beta/slides)")
