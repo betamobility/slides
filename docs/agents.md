@@ -335,6 +335,55 @@ without them — and elements should carry the full field set shown.
   clips** — a big data URI bloats the file and makes it slow to open/save;
   host large media and reference its URL instead.
 
+### Beta build: embed
+
+The Beta build of Bento Slides adds one element type. It is built to the
+`bento/embed` shape upstream settled in `docs/DECISIONS.md` (2026-08-19), so
+a deck carrying one opens in an upstream shell without breaking.
+
+```json
+{ "id": "em1", "type": "embed", "x": 120, "y": 100, "w": 1040, "h": 520,
+  "rotation": 0, "opacity": 1,
+  "app": "web", "url": "https://example.com/dashboard", "live": true,
+  "view": "asset:dash-view" }
+```
+
+- **`view` (required)** is the static render: inline `<svg …>` markup, or an
+  `"asset:<key>"` whose value is that markup. It ALWAYS paints: offline, in
+  thumbnails, in print, and in any shell that has never heard of the `app`.
+  `validate()` reports a missing view as `embed-missing-view` (error) and a
+  URL in `view` as `embed-remote-view` (warning). A raster screenshot goes in
+  as `<svg viewBox="0 0 W H"><image href="data:image/png;base64,…"/></svg>`.
+  The view is untrusted markup and goes through the svg element's sanitiser:
+  scripts, handlers and foreign content are stripped.
+- **`app`** names what made it: `bento/dash`, `bento/type`, … or `web` for a
+  plain page. Unknown values are rendered (their view), never rejected.
+- **`doc`** (optional) is the source: pure JSON, or an `"asset:<key>"`.
+- **`url` and `live`** (optional, `app: "web"` only): with `live: true` and an
+  http(s) `url`, the shell layers a sandboxed iframe (no `allow-same-origin`,
+  no top navigation) over the view. The frame is created only while
+  `navigator.onLine` is true AND Bento's offline switch is off; either kind
+  of offline shows the view. The frame's `error` handler removes it so the
+  view shows again (browsers report most failed navigations as `load`, not
+  `error`, so treat that as a safety net, not a guarantee). Thumbnails never
+  create a frame. Default to `live` absent:
+  a slide that needs the network to make sense is a slide that fails on
+  conference wifi.
+
+**How an upstream shell treats it** (read against a pristine upstream
+checkout, 2026-09-08). `parseDoc` (`slides/src/model.ts:1152`) accepts any
+JSON whose `format` matches and keeps unknown elements through open and save,
+so the deck loads and the embed survives a round trip. `renderElement`
+(`slides/src/render.ts:1020`) switches on `el.type` with no `default`, so an
+embed becomes an empty, positioned `div.bento-el-embed`: a hole at the right
+place and size, with no view painted. `validate()`
+(`slides/src/validate.ts:269`) looks the type up in `MODEL_KEYS.element`, finds
+nothing, and says nothing, not even `unknown-key`. On paste, `sanitizeElement`
+(`slides/src/untrusted.ts:460`) drops the element outright. Every other element
+on the slide renders normally. The DECISIONS promise of "never a hole" covers
+an unknown `app` inside a known embed element, not an unknown element type,
+which is why the consumer side of this shape is Beta's upstream pull request.
+
 ## The rules that make decks feel designed
 
 - **Morph = shared ids.** Slides with `"transition": "morph"` tween any
