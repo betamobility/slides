@@ -88,6 +88,18 @@ export const APPS = {
 }
 
 /** The git tag and GitHub release name for a version of an app. */
+/**
+ * BETA FORK: where the site is served. Upstream hardcodes bento.page in
+ * release.mjs (manifest URL signed into every shipped file, and the CNAME);
+ * both read this instead so the domain is one fact. The manifest URL in
+ * slides/src/main.ts must agree with `origin`; test-release-apps.mjs pins the
+ * path half and U8's fetch of the live manifest proves the host half.
+ */
+export const SITE = {
+  host: 'slides.betamobility.ai',
+  origin: 'https://slides.betamobility.ai',
+}
+
 export const tagFor = (app, version) => `${app.tagPrefix ?? ''}v${version}`
 
 /**

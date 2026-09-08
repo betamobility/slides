@@ -37,7 +37,7 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APPS, RELEASE_MARKER, tagFor } from './apps.mjs'
+import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
 import { gateShell } from './shell-gate.mjs'
 import { verifyEnvelope } from './sign-payload.mjs'
 
@@ -152,7 +152,7 @@ ok(payload.version === JSON.parse(readFileSync(join(root, `${app.dir}/package.js
 ok(/^[0-9a-f]{64}$/.test(payload.sha256), 'the manifest pins a sha256 of the shell')
 ok(payload.sha256 === createHash('sha256').update(readFileSync(stagedShell)).digest('hex'),
   'the pinned sha256 is the sha256 of the shell actually staged (signed bytes = served bytes)')
-ok(payload.url === `https://bento.page/releases/${app.dir}/${app.shell}`,
+ok(payload.url === `${SITE.origin}/releases/${app.dir}/${app.shell}`,
   `the download URL is under the path the shell fetches (${payload.url})`)
 ok(typeof payload.at === 'string', 'the payload is stamped with a time')
 
