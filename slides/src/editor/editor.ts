@@ -19,6 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
+import { handoffToStore, isStoreOrigin, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -1137,6 +1138,27 @@ export class Editor {
     })
   }
 
+  // BETA FORK (v1.1 U8, R11): hand the document to the store's /new tab; the
+  // person clicks Save there (after signing in, if need be) and the link comes
+  // back. The tab is opened synchronously in the click so it survives the
+  // pop-up blocker; serialization runs while it loads.
+  private async saveToBeta() {
+    this.canvas.commitTextEdit()
+    this.session?.stampInto(this.store.doc)
+    const html = serializeAuto(this.store.doc)
+    html.catch(() => { /* surfaced by handoffToStore below */ })
+    try {
+      // The title is shown on the /new page before Save; an encrypted deck
+      // keeps it to itself (the page then says "Encrypted deck").
+      const url = await handoffToStore(html, isEncryptionActive() ? '' : this.store.doc.title)
+      try { await navigator.clipboard.writeText(url) } catch { /* the toast still shows the link */ }
+      this.toast(t('Saved to Beta — link copied: {url}', { url }), 8000)
+    } catch (err) {
+      console.error(err)
+      this.toast((err as Error)?.message || t('Save failed — see console'), 6000)
+    }
+  }
+
   private async saveAsNewDeck() {
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
     clone.docId = newDocId()
@@ -1347,6 +1369,13 @@ export class Editor {
         t('A sealed hand-out that opens straight into the show — no editor, no live connection.'))
       action(ICONS.template, t('Template…'), false, () => void this.saveAsTemplate(),
         t('A reusable starter: everyone who opens it gets their own fresh, independent deck.'))
+      // BETA FORK (v1.1 U8, KTD11): store the deck behind Beta's login and
+      // share it as a link. On the store origin the deck already lives there
+      // (⌘S saves in place; "Invite to edit" copies the link).
+      if (!isStoreOrigin()) {
+        action(ICONS.globe, t('Save to Beta…'), false, () => void this.saveToBeta(),
+          t('Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.'))
+      }
     } else {
       note(t('This is a view-only copy — it follows the live session but can’t change the deck.'))
     }
@@ -1389,6 +1418,17 @@ export class Editor {
    *  capability along (a copy of the file IS the invite there). */
   private async inviteToEdit() {
     await this.goLive()
+    // BETA FORK (v1.1 U8, R12): a stored deck's link IS the invitation — the
+    // recipient opens it behind the same login and joins the live session.
+    if (isStoreOrigin()) {
+      try {
+        await navigator.clipboard.writeText(location.href)
+        this.toast(t('Link copied — anyone at Beta who opens it edits this deck live with you'), 4000)
+      } catch {
+        this.toast(t('Couldn’t access the clipboard'))
+      }
+      return
+    }
     const c = this.store.doc.collab
     if (c?.v === 2 && c.ownerPriv) return this.saveEditorCopy()
     await this.save(true)
@@ -2559,15 +2599,20 @@ export class Editor {
       // file, and this URL will hand out a fresh starter next time. Said here,
       // persistently, so the next visit is not a surprise — and deliberately
       // NOT as a block, because this tab keeps working and keeps writing.
-      noteSavedFromWeb(currentFileName() ?? suggestedFileName(this.store.doc), {
-        fsAccess: canWriteInPlace(), canWrite: hostCan('write'),
-      })
+      // BETA FORK (v1.1 U8): the store origin is https but it is not the web
+      // demo — the deck lives at this URL, so the "starts fresh" notice is false.
+      if (!isStoreOrigin()) {
+        noteSavedFromWeb(currentFileName() ?? suggestedFileName(this.store.doc), {
+          fsAccess: canWriteInPlace(), canWrite: hostCan('write'),
+        })
+      }
       this.toast(result === 'downloaded'
         ? t('This browser can’t rewrite files in place — a fresh copy went to Downloads')
         : t('Saved'))
     } catch (err) {
       console.error(err)
-      this.toast(t('Save failed — see console'))
+      // BETA FORK (v1.1 U8): an expired Access session is a sign-in, not a bug.
+      this.toast(err instanceof StoreSignedOutError ? err.message : t('Save failed — see console'), err instanceof StoreSignedOutError ? 6000 : undefined)
     }
   }
 

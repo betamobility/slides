@@ -795,4 +795,13 @@ export const es: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Incluye reveal.js, Moveable, Selecto (MIT) · tipografías Inter, Playfair Display y DM Mono (OFL-1.1) — los avisos completos viajan en el código de este archivo.",
   "Up to date, {v}": "Actualizado, {v}",
   "The update check did not run ({m}). Check manually below.": "La comprobación de actualizaciones no se ejecutó ({m}). Compruébelo manualmente abajo.",
+  "Save to Beta…": "Guardar en Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "Guarda esta presentación en decks.betamobility.ai, detrás del inicio de sesión de Beta, y te da un enlace que tus compañeros abren en lugar de un archivo.",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "Enlace copiado — cualquiera de Beta que lo abra edita esta presentación en directo contigo",
+  "Saved to Beta — link copied: {url}": "Guardado en Beta — enlace copiado: {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Sesión de Beta cerrada — vuelve a iniciar sesión en {host} y guarda de nuevo",
+  "The store refused the deck ({status}{why})": "El almacén rechazó la presentación ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "No se pudo abrir la pestaña del almacén — permite las ventanas emergentes para este archivo e inténtalo de nuevo.",
+  "The store tab gave no answer — timed out": "La pestaña del almacén no respondió — tiempo agotado",
+  "The store tab was closed before the deck was saved": "La pestaña del almacén se cerró antes de guardar la presentación",
 }

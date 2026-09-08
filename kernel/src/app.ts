@@ -36,6 +36,11 @@ export interface AppConfig {
    *  kernel uses DEFAULT_SYNC_HOST in sync/online.ts. The localStorage
    *  'bento-sync-url' dev override wins over both. */
   syncHost?: string
+  /** Origin of a document STORE the app can save into (https://…, no
+   *  trailing slash). Optional: absent, the app has no store and every save
+   *  is a file. A fork that hosts decks behind its own login sets this; the
+   *  app decides what to do with it (the kernel only carries the value). */
+  storeHost?: string
 }
 
 let config: AppConfig | null = null

@@ -795,4 +795,13 @@ export const de: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Enthält reveal.js, Moveable, Selecto (MIT) · Schriften Inter, Playfair Display und DM Mono (OFL-1.1) — vollständige Hinweise reisen im Quelltext dieser Datei mit.",
   "Up to date, {v}": "Auf dem neuesten Stand, {v}",
   "The update check did not run ({m}). Check manually below.": "Die Update-Prüfung lief nicht ({m}). Prüfen Sie unten manuell.",
+  "Save to Beta…": "Bei Beta speichern…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "Speichert diese Präsentation auf decks.betamobility.ai hinter der Beta-Anmeldung und gibt Ihnen einen Link, den Kolleginnen und Kollegen statt einer Datei öffnen.",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "Link kopiert — wer bei Beta ihn öffnet, bearbeitet diese Präsentation live mit Ihnen",
+  "Saved to Beta — link copied: {url}": "Bei Beta gespeichert — Link kopiert: {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Von Beta abgemeldet — melden Sie sich unter {host} erneut an und speichern Sie dann noch einmal",
+  "The store refused the deck ({status}{why})": "Der Speicher hat die Präsentation abgelehnt ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Der Speicher-Tab ließ sich nicht öffnen — erlauben Sie Pop-ups für diese Datei und versuchen Sie es erneut.",
+  "The store tab gave no answer — timed out": "Der Speicher-Tab hat nicht geantwortet — Zeitüberschreitung",
+  "The store tab was closed before the deck was saved": "Der Speicher-Tab wurde geschlossen, bevor die Präsentation gespeichert war",
 }

@@ -292,6 +292,17 @@ jobs:
         # at run time.
         run: node scripts/test-beta-store.ts
 
+      - name: Beta deck store client rig
+        # U8: slides/src/beta/store.ts against a fake browser. The store-backed
+        # handle PUTs the kernel's bytes to /api/decks/<id> with a manual
+        # redirect; opaqueredirect, a rejected fetch, a 401 and a login page
+        # all reject as signed-out; picker ids map to PUT / POST+navigate /
+        # download; the file:// handoff accepts ready/saved only from the
+        # store origin and the tab it opened, posts the document to the store
+        # origin only, and times out. Bundles itself with esbuild, so after
+        # `npm ci`.
+        run: node scripts/test-beta-store-client.ts
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.

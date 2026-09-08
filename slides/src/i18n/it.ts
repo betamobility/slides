@@ -795,4 +795,13 @@ export const it: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Include reveal.js, Moveable, Selecto (MIT) · caratteri Inter, Playfair Display e DM Mono (OFL-1.1) — le note complete viaggiano nel sorgente di questo file.",
   "Up to date, {v}": "Aggiornato, {v}",
   "The update check did not run ({m}). Check manually below.": "Il controllo aggiornamenti non è stato eseguito ({m}). Controlla manualmente qui sotto.",
+  "Save to Beta…": "Salva su Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "Salva questa presentazione su decks.betamobility.ai, dietro l’accesso Beta, e ti dà un link che i colleghi aprono al posto di un file.",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "Link copiato — chiunque di Beta lo apra modifica questa presentazione dal vivo con te",
+  "Saved to Beta — link copied: {url}": "Salvato su Beta — link copiato: {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Disconnesso da Beta — accedi di nuovo su {host}, poi salva ancora",
+  "The store refused the deck ({status}{why})": "L’archivio ha rifiutato la presentazione ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Impossibile aprire la scheda dell’archivio — consenti i pop-up per questo file e riprova.",
+  "The store tab gave no answer — timed out": "La scheda dell’archivio non ha risposto — tempo scaduto",
+  "The store tab was closed before the deck was saved": "La scheda dell’archivio è stata chiusa prima che la presentazione fosse salvata",
 }
