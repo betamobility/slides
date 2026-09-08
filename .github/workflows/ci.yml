@@ -219,6 +219,13 @@ jobs:
       # Added by the unit that creates each rig; the plan's Verification
       # Contract is the list.
 
+      # U3: beta/theme.json is a complete, embedded, traceable rendering of
+      # the design-system tokens. The rig bundles itself with esbuild from
+      # slides/node_modules (validate.ts reaches render.ts, whose imports are
+      # extensionless), so it must run after `npm ci` in slides/.
+      - name: Beta theme rig
+        run: node scripts/test-beta-theme.ts
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.
