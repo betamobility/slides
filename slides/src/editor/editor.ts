@@ -18,6 +18,7 @@ import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
+import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -1543,17 +1544,15 @@ export class Editor {
       }
       pick.appendChild(grid)
     }
+    // Open beside the anchor, clamped on-screen. The bottom-of-sidebar button
+    // used to open the picker upward from itself, which pushed a picker with
+    // a handful of custom layouts above the viewport (measured: top = -7px at
+    // a 600px-tall window). The height is read after appending so the clamp
+    // uses the real box; the stylesheet caps it to the viewport and scrolls.
     const r = anchor.getBoundingClientRect()
-    if (anchor.classList.contains('ed-add-slide')) {
-      // bottom-of-sidebar button: open upward from it
-      pick.style.left = `${Math.max(8, r.left)}px`
-      pick.style.bottom = `${window.innerHeight - r.top + 8}px`
-    } else {
-      // insert-gap or panel button: open beside the anchor, clamped on-screen
-      pick.style.left = `${Math.max(8, Math.min(r.right + 10, window.innerWidth - 440))}px`
-      pick.style.top = `${Math.max(8, Math.min(r.top - 40, window.innerHeight - 460))}px`
-    }
+    pick.style.left = `${Math.max(8, Math.min(r.right + 10, window.innerWidth - 440))}px`
     document.body.appendChild(pick)
+    pick.style.top = `${Math.max(8, Math.min(r.top - 40, window.innerHeight - pick.offsetHeight - 8))}px`
     const close = (ev: PointerEvent) => {
       if (!pick.contains(ev.target as Node)) {
         pick.remove()
@@ -2235,7 +2234,7 @@ export class Editor {
     msg.textContent = t('Updated to v{v}.', { v: APP_VERSION })
     const what = document.createElement('a')
     what.className = 'ed-btn'
-    what.href = `https://github.com/nyblnet/bento/releases/tag/v${APP_VERSION}`
+    what.href = whatsNewUrl(APP_VERSION) // BETA FORK: the fork changelog, not upstream's releases
     what.target = '_blank'
     what.rel = 'noopener'
     what.textContent = t('What’s new →')
@@ -2509,14 +2508,7 @@ export class Editor {
       t('Your work auto-saves; restore earlier versions from Save → Version history.'),
     ]) { const li = document.createElement('li'); li.textContent = tip; ul.appendChild(li) }
     tips.appendChild(ul); colL.appendChild(tips)
-    const more = div('ed-help-more')
-    const link = document.createElement('a')
-    link.href = 'https://bento.page/help'
-    link.target = '_blank'
-    link.rel = 'noopener'
-    link.textContent = t('Full guide at bento.page/help →')
-    more.appendChild(link)
-    box.appendChild(more)
+    // BETA FORK: no external guide line — the fork publishes no help page.
     overlay.appendChild(box)
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true) }
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); close() } }
@@ -2943,36 +2935,16 @@ export class Editor {
 
     const head = div('ed-about-head')
     // The logo/wordmark links home (new tab) — a gentle route back to the site.
-    head.innerHTML =
-      `<a class="ed-about-logo" href="https://bento.page" target="_blank" rel="noopener">` +
-      `<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">` +
-      `<rect width="32" height="32" rx="7" fill="#16273E"/>` +
-      `<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>` +
-      `<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>` +
-      `<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>` +
-      `</svg><div><b>bento<span style="color:#FF9E8A">/</span>slides</b><span>v${APP_VERSION} · format v${FORMAT_VERSION}</span></div>` +
-      `</a>`
-    head.querySelector('a')?.setAttribute('title', t('Visit bento.page (opens in a new tab)'))
+    head.innerHTML = aboutHeaderHtml(APP_VERSION, FORMAT_VERSION) // BETA FORK: Beta's mark, name and links (beta/about.ts)
+    head.querySelector('a')?.setAttribute('title', aboutHeaderTitle()) // BETA FORK
     box.appendChild(head)
 
     // Engagement nudge back to the site (templates / gallery / agent guide).
     const promo = div('ed-about-promo')
-    promo.innerHTML = t(
-      'New to Bento? Find templates, the gallery and the AI editing guide at {home} — or ⭐ it on {gh}.',
-      {
-        home: '<a href="https://bento.page" target="_blank" rel="noopener">bento.page</a>',
-        gh: '<a href="https://github.com/nyblnet/bento" target="_blank" rel="noopener">GitHub</a>',
-      },
-    )
+    promo.innerHTML = aboutPromoHtml() // BETA FORK
     box.appendChild(promo)
 
     const status = div('ed-about-status')
-    status.textContent =
-      this.lastAutoCheck?.status === 'current'
-        ? t("Checked automatically at launch — you're on the latest version (v{v}).", { v: APP_VERSION })
-        : this.lastAutoCheck?.status === 'error'
-          ? t("Launch check couldn't reach the release server ({m}). Check manually below.", { m: this.lastAutoCheck.message })
-          : t('This file carries its own app — it works offline, forever, as is.')
 
     const row = div('ed-about-row')
     const checkB = document.createElement('button')
@@ -2983,10 +2955,8 @@ export class Editor {
       status.textContent = t('Checking…')
       const result = await checkForUpdates()
       checkB.disabled = false
-      if (result.status === 'current') {
-        status.textContent = t("You're on the latest version (v{v}).", { v: result.version })
-      } else if (result.status === 'error') {
-        status.textContent = t("Couldn't check: {m}", { m: result.message })
+      if (result.status === 'current' || result.status === 'error') {
+        applyUpdateStatus(status, row, result, APP_VERSION) // BETA FORK (KTD3): one line when current, no buttons
       } else {
         const { release } = result
         status.textContent = ''
@@ -3058,7 +3028,7 @@ export class Editor {
         // row deliberately: reading before deciding is the point.
         const notesLink = document.createElement('a')
         notesLink.className = 'ed-btn'
-        notesLink.href = `https://github.com/nyblnet/bento/releases/tag/v${release.version}`
+        notesLink.href = whatsNewUrl(release.version) // BETA FORK: the fork changelog at this version's heading
         notesLink.target = '_blank'
         notesLink.rel = 'noopener'
         notesLink.textContent = t('What’s new →')
@@ -3105,6 +3075,7 @@ export class Editor {
     })
     row.appendChild(checkB)
     box.append(row, status)
+    applyUpdateStatus(status, row, this.lastAutoCheck, APP_VERSION) // BETA FORK (KTD3): the launch check's verdict, one line
 
     // Appearance — a VIEWER preference, so it sits with the others (language,
     // auto-update) rather than anywhere near the document's own settings.
@@ -3197,7 +3168,7 @@ export class Editor {
     const fine = div('ed-about-fine')
     fine.innerHTML =
       `${t('Checks contact the release server and send nothing about you or this document — no ids, no telemetry.')}<br>` +
-      t('Includes reveal.js, Moveable, Selecto (MIT) · Fraunces + Instrument Sans typefaces (OFL-1.1) — full notices travel in this file’s source.')
+      aboutCreditsText() // BETA FORK: the faces the Beta deck embeds
     box.appendChild(fine)
 
     overlay.appendChild(box)

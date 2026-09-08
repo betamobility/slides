@@ -263,6 +263,15 @@ jobs:
         # above) carries the same favicon tag.
         run: node scripts/test-beta-marks.ts
 
+      - name: Beta About rig
+        # v1.1 U2: openAbout, openHelp and the post-update banner carry no
+        # upstream link and route through slides/src/beta/about.ts; the
+        # launch check only badges the chip; the fragment's header, promo,
+        # credits, changelog anchor and update-section decision (current /
+        # newer / failed) are checked in node. Bundles itself with esbuild
+        # from slides/node_modules, so after `npm ci`.
+        run: node scripts/test-beta-about.ts
+
       - name: Beta plugin and skill rig
         # Static claims of plugins/beta-slides: published URLs, template names,
         # manifests, inherited rules, and the as-of stamp shape (AE3).
