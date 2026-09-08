@@ -59,6 +59,7 @@ const EXPECTED_REPORT: Array<Pick<DegradeEntry, 'elementId' | 'slideId' | 'reaso
   { slideId: 's3', elementId: 'media-1', reason: 'media' },
   { slideId: 's3', elementId: 'code-1', reason: 'code-colour' },
   { slideId: 's3', elementId: 'embed-1', reason: 'embed' },
+  { slideId: 's3', elementId: 'svg-hostile', reason: 'svg' },
   { slideId: '*', elementId: '*', reason: 'motion' },
   { slideId: '*', elementId: '*', reason: 'fonts' },
 ]
@@ -130,6 +131,12 @@ ok((s2.match(/<p:pic>/g) ?? []).length >= 2, 'image and rasterised svg are pictu
 // notes
 const notesAll = notesXml.map(read).join('')
 ok(/Title notes for slide one\./.test(notesAll), 'speaker notes survive')
+
+// ---- 2b. hostile markup never reaches the zip --------------------------------
+console.log('\nhostile svg')
+const allText = list.map(read).join('\n')
+ok(!/evil\.example|alert\(1\)|<script/i.test(allText), 'a script-carrying svg asset is refused; nothing of it is in the zip')
+ok(list.some((p) => /^ppt\/media\/.*\.svg$/.test(rel(p))), 'clean svg artwork still travels as an svg picture under node')
 
 // ---- 3. secrets -------------------------------------------------------------
 console.log('\nsecrets')

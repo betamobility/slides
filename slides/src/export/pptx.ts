@@ -64,6 +64,25 @@ const pt = (px: number) => Math.round(px * PT_PER_PX * 100) / 100
 const PLACEHOLDER_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAADdv/LVAAAAEklEQVR4nGP4//8/AwMDAwMDAwAlBAP9YMz9BQAAAABJRU5ErkJggg=='
 
+// ---- svg guard (DOM-free) ----------------------------------------------------
+//
+// Mirrors type/src/embed.ts safeView(): it must BE an svg, carry no script,
+// foreign content, event handler or external reference. An allow-list on
+// references (a same-document fragment or an inline raster), because naming
+// the bad schemes is a losing game. In the browser the rasteriser runs the
+// real sanitiser first; this is the node path's only guard.
+
+const SVG_BANNED = /<\s*(script|iframe|object|embed|foreignObject|link|meta|style)\b/i
+const SVG_HANDLER = /\son[a-z]+\s*=/i
+const SVG_REMOTE = /\b(?:href|xlink:href|src)\s*=\s*["']?(?!#|data:image\/(?:png|jpe?g|gif|webp);base64,)/i
+
+export function safeSvg(markup: string): string | null {
+  const s = markup.trim()
+  if (!/^<svg[\s>]/i.test(s)) return null
+  if (SVG_BANNED.test(s) || SVG_HANDLER.test(s) || SVG_REMOTE.test(s)) return null
+  return s
+}
+
 // ---- colour ----------------------------------------------------------------
 
 interface Colour { hex: string; transparency: number }
@@ -254,9 +273,14 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
   const svgPicture = async (markup: string, w: number, h: number): Promise<string> => {
     const png = opts.rasterize ? await opts.rasterize(markup, w, h) : null
     if (png) return png
+    // No rasteriser (node): the SVG travels as itself, so it must pass the
+    // same DOM-free guard type/src/embed.ts applies to an embed's view. A
+    // refused picture is the placeholder; the report already names it.
+    const safe = safeSvg(markup)
+    if (!safe) return PLACEHOLDER_PNG
     const b64 = typeof btoa === 'function'
-      ? btoa(unescape(encodeURIComponent(markup)))
-      : Buffer.from(markup, 'utf8').toString('base64')
+      ? btoa(unescape(encodeURIComponent(safe)))
+      : Buffer.from(safe, 'utf8').toString('base64')
     return `image/svg+xml;base64,${b64}`
   }
 
