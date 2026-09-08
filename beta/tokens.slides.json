@@ -1,0 +1,22 @@
+{
+  "_comment": "Beta Slides overlay on the design-system core tokens. The design system ships no accent, link, chart or table tokens on purpose (DESIGN.md section 7: accents are project-specific extensions). This file is the Slides project's extension and is merged into beta/tokens.json by scripts/beta-sync-tokens.mjs on every sync, so a re-sync never loses it. Edit accents HERE, not in beta/tokens.json.",
+  "slides": {
+    "accent1": { "value": "#4A7C59", "usage": "primary accent: the betamobility-com sage" },
+    "accent2": { "value": "#40916C", "usage": "second series colour: teal" },
+    "accent3": { "value": "#333333", "usage": "third series colour: charcoal-light" },
+    "accent4": { "value": "#666666", "usage": "fourth series colour: muted" },
+    "accent5": { "value": "#999999", "usage": "fifth series colour: subtle" },
+    "accent6": { "value": "#F0EDE8", "usage": "sixth slot: cream-dark, for tinted plates" },
+    "link":    { "value": "#4A7C59", "usage": "hyperlink colour (hlink), same as accent1" },
+    "folLink": { "value": "#3D6B4A", "usage": "followed or hovered link (folHlink), the sage hover from DESIGN.md section 7" },
+    "chartPalette": ["accent1", "accent2", "accent3", "accent4", "accent5"],
+    "_chartPalette": "series colours for new charts, as slot names so a moved accent moves its series too; resolved by scripts/build-beta-theme.mjs",
+    "table": {
+      "headerBg":    "#1A1A1A",
+      "headerColor": "#F5F3EF",
+      "zebra":       "#F0EDE8",
+      "borderColor": "rgba(26,26,26,0.15)",
+      "color":       "#1A1A1A"
+    }
+  }
+}
