@@ -42,6 +42,10 @@ import { gateShell } from './shell-gate.mjs'
 import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
+// BETA FORK: the Beta mark, written to site/favicon.svg below. A literal, not
+// an import — slides/src/beta/marks.ts is the readable copy and
+// scripts/test-beta-marks.ts asserts this one matches it byte for byte.
+const BETA_MARK_SVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#1A1A1A'/><path fill='#F5F3EF' d='M19.9 18.7C19.9 16.1 18.1 14.3 16 14.3C13.8 14.3 12.1 16.1 12.1 18.8C12.1 21.4 13.8 23.2 16 23.2C18.1 23.2 19.9 21.4 19.9 18.7M12.2 24.6L12.2 26.7L7.6 26.7L7.6 5L12.2 5L12.2 13.1C13.3 11.6 14.8 10.5 17.1 10.5C20.8 10.5 24.4 13.4 24.4 18.8C24.4 24.1 20.9 27 17.1 27C14.7 27 13.2 25.9 12.2 24.6'/></svg>"
 const args = process.argv.slice(2)
 const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`)
@@ -348,6 +352,10 @@ if (app.ownsSiteContent) {
     .replace(/__APP_VERSION__/g, version)
     .replace(/__SHELL_KB__/g, String(Math.round(statSync(shellSrc).size / 1024 / 10) * 10))
   writeFileSync(join(site, 'index.html'), landing)
+  // Beta's mark at the site root; landing.html and 404.html link it as
+  // /favicon.svg. The same svg is the shell's favicon and splash (plan U5,
+  // KTD13); scripts/test-beta-marks.ts holds the copies byte-identical.
+  writeFileSync(join(site, 'favicon.svg'), BETA_MARK_SVG)
   for (const f of ['robots.txt', 'sitemap.xml']) cpSync(join(root, `site-src/${f}`), join(site, f))
 
   cpSync(join(site, `${app.dir}/agents.md`), join(site, 'agents.md'))
