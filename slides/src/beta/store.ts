@@ -178,13 +178,22 @@ export const storeHandle = (id: string): StoreHandle =>
  * signed-out "Save as new deck" would leave THIS handle as the ⌘S target and
  * every later save (autosave included) would mint another new deck.
  */
-export const newDeckHandle = (name: string, settled: () => void = () => {}): StoreHandle =>
+export const newDeckHandle = (name: string, settled: () => void = () => {}, open: 'here' | 'tab' = 'here'): StoreHandle =>
   handleOver(name, async (html) => {
     let url: string
     try {
       url = (await postDeck(html)).url
     } finally {
       settled()
+    }
+    if (open === 'tab') {
+      // A share export (view-only, present-only, template) is a DERIVED file;
+      // the author stays on the deck they are editing and the export opens
+      // beside it. The POST is quick enough to sit inside the click's
+      // transient activation, so the popup is allowed; if a browser blocks it
+      // anyway, fall back to navigating rather than losing the object.
+      const tab = window.open(url, '_blank', 'noopener')
+      if (tab) return
     }
     setTimeout(() => location.assign(url), 0)
   })
@@ -210,8 +219,8 @@ export function installStoreHost(): boolean {
     const name = typeof opts.suggestedName === 'string' && opts.suggestedName ? opts.suggestedName : `${id}.bento.html`
     switch (opts.id) {
       case 'bento-doc': return storeHandle(id)
-      case 'bento-copy':
-      case 'bento-share': return newDeckHandle(name, () => adoptFileHandle(storeHandle(id)))
+      case 'bento-copy': return newDeckHandle(name, () => adoptFileHandle(storeHandle(id)))
+      case 'bento-share': return newDeckHandle(name, () => adoptFileHandle(storeHandle(id)), 'tab')
       case 'bento-backup': return backupHandle(name)
     }
     // Not a save we understand. `startIn` may be one of OUR handles (the

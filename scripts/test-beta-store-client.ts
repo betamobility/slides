@@ -238,13 +238,24 @@ console.log('\n§4 installStoreHost(): picker ids')
   ok(navigated === `${STORE}/d/newID12345`, `…then navigates to the returned url (${navigated})`)
   ok(calls.filter((c) => c.init.method === 'PUT').length === putsBefore, 'the original id was not written by the copy (no PUT)')
 
-  // bento-share: same route
+  // bento-share: same route, but a share export is a DERIVED file — it opens
+  // in a new tab and the author stays on the deck being edited
   navigated = ''
+  let openedShare = ''
+  fakeWindow.open = (u: string) => { openedShare = u; return {} as any }
   respond(async () => new Response(JSON.stringify({ id: 'shareID123', url: `${STORE}/d/shareID123` }), { status: 201, headers: { 'content-type': 'application/json' } }))
   const share = await fakeWindow.showSaveFilePicker({ id: 'bento-share', suggestedName: 'x-invite.bento.html' })
   await writeThrough(share, html)
   await new Promise((r) => setTimeout(r, 5))
-  ok(last().init.method === 'POST' && navigated === `${STORE}/d/shareID123`, 'bento-share → POST /api/decks, then navigates')
+  ok(last().init.method === 'POST' && openedShare === `${STORE}/d/shareID123` && navigated === '', 'bento-share → POST /api/decks, opens the export in a new tab, does not navigate')
+  // …and when the browser blocks the popup, the object is not lost: navigate instead
+  fakeWindow.open = () => null
+  respond(async () => new Response(JSON.stringify({ id: 'shareID456', url: `${STORE}/d/shareID456` }), { status: 201, headers: { 'content-type': 'application/json' } }))
+  const share2 = await fakeWindow.showSaveFilePicker({ id: 'bento-share', suggestedName: 'y-viewonly.bento.html' })
+  await writeThrough(share2, html)
+  await new Promise((r) => setTimeout(r, 5))
+  ok(navigated === `${STORE}/d/shareID456`, 'bento-share with the popup blocked falls back to navigating')
+  fakeWindow.open = (_url: string, _target?: string) => null as any
 
   // POST with a non-JSON body = the login page = signed out
   respond(async () => new Response('<html>login</html>', { status: 200, headers: { 'content-type': 'text/html' } }))
