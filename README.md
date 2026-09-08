@@ -109,5 +109,6 @@ Offered to `nyblnet/bento` from this fork. Bodies live in `docs/upstream-prs/`.
 
 - `AppConfig` lift: `publicKeyJwk` and `syncHost` as optional per-app config. Branch `upstream-pr/appconfig-lift`, open as [nyblnet/bento#423](https://github.com/nyblnet/bento/pull/423).
 - `embed` element, consumer side in slides, to the `bento/embed` shape. Branch `upstream-pr/embed-consumer`, open as [nyblnet/bento#424](https://github.com/nyblnet/bento/pull/424).
+- Layout picker clamped to the viewport (the fork's #12). Branch `upstream-pr/layout-picker-clamp`, open as [nyblnet/bento#425](https://github.com/nyblnet/bento/pull/425).
 
 Both were opened from Johan's GitHub account on 2026-09-08 at his instruction. The branches carry no agent attribution trailers (upstream's hard rule 8); whether upstream accepts them under its rule 10 is upstream's call.
