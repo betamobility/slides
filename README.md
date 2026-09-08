@@ -2,15 +2,15 @@
 
 Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**Production:** https://slides.betamobility.ai (release channel; first release v2026.9.1, 2026-09-08)
+**Production:** https://slides.betamobility.ai (release channel; first release v2026.9.1, 2026-09-08; v2026.9.2 prepared, see `CHANGELOG.md`) and the deck store at https://decks.betamobility.ai
 **Client:** Internal
-**Status:** Active, phase one
+**Status:** Active, v1.1
 
 ## Overview
 
 Beta had no presentation system: decks were made ad hoc, the design system was re-applied by hand each time, and Claude could not create or revise a deck the way it revises a repo. Bento is the only substrate where the document is plain JSON an agent edits directly, the file works from `file://` with no backend, collaboration is end-to-end encrypted with the file itself as the capability, and shipped documents keep opening by explicit platform contract. This fork adds the two things the format lacks, an editable-PPTX path and a live `embed` element, and expresses the Beta design system in Bento's own `theme`, `fonts`, `layouts` and `meta` keys rather than in a parallel layer.
 
-The plan of record is `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md`. Upstream's own README is kept verbatim at `docs/upstream-README.md`.
+The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md` (v1, the fork) and `docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md` (v1.1, the review fixes and the deck store). Upstream's own README is kept verbatim at `docs/upstream-README.md`.
 
 ## This is a fork
 
