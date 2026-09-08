@@ -39,6 +39,7 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - **The committed templates are generated output and stop being committed.** `scripts/release.mjs` already rebuilds every template from the shell it is releasing, and the published copies are correct. The stale files under `beta/templates/` were built once, before the version bump, and committed. Generated artifacts follow the `site/` rule: built in CI, never hand-edited, never committed. A gate proves a template's embedded shell is the released shell.
 - **Beta-internal hosting is in; client hosting stays out.** The store holds decks as their owner saved them, including collaboration keys, and every request must carry a Cloudflare Access assertion for a `@betamobility.io` identity. That is the same trust boundary as Beta's other internal tools. A deck for a client still travels as a read-only file or through `publish`. This reverses one line of the v1 scope because the review showed the gap is internal collaboration, not client delivery.
 - **The store is a different trust boundary from the relay, and the plan says so.** The relay stores ciphertext and never sees identity; the store holds plaintext behind identity. Neither learns anything from the other: the store never touches `doc.collab`, and the relay is unchanged.
+- **Store access is owner access, and that is accepted.** A stored deck is the owner's file, so it carries `ownerPriv`, and a colleague who opens it is a co-owner of its live session, not merely an editor. A script inside any stored deck also runs first-party on the store origin with the viewer's session. Both are accepted for v1.1 on the same basis as Beta's other internal tools: every writer is a signed-in `@betamobility.io` identity. Invite-keyed copies and per-deck origins are the upgrades if that basis ever changes.
 - **A stored deck is served byte for byte.** The store never rewrites, re-splices or instruments the HTML it holds. The splice contract, self-save and signed self-update keep working because the file is the same file. Analytics for deck opens is recorded by the worker, not injected into the page.
 - **Store ids are the store's, never `docId`.** A deck's `docId` is its identity for recovery and sync and is never used as an address. The store mints a short random id per stored deck and keeps `docId` inside the file untouched.
 - **English only.** The language picker and the Languages dialog are removed from the Beta build and the UI locale is fixed to English at boot. The catalogues stay in the tree so the weekly upstream merge does not conflict.
@@ -127,7 +128,8 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - Wrangler runs with the OAuth login and `env -u CLOUDFLARE_API_TOKEN`, as recorded in `docs/solutions/workflow-issues/agent-run-first-release-rollout-traps.md` in the claude-config repository.
 - Decks stay under a few megabytes. R2 object size is not a constraint; the worker's request body limit is 100 MB on the paid plan and the plan sets its own cap of 32 MB.
 - A deck served from `https://decks.betamobility.ai` runs on that origin, so same-origin `fetch` with the Access cookie works from inside the deck. A deck on `file://` has a null origin and cannot call the store with credentials, which is why F2 goes through a store tab and `postMessage`.
-- When the Access session has expired, Access answers a `fetch` with a redirect to the team login page, not a 401; `fetch` follows it and returns HTML from another origin. The editor therefore treats any store response that is not JSON from `storeHost` (`response.redirected`, or a non-JSON content type) as "signed out" and falls back to the file save with a sign-in prompt. The worker's own 401 covers only the case where Access is misconfigured and the assertion is missing.
+- When the Access session has expired, Access answers a `fetch` with a redirect to the team login page, not a 401. A default-mode `fetch` following that cross-origin redirect rejects with a `TypeError`, so there is no response to inspect. Store requests are therefore sent with `redirect: 'manual'`, and an `opaqueredirect` response, a rejected fetch, or a non-JSON body all mean "signed out": the store handle rejects, the kernel's existing failure path shows a sign-in prompt, and the file save is offered. The worker's own 401 covers only the case where Access is misconfigured and the assertion is missing.
+- A deck served from the store runs first-party on `decks.betamobility.ai`, so any script inside a stored deck can call the store API with the viewer's ambient Access session: list, replace or delete any deck. This is wider than the deck's own live session. It is accepted for v1.1 because every stored deck is written by a trusted `@betamobility.io` identity, the same trust Beta's other internal tools rest on, and because the alternative (a separate origin per deck) needs a wildcard Access application. The accepted risk is recorded in Key Decisions and revisited if the store ever admits a non-Beta writer.
 
 ### Outstanding Questions
 
@@ -135,6 +137,8 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 
 - Q1. Whether the store serves decks with `Content-Disposition: inline` only or also offers a download route for "Save a copy". Decide after the first browser smoke of U8.
 - Q2. Whether the "Up to date" line in About should also show the manifest's check time. Cosmetic; decide in U2.
+- Q3. Whether two store tabs saving the same id need an `If-Match` precondition, or whether relay convergence makes last-write-wins acceptable. v1.1 ships last-write-wins; revisit if a lost write is ever observed.
+- Q4. Whether the store should refuse player files (`readonly`) and templates (`template: true`), or store them so a colleague can present from a link. v1.1 stores them; the index shows the kind.
 
 ### Sources
 
@@ -160,11 +164,11 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - **KTD4. Language removal is two call-site deletions and a boot pin.** Remove `langD` from the topbar `actions.append` and from the phone-chrome `demote` list; delete `languageDropdown` and `openLanguages` (they become unreachable and the typecheck would flag them). Pin `setLocale('en')` in `slides/src/main.ts` inside the `BETA FORK IDENTITY` block before the editor builds. Catalogues, `build-i18n.mjs` and the coverage rig stay untouched.
 - **KTD5. One optional `AppConfig` field, `storeHost`.** `kernel/src/app.ts` is one of the three kernel files the fork may edit. `storeHost?: string` mirrors `syncHost`: optional, absent upstream, read lazily through `appConfig()`. `slides/src/main.ts` sets it to `https://decks.betamobility.ai`. It is offered upstream with the next `AppConfig` pull request revision.
 - **KTD6. The layout picker always opens beside its anchor, clamped, with a viewport-bound max height.** Drop the "open upward from the add button" branch. Both anchors use the beside branch: left is the anchor's right edge plus a gutter, clamped to the window; top is clamped so the picker fits; `max-height` becomes `calc(100vh - 16px)` so scrolling inside the picker covers the rest. This is the change offered upstream.
-- **KTD7. The store is a sibling worker, `server/deck-store/`.** Same shape as `server/sync-worker/`: `wrangler.toml` with a custom domain, one R2 binding `DECKS`, no Durable Object. Routes: `GET /` index page, `GET /api/decks` list, `POST /api/decks` create, `PUT /api/decks/:id` replace, `GET /d/:id` serve, `DELETE /api/decks/:id`. Objects are keyed `decks/<id>.bento.html` with custom metadata for title, owner email, `docId`, updated time and size; the list reads metadata only. Ids are 10 base62 characters from `crypto.getRandomValues`.
-- **KTD8. Access is verified in the worker, not assumed from the header.** Every request validates the `Cf-Access-Jwt-Assertion` JWT against the team's JWKS with the application's audience, exactly as `Docs/auth-setup.md` prescribes. The email claim is recorded as owner on create and as the last writer on every `PUT`. Any valid identity may read, list and `PUT`, because the store's premise is that every `@betamobility.io` identity is a trusted editor; only `DELETE` is restricted to the owner. Service-token callers (Claude from a harness) arrive on a path-scoped application and identify through `common_name`. Anonymous requests never reach the worker's handlers because Access sits in front, and the worker still refuses if the assertion is missing, so a misconfigured Access policy fails closed.
+- **KTD7. The store is a sibling worker, `server/deck-store/`.** Same shape as `server/sync-worker/`: `wrangler.toml` with a custom domain, one R2 binding `DECKS`, no Durable Object. Routes: `GET /` index page, `GET /new` handoff page, `GET /api/decks` list, `POST /api/decks` create, `PUT /api/decks/:id` replace, `GET /d/:id` serve, `DELETE /api/decks/:id`, plus `POST /api/harness/decks` and `PUT /api/harness/decks/:id` for service-token callers (same handlers, different Access application). Objects are keyed `decks/<id>.bento.html` with custom metadata for title, owner email, last writer, `docId`, updated time and size; the list reads metadata only. Every metadata field is HTML-escaped when the index renders; a title is untrusted text. Ids are 10 base62 characters from `crypto.getRandomValues`.
+- **KTD8. Access is verified in the worker, not assumed from the header.** Every request validates the `Cf-Access-Jwt-Assertion` JWT against the team's JWKS, exactly as `Docs/auth-setup.md` prescribes, against an explicit set of two audiences: the human application on the hostname and the service-token application scoped to `/api/harness/`. The worker additionally checks the email claim ends in `@betamobility.io` as defence in depth against a misconfigured policy, and fails closed on an unknown key id. The email claim is recorded as owner on create and as the last writer on every `PUT`. Any valid human identity may read, list and `PUT`, because the store's premise is that every `@betamobility.io` identity is a trusted editor; only `DELETE` is restricted to the owner. Service-token callers (Claude from a harness) identify through `common_name` and may only create and replace on the harness routes; a leaked service token cannot list or read decks. Anonymous requests never reach the worker's handlers because Access sits in front, and the worker still refuses if the assertion is missing.
 - **KTD9. Serving is a stream of the stored bytes.** `GET /d/:id` streams the R2 object with `Content-Type: text/html; charset=utf-8`, `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. No body transformation, no HTMLRewriter. A `Content-Security-Policy` ships in v1.1 as `Content-Security-Policy-Report-Only`, derived from what the shell does: inline scripts and styles, `script-src blob:` for the inflated runtime, `data:` for fonts and images, `connect-src` for the relay's WebSocket host, the manifest host and the store itself, and `frame-src https:` because the fork's `embed` element layers a sandboxed iframe over any https URL. It is enforced only after the U8 browser smoke shows no reports.
-- **KTD10. Two save paths, chosen by origin.** A new file `slides/src/beta/store.ts` exports `isStoreOrigin()`, `saveToStore(doc)` and `handoffToStore(doc)`. On the store origin, `saveToStore` is a same-origin `PUT` with the Access cookie and the editor's ⌘S calls it instead of the file write (one branch in the save path, gated on `isStoreOrigin()`). On `file://`, `handoffToStore` opens `<storeHost>/new` in a tab and, on a `ready` message from that tab, posts the serialized document; the tab uploads and replies with the link. Origin checks on both sides: the deck accepts messages only from `storeHost`; the store page accepts a document only from an opener and only once.
-- **KTD11. Share panel wiring is one action each.** "Save to Beta" is a new `action()` in `renderSharePanel`. "Invite to edit" on a store-origin deck copies the link; off the store it keeps upstream's behaviour. Both are single `if` branches in the existing builders.
+- **KTD10. On the store origin, the store is a host, not a save branch.** The kernel already has the extension point: a host announces `window.__bentoHost = { ops }` and polyfills `showSaveFilePicker`, and every in-place path (⌘S, the autosave write-back, "Save a copy", the backup beside an update, and `applyUpdateInPlace`) flows through the adopted file handle without the editor knowing who is behind it. That is how `home/ios` and `home/webext` integrate. `slides/src/beta/store.ts` does the same: when `location.origin` equals `storeHost`, at boot it installs a host with `ops: ['write', 'backup']`, adopts a store-backed handle for the current id (its `createWritable()` collects the bytes and `PUT`s `/api/decks/<id>`), and polyfills `showSaveFilePicker` so that a picker id of `bento-doc` returns the same handle, `bento-copy` and `bento-share` `POST` a new object and navigate to its link, and `bento-backup` downloads the rollback copy. Consequences that fall out for free: autosave writes to the store on its existing cadence; "Save as new deck" creates a second object and never overwrites the first; a signed update writes the new shell to the same id after downloading the old one as rollback; `noteSavedFromWeb` is skipped because the origin is the store, not the web demo. Store requests use `redirect: 'manual'`; an `opaqueredirect`, a rejected fetch or a non-JSON body means "signed out", and the handle rejects so the kernel's existing failure path shows a sign-in prompt and offers the file save. On `file://`, `handoffToStore(doc)` opens `<storeHost>/new` in a tab and, on a `ready` message from that tab, posts the serialized document. The `/new` page shows the incoming deck's title and size and uploads only when the person clicks Save; nothing is stored on message receipt. Origin checks on both sides: the deck accepts messages only from `storeHost` and only from the tab it opened; the store page accepts one document, from its opener, and discards later ones.
+- **KTD11. Share panel wiring is one action each.** "Save to Beta" is a new `action()` in `renderSharePanel`, shown off the store origin. "Invite to edit" on a store-origin deck copies the link; off the store it keeps upstream's behaviour. Both are single `if` branches in the existing builders. No other editor code changes for the store.
 - **KTD12. Analytics is server-side.** The worker posts `deck_open` and `deck_save` events to Plausible's events API with `surface: deck-store` and `outcome`, using the request's user agent and no identifying fields. The index page loads the Plausible script. Nothing is injected into a deck.
 - **KTD13. Favicon and marks come from one Beta asset file.** `slides/src/beta/marks.ts` carries the favicon as a data URI SVG (a charcoal rounded square with the cream "b" of Beta's wordmark, drawn from `beta/` assets, not fetched) and the splash mark. `slides/index.html` references the favicon data URI directly, marked `BETA FORK`, and the splash markup uses the same mark. The release site's `site-src/*.html` heads get the same `<link rel="icon">` and the generated `favicon.svg` at the site root.
 
@@ -203,7 +207,8 @@ sequenceDiagram
   W-->>T: page
   T-->>D: postMessage ready (targetOrigin: "*", source check)
   D->>T: postMessage {type: "bento-store-save", html} (targetOrigin: storeHost)
-  T->>W: POST /api/decks (cookie)
+  T->>T: show title and size, wait for the person to click Save
+  T->>W: POST /api/decks (cookie), on click only
   W-->>T: {id, url}
   T-->>D: postMessage {type: "bento-store-saved", url}
   D->>D: toast with link, copy to clipboard
@@ -220,14 +225,14 @@ flowchart TD
   J -- yes --> R{route}
   R -- "GET /" --> I[index page: list for this email]
   R -- "GET /d/:id" --> S[stream object, private no-store]
-  R -- "POST /api/decks" --> C[validate: size ≤ 32 MB, has #bento-doc block, format bento/slides] --> M[mint id, put with metadata] --> O[201 {id,url}]
+  R -- "POST /api/decks" --> C[validate: size ≤ 32 MB, one #bento-doc block, bento/slides doc or bento/enc envelope] --> M[mint id, put with metadata] --> O[201 {id,url}]
   R -- "PUT /api/decks/:id" --> C2[same validation, object exists] --> M2[put, keep created, set updated] --> O2[200]
   R -- "DELETE /api/decks/:id" --> Dl[delete] --> O3[204]
   S --> Ev[deck_open event]
   O --> Ev2[deck_save event]
 ```
 
-Validation on write is shape only: the body must contain one `#bento-doc` script block whose JSON parses and declares `format: bento/slides`. The worker never reads further into the document.
+Validation on write is shape only: the body must contain one `#bento-doc` script block whose JSON parses and is either a `bento/slides` document or a `bento/enc` envelope (`format: bento/enc`, `v: 1`, with `data`, `salt` and `iv`), which is how a password-protected deck stores its ciphertext. The worker never reads further into the document.
 
 ### Output Structure
 
@@ -252,7 +257,7 @@ scripts/
 
 ### System-Wide Impact
 
-- **Auth boundary.** `decks.betamobility.ai` becomes the first Beta-internal surface in this repository behind Access. The relay stays account-free. A deck served from the store carries the owner's collaboration keys, so store access equals editing rights on that deck's live session; the Product Contract states this and the Access policy is the control.
+- **Auth boundary.** `decks.betamobility.ai` becomes the first Beta-internal surface in this repository behind Access. The relay stays account-free. A deck served from the store carries the owner's collaboration keys, so store access equals owner rights on that deck's live session, and a script inside any stored deck reaches the whole store API with the viewer's session. The Product Contract records both as accepted risks and the Access policy is the control.
 - **Splice contract.** Unaffected. The store never transforms a served deck, and the shell's own save path is what writes to the store.
 - **Upstream merge surface.** `editor.ts` gains three small edits (About fragments, language removal, layout picker branch, share actions), `main.ts` two lines, `app.ts` one field, `index.html` one attribute. All are marked `BETA FORK` like the existing identity block.
 - **Analytics.** A new surface under the `betamobility.ai` Plausible site with two events. Mission Control's fleet manifest entry is deferred work.
@@ -449,10 +454,14 @@ scripts/
 - Happy path: `GET /api/decks` lists every deck with owner and last writer, newest first.
 - Happy path: `PUT /api/decks/:id` from a different valid identity than the owner replaces the object, keeps `created` and `owner`, sets `updated` and `writer`.
 - Error path: no assertion, expired assertion, wrong audience, wrong issuer: 401 with no body, on every route including `GET /d/:id`.
-- Error path: body over 32 MB, body without a `#bento-doc` block, block whose JSON does not parse, `format` not `bento/slides`: 400 with a one-word reason.
+- Error path: body over 32 MB, body without a `#bento-doc` block, block whose JSON does not parse, block that is neither a `bento/slides` document nor a `bento/enc` envelope: 400 with a one-word reason.
 - Error path: unknown id: 404 with no body; `DELETE` on an id owned by another email: 403.
-- Edge case: a deck whose `#bento-doc` holds a `bento/enc` envelope stores and serves fine (the worker only checks the block exists and parses).
-- Edge case: a service-token assertion with empty `sub` is identified by `common_name`.
+- Error path: an assertion whose email is not `@betamobility.io`, or whose key id is unknown after a JWKS refresh: 401.
+- Error path: a service-token assertion on `/api/decks` (list, serve, delete): 403; the same token on `/api/harness/decks`: 201.
+- Edge case: a deck whose `#bento-doc` holds a `bento/enc` envelope stores and serves byte-identical.
+- Edge case: a service-token assertion with empty `sub` is identified by `common_name` and recorded as writer.
+- Edge case: a deck titled with a script tag renders inert on the index page.
+- Edge case: `GET /new` returns the handoff page; the page's script stores nothing until the Save button is clicked.
 - Integration: each successful serve posts one `deck_open` event with `surface` and `outcome` and nothing else; a Plausible failure does not fail the response. Covers AE7.
 
 **Verification:** `test-beta-store.ts` passes under Miniflare; `wrangler deploy` succeeds with `env -u CLOUDFLARE_API_TOKEN`; an authenticated browser at `https://decks.betamobility.ai/` shows the index and an anonymous curl gets the Access login.
@@ -473,19 +482,24 @@ scripts/
 - `scripts/test-beta-appconfig.ts` (assert `storeHost` is set and shaped)
 - `scripts/test-beta-store-client.ts` (new: message protocol and origin checks with a fake tab)
 
-**Approach:** KTD5, KTD10, KTD11. The save branch is one conditional in the existing ⌘S path: on the store origin, serialize through the encryption-aware `serializeAuto` and `PUT`; otherwise the upstream file path. `handoffToStore` serializes the same way, so an encrypted deck is stored encrypted. Toasts reuse the editor's existing toast helper. The "Saved" tag the autosave shows already exists and is reused for store saves.
+**Approach:** KTD5, KTD10, KTD11. On the store origin the store is a host: `store.ts` installs `__bentoHost`, adopts a store-backed file handle for the current id, and polyfills `showSaveFilePicker` by picker id, so ⌘S, autosave, "Save a copy", "Save as new deck", the update backup and `applyUpdateInPlace` all reach the store through the kernel's existing paths with no editor changes. The handle serializes whatever the kernel hands it, so an encrypted deck is stored encrypted. Off the store, `handoffToStore` serializes through `serializeAuto` and posts to the `/new` tab. Toasts reuse the editor's existing toast helper.
 
-**Execution note:** implement the message protocol test-first with a fake `window` pair, then wire the UI; the browser smoke is the proof for the real handoff.
+**Execution note:** implement the store handle and the message protocol test-first with a fake `window` pair and a fake `fetch`, then wire the two Share-panel actions; the browser smoke is the proof for the real handoff and for autosave and update write-back.
 
-**Patterns to follow:** `writeUpdatedFileAs` call sites in `editor.ts`; `serializeAuto` in `slides/src/save.ts`; the `syncHost` consumption in `kernel/src/sync/online.ts` for how an `AppConfig` field is read lazily.
+**Patterns to follow:** `hostCan`, `pickerIdFor`, `adoptFileHandle` and `writeUpdatedFile` in `kernel/src/save.ts`; the host contract `home/webext` implements; `serializeAuto` in `slides/src/save.ts`; the `syncHost` consumption in `kernel/src/sync/online.ts` for how an `AppConfig` field is read lazily.
 
 **Test scenarios:**
-- Happy path: on the store origin, ⌘S issues one `PUT` to `/api/decks/<id>` with the serialized document and shows "Saved". Covers AE5.
-- Happy path: on `file://`, Save to Beta opens `storeHost/new`, waits for `ready` from that window, posts the document to `storeHost` only, and shows the returned link. Covers AE6.
+- Happy path: on the store origin, ⌘S writes through the adopted handle and issues one `PUT` to `/api/decks/<id>` with the serialized document and shows "Saved". Covers AE5.
+- Happy path: on the store origin, an edit with no ⌘S reaches the store object through the autosave write-back within its existing debounce.
+- Happy path: on the store origin, "Save as new deck" `POST`s a second object with the new identity, navigates to its link, and leaves the original object byte-identical.
+- Happy path: on the store origin, a signed update downloads the rollback copy through the `bento-backup` picker id, `PUT`s the new shell to the same id, and a reload reports up to date.
+- Happy path: on `file://`, Save to Beta opens `storeHost/new`, waits for `ready` from that window, posts the document to `storeHost` only, and after the person clicks Save on that page shows the returned link. Covers AE6.
 - Error path: a `ready` message from a different origin or a different window is ignored; a document message arriving at the store page from a non-opener is ignored; a second document message is ignored.
-- Error path: the Access session has expired, so the `PUT` follows a redirect and returns login HTML: the editor detects the non-JSON response, falls back to the file save and tells the author to sign in again. A bare 401 from the worker is handled the same way.
+- Error path: the Access session has expired: the `PUT` sent with `redirect: 'manual'` yields an `opaqueredirect`, the handle rejects, the kernel's failure path shows a sign-in prompt and offers the file save. A rejected fetch and a bare 401 are handled the same way.
 - Edge case: an encrypted deck round-trips through the store still encrypted; the store never sees plaintext for it.
 - Edge case: Invite to edit on a store-origin deck copies the link and downloads nothing; off the store it behaves as before.
+- Edge case: `noteSavedFromWeb` does not fire on the store origin, so no "this page always starts a new deck" notice appears.
+- Integration: Save to Beta with the Access cookie cleared: the `/new` tab signs in first, `ready` still reaches the deck and the document is stored. If the login hop severs the opener, the paste-box fallback is implemented before this unit closes.
 - Integration: a colleague opening the link in a second browser joins the live session and both replicas converge, exactly as two disk copies do.
 
 **Verification:** rigs pass; browser smoke covers AE5 and AE6 with self-taken screenshots; the export-secrets rig still passes because no export path changed.
@@ -531,7 +545,7 @@ Node 24, from `slides/` unless stated. Every gate in the v1 plan's contract stil
 | Export safety | `node ../scripts/test-export-secrets.ts` | no export path carries `collab` | U8 |
 | CI registration | `node ../scripts/test-ci-registered.ts` | every new rig has a CI step | U1, U7, U8 |
 | Layouts and theme | `node ../scripts/test-beta-layouts.ts`, `test-beta-theme.ts` | fork did not regress them | U1, U5 |
-| Browser smoke | open the built shell from `file://` and from `https://decks.betamobility.ai/d/<id>`; check the tab icon, About, no globe, picker at 600 px height, Save to Beta, ⌘S on the store, Invite to edit copies a link; console shows no CSP violations | the thing works where it will be used | U2 to U8 |
+| Browser smoke | open the built shell from `file://` and from `https://decks.betamobility.ai/d/<id>`; check the tab icon, About, no globe, picker at 600 px height, Save to Beta with and without a live Access session, ⌘S and autosave on the store, Save as new deck, an in-place update, Invite to edit copies a link; console shows no CSP reports; `curl` the served deck over the live edge and compare bytes to the upload | the thing works where it will be used, and the edge does not rewrite it | U2 to U8 |
 | Release site | fetch manifest, shell, `agents.md` and one template from `slides.betamobility.ai`; verify the signature; open the template and confirm "up to date" | shipped files update and templates are current | U9 |
 
 ---
