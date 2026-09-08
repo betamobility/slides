@@ -106,6 +106,12 @@ const flag = (name, fallback) => {
 }
 const generator = flag('generator', 'bento-slides')
 const titleFallback = flag('title', 'bento/slides')
+// BETA FORK: two more per-app strings. `--fail-name` is what the old-browser
+// message calls the file (upstream hard-codes the dash wording for every app);
+// `--agents-url` is the authoring guide the tooling comment points agents at.
+// Defaults keep upstream's bytes; Beta's build:single passes its own.
+const failName = flag('fail-name', 'bento/dash spreadsheet')
+const agentsUrl = flag('agents-url', 'https://bento.page/agents.md')
 
 const html = readFileSync(path, 'utf8')
 if (html.includes('id="bento-rt"')) {
@@ -189,7 +195,7 @@ const SLIDES_TOOLING = `<!--
   ════════════════════════════════════════════════════════════════════════
   AI AGENTS / TOOLING — READ THIS BEFORE EDITING THIS DECK
   ════════════════════════════════════════════════════════════════════════
-  Full authoring guide (schema + copy-paste snippets): https://bento.page/agents.md
+  Full authoring guide (schema + copy-paste snippets): ${agentsUrl}
 
   THE MECHANICS
   · The document is the ONE script block of type "application/bento+json",
@@ -282,7 +288,7 @@ const loader = `
     // never said what kind of file this is, and never mentioned that the data
     // is plain readable JSON in this same file, which is the one route out that
     // works with no capable browser at all.
-    fail('<b>This is a bento/dash spreadsheet.</b><br>Opening it needs a browser released in 2023 or later \\u2014 Safari 16.4+, Firefox 113+, or a current Chrome or Edge.<br><br>Nothing is lost: your data is stored as plain readable JSON inside this same file. Open it in a newer browser, or open it in a text editor and look for the block marked "bento-doc".')
+    fail('<b>This is a ${failName}.</b><br>Opening it needs a browser released in 2023 or later \\u2014 Safari 16.4+, Firefox 113+, or a current Chrome or Edge.<br><br>Nothing is lost: your data is stored as plain readable JSON inside this same file. Open it in a newer browser, or open it in a text editor and look for the block marked "bento-doc".')
     return
   }
   var inflate = async function (id) {
