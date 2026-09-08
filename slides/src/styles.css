@@ -708,6 +708,9 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   border-radius: 8px;
 }
 .ed-about-logo:hover { opacity: 0.82; }
+/* BETA FORK: the design-system wordmark in the About header (beta/about.ts) */
+.ed-about-mark { display: flex; align-items: center; }
+.ed-about-mark svg { height: 22px; width: auto; display: block; }
 /* engagement line back to the site */
 .ed-about-promo {
   font-size: 12.5px;

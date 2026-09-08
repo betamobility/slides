@@ -789,4 +789,10 @@ export const it: Catalog = {
   "The web page the live frame loads while online (http or https)": "La pagina web che il riquadro live carica quando sei online (http o https)",
   "Load the page in a sandboxed frame while online. Offline, or with offline mode on, the captured view shows instead.": "Carica la pagina in un riquadro isolato quando sei online. Offline, o con la modalità offline attiva, viene mostrata la vista catturata.",
   "The live frame loads only while online. Offline mode and a missing network show the captured view instead.": "Il riquadro live carica solo online. La modalità offline e l’assenza di rete mostrano la vista catturata.",
+  // BETA FORK (U2): the About dialog's Beta fragment (slides/src/beta/about.ts)
+  "Visit slides.betamobility.ai (opens in a new tab)": "Visita slides.betamobility.ai (si apre in una nuova scheda)",
+  "Templates and the agent guide live at {home}; the source and changelog are on {gh}.": "I modelli e la guida per agenti sono su {home}; il codice sorgente e il registro delle modifiche sono su {gh}.",
+  "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Include reveal.js, Moveable, Selecto (MIT) · caratteri Inter, Playfair Display e DM Mono (OFL-1.1) — le note complete viaggiano nel sorgente di questo file.",
+  "Up to date, {v}": "Aggiornato, {v}",
+  "The update check did not run ({m}). Check manually below.": "Il controllo aggiornamenti non è stato eseguito ({m}). Controlla manualmente qui sotto.",
 }
