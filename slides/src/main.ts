@@ -16,7 +16,7 @@ import {
 import { maybeShowReturnGate } from './editor/returngate'
 import { buildSlidePreview } from './preview'
 import { APP_VERSION, checkForUpdates, buildUpdatedFile, applyUpdate } from './update'
-import { i18nApi, t, applyDirection } from './i18n'
+import { i18nApi, t, applyDirection, setLocale } from './i18n' // BETA FORK: setLocale for the English pin
 import { parseDoc, type BentoDoc, type TextElement } from './model'
 import { validateDoc, type ValidateOpts } from './validate'
 import { resolveThemeRefs } from './palette'
@@ -48,6 +48,9 @@ configureApp({
   manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
   syncHost: 'wss://sync.betamobility.ai',
 })
+// BETA FORK (v1.1 U3, KTD4): English-only build — pin the locale before anything renders, so a
+// German-locale browser and a stale 'bento-lang' localStorage value both render English.
+setLocale('en')
 
 // Every save writes a static rendering of page one into the shell, so file
 // managers thumbnail the deck instead of the boot splash (src/preview.ts).
