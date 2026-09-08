@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:single": "tsc -b && SINGLEFILE=1 vite build --outDir dist-single && mv dist-single/index.html dist-single/Bento_Slides.bento.html && node ../scripts/postbuild-compress.mjs dist-single/Bento_Slides.bento.html",
+    "build:single": "tsc -b && SINGLEFILE=1 vite build --outDir dist-single && mv dist-single/index.html dist-single/Bento_Slides.bento.html && node ../scripts/postbuild-compress.mjs dist-single/Bento_Slides.bento.html --title beta/slides --fail-name 'beta/slides presentation' --agents-url https://slides.betamobility.ai/agents.md",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -73,6 +73,17 @@ console.log('\nproduct name (v1.1)')
   ok(slidesDir !== null, 'rig can locate slides/ from the repo root or from slides/')
   const main = slidesDir ? readFileSync(join(slidesDir, 'src/main.ts'), 'utf8') : ''
   ok(/appName:\s*'beta\/slides'/.test(main), "slides/src/main.ts configures appName 'beta/slides' (window title, file picker, About)")
+  const pkg = slidesDir ? readFileSync(join(slidesDir, 'package.json'), 'utf8') : ''
+  ok(/--title beta\/slides/.test(pkg) && /--fail-name 'beta\/slides presentation'/.test(pkg) && /--agents-url https:\/\/slides\.betamobility\.ai\/agents\.md/.test(pkg),
+    "build:single passes --title, --fail-name and --agents-url to postbuild-compress.mjs (loader and tooling note name beta/slides)")
+  const shellPath = slidesDir ? join(slidesDir, 'dist-single/Bento_Slides.bento.html') : ''
+  if (shellPath && existsSync(shellPath)) {
+    const shell = readFileSync(shellPath, 'utf8')
+    ok(shell.includes('This is a beta/slides presentation'), 'built shell: the old-browser message names a beta/slides presentation')
+    ok(shell.includes('https://slides.betamobility.ai/agents.md') && !shell.includes('bento.page/agents.md'), 'built shell: the tooling note points agents at slides.betamobility.ai/agents.md')
+  } else {
+    console.log('  skip  built shell not present (run npm run build:single first) — loader strings not checked')
+  }
   const html = slidesDir ? readFileSync(join(slidesDir, 'index.html'), 'utf8') : ''
   ok(/<title>beta\/slides<\/title>/.test(html), 'slides/index.html <title> is beta/slides')
 }
