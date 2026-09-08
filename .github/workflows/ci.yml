@@ -231,6 +231,13 @@ jobs:
         # before the mapper; the file it writes is unzipped and its XML read.
         run: node scripts/test-beta-pptx.ts
 
+      - name: Beta templates build and layouts rig
+        # Templates are rebuilt from the shell this job just built, then the
+        # rig checks fit, roles, validate() and the by-role re-layout (AE5).
+        run: |
+          node scripts/build-beta-templates.mjs
+          node scripts/test-beta-layouts.ts
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.
