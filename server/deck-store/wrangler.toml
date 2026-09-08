@@ -1,0 +1,35 @@
+# Beta deck store — Cloudflare Worker + one R2 bucket, behind Cloudflare Access.
+# Deploy:  env -u CLOUDFLARE_API_TOKEN npx wrangler deploy   (OAuth login; see README.md)
+# Dev:     npx wrangler dev --port 8788                       (local R2, no account needed)
+#
+# BETA FORK: this worker exists only in the fork. It stores bento/slides files
+# at decks.betamobility.ai and serves them unchanged; every request must carry
+# a Cloudflare Access assertion the worker verifies itself (src/access.js).
+# Plan: docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md, U7.
+name = "beta-decks"
+main = "src/worker.js"
+compatibility_date = "2026-07-01"
+
+routes = [
+  { pattern = "decks.betamobility.ai", custom_domain = true }
+]
+
+# The decks. R2 must be enabled on the account (paid subscription) before
+# this binding can deploy; create the bucket once with
+#   env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket create beta-decks
+[[r2_buckets]]
+binding = "DECKS"
+bucket_name = "beta-decks"
+
+# Access configuration, read by src/access.js. The maintainer fills both after
+# creating the two Access applications (README.md, "Access"):
+#   ACCESS_TEAM_DOMAIN  the team domain, e.g. betamobility.cloudflareaccess.com
+#   ACCESS_AUDS         comma-separated Application Audience (AUD) tags, one
+#                       per application: the human app on the hostname and the
+#                       service-token app scoped to /api/harness/
+# Both are plain vars, not secrets: the AUD tag is public knowledge to anyone
+# who can read a token, and the JWKS is public. The worker fails closed while
+# either is empty or still a placeholder.
+[vars]
+ACCESS_TEAM_DOMAIN = "REPLACE-ME.cloudflareaccess.com"
+ACCESS_AUDS = "REPLACE-ME-HUMAN-AUD,REPLACE-ME-SERVICE-AUD"

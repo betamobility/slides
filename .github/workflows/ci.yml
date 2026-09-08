@@ -265,6 +265,15 @@ jobs:
             --outfile="$RUNNER_TEMP/test-beta-embed.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-embed.mjs"
 
+      - name: Beta deck store rig
+        # U7: server/deck-store under Miniflare (a devDependency of slides/,
+        # so after `npm ci`): every route is 401 without a verified Access
+        # assertion, writes are shape-validated, a served deck is the uploaded
+        # bytes with the KTD9 headers, and Plausible sees surface + outcome
+        # only. Verifies Access for real against a stub JWKS and keys minted
+        # at run time.
+        run: node scripts/test-beta-store.ts
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.

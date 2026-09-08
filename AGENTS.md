@@ -153,7 +153,9 @@ verbatim; this section is what the fork adds. The plan of record is
    fork's own history.
 7. **Releases are Beta's, from Beta's key.** `appId` is `beta-slides`; the
    manifest is served from `slides.betamobility.ai`; the relay is
-   `sync.betamobility.ai`. Never point either at bento.page.
+   `sync.betamobility.ai`; the deck store is `decks.betamobility.ai`
+   (`server/deck-store/`, a Beta zone upstream never sees). Never point any
+   of them at bento.page.
 
 ## CLAUDE.md and AGENTS.md
 
