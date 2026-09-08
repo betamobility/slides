@@ -795,4 +795,13 @@ export const zhHant: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "包含 reveal.js、Moveable、Selecto（MIT）· 字型 Inter、Playfair Display 與 DM Mono（OFL-1.1）— 完整聲明隨本檔案原始碼一併提供。",
   "Up to date, {v}": "已是最新，{v}",
   "The update check did not run ({m}). Check manually below.": "更新檢查未執行（{m}）。請在下方手動檢查。",
+  "Save to Beta…": "儲存到 Beta…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "將此簡報儲存到 Beta 登入保護的 decks.betamobility.ai，並產生一個同事可直接開啟的連結，無需傳檔案。",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "連結已複製 — Beta 的任何人開啟它都可與你一起即時編輯此簡報",
+  "Saved to Beta — link copied: {url}": "已儲存到 Beta — 連結已複製：{url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "已登出 Beta — 請在 {host} 重新登入，然後再次儲存",
+  "The store refused the deck ({status}{why})": "儲存庫拒絕了此簡報（{status}{why}）",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "無法開啟儲存庫分頁 — 請允許此檔案的彈出視窗，然後重試。",
+  "The store tab gave no answer — timed out": "儲存庫分頁沒有回應 — 已逾時",
+  "The store tab was closed before the deck was saved": "簡報儲存前儲存庫分頁已被關閉",
 }

@@ -22,6 +22,7 @@ import { validateDoc, type ValidateOpts } from './validate'
 import { resolveThemeRefs } from './palette'
 import { measureText, measureElement, type TextMeasureSpec } from './measure'
 import { betaStarterDoc } from './betastarter'
+import { isStoreOrigin, installStoreHost } from './beta/store' // BETA FORK (v1.1 U8)
 import { injectFonts } from './fonts'
 import { Store } from './store'
 import { Editor } from './editor/editor'
@@ -47,6 +48,10 @@ configureApp({
   publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'o1ZkClAbOuGbFc-xHuTCgeUH5tS5ciHrKiQ6UPxvHN4', y: '00pSDB4EwBZiCctbTzWNC_anUHjpS_RTkUVsGiMgibg' },
   manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
   syncHost: 'wss://sync.betamobility.ai',
+  // v1.1 U8: the deck store. A deck served from this origin saves back to it
+  // in place (src/beta/store.ts installs a host at boot); a deck on file://
+  // hands its document to <storeHost>/new through the Share panel.
+  storeHost: 'https://decks.betamobility.ai',
 })
 // BETA FORK (v1.1 U3, KTD4): English-only build — pin the locale before anything renders, so a
 // German-locale browser and a stale 'bento-lang' localStorage value both render English.
@@ -190,6 +195,11 @@ document.title = `${doc.title} — ${appConfig().appName}`
 // Embedded fonts: register @font-face rules from the asset table so text
 // elements can use bundled families in the editor, presenter and thumbnails.
 if (doc.fonts?.length) injectFonts(doc)
+
+// BETA FORK (v1.1 U8): served from the deck store, the store IS the file.
+// Installed BEFORE the editor builds: its constructor reads hasFileHandle()
+// and canWriteInPlace() for the file chip and the "cannot rewrite" notice.
+if (isStoreOrigin()) installStoreHost()
 
 const store = new Store(doc)
 const editor = new Editor(document.getElementById('app')!, store)

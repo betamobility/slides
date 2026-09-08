@@ -795,4 +795,13 @@ export const ja: Catalog = {
   "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "reveal.js、Moveable、Selecto（MIT）· 書体 Inter、Playfair Display、DM Mono（OFL-1.1）を含みます — 完全な表記はこのファイルのソースに含まれています。",
   "Up to date, {v}": "最新です、{v}",
   "The update check did not run ({m}). Check manually below.": "更新の確認は実行されませんでした（{m}）。下で手動で確認してください。",
+  "Save to Beta…": "Betaに保存…",
+  "Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.": "このデッキをBetaのログインの背後にある decks.betamobility.ai に保存し、ファイルの代わりに同僚が開けるリンクを発行します。",
+  "Link copied — anyone at Beta who opens it edits this deck live with you": "リンクをコピーしました — Betaの誰かがこれを開くと、あなたと一緒にこのデッキをライブで編集します",
+  "Saved to Beta — link copied: {url}": "Betaに保存しました — リンクをコピー済み: {url}",
+  "Signed out of Beta — sign in again at {host}, then save again": "Betaからサインアウトしています — {host} で再度サインインしてから、もう一度保存してください",
+  "The store refused the deck ({status}{why})": "ストアがデッキを拒否しました ({status}{why})",
+  "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "ストアのタブを開けませんでした — このファイルのポップアップを許可してから、もう一度お試しください。",
+  "The store tab gave no answer — timed out": "ストアのタブから応答がありません — タイムアウトしました",
+  "The store tab was closed before the deck was saved": "デッキが保存される前にストアのタブが閉じられました",
 }

@@ -95,6 +95,22 @@ console.log('\nproduct name (v1.1)')
   }
   const html = slidesDir ? readFileSync(join(slidesDir, 'index.html'), 'utf8') : ''
   ok(/<title>beta\/slides<\/title>/.test(html), 'slides/index.html <title> is beta/slides')
+
+  console.log('\nstoreHost (v1.1 U8, KTD5)')
+  const { appConfig } = await import('../kernel/src/app.ts')
+  configureApp({ appId: 'test-app', appName: 'test', manifestUrl: 'https://example.test/manifest.json' })
+  ok(appConfig().storeHost === undefined, 'configured without storeHost: undefined (upstream apps have no store)')
+  configureApp({ appId: 'test-app', appName: 'test', manifestUrl: 'https://example.test/manifest.json', storeHost: 'https://decks.example.test' })
+  ok(appConfig().storeHost === 'https://decks.example.test', 'a configured storeHost is read back through appConfig()')
+  const m = /storeHost:\s*'([^']*)'/.exec(main)
+  ok(!!m, "slides/src/main.ts configures storeHost")
+  ok(!!m && /^https:\/\/[a-z0-9.-]+$/.test(m[1]), `…shaped as an https origin, no path, no trailing slash (${m?.[1]})`)
+  ok(!!m && m[1] === 'https://decks.betamobility.ai', '…and it is https://decks.betamobility.ai')
+  const kernelApp = slidesDir ? readFileSync(join(slidesDir, '../kernel/src/app.ts'), 'utf8') : ''
+  const fields = kernelApp.match(/^\s*storeHost\?: string$/gm) ?? []
+  ok(fields.length === 1, `kernel/src/app.ts carries exactly one optional storeHost?: string field (${fields.length})`)
+  ok(!/storeHost/.test(kernelApp.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|storeHost\?: string/g, '')),
+    'kernel/src/app.ts does nothing else with storeHost (the kernel only carries the value)')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
