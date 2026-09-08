@@ -1,14 +1,14 @@
 {
-  "name": "bento",
-  "owner": { "name": "The Bento authors", "url": "https://bento.page" },
+  "name": "beta-slides",
+  "owner": { "name": "Beta Mobility", "url": "https://betamobility.ai" },
   "plugins": [
     {
-      "name": "bento-slides",
-      "source": "./plugins/bento-slides",
-      "description": "Author Bento presentations — self-contained .bento.html decks with morph transitions, live charts and speaker notes. Starts from nothing: downloads the latest Bento app automatically.",
-      "homepage": "https://bento.page",
+      "name": "beta-slides",
+      "source": "./plugins/beta-slides",
+      "description": "Author Beta Mobility presentations: self-contained .bento.html decks from the Beta build of bento/slides, branded from the design system, with data refreshed at edit time and editable-PowerPoint export. Installs instead of upstream's bento-slides.",
+      "homepage": "https://slides.betamobility.ai",
       "license": "MIT",
-      "keywords": ["slides", "presentation", "deck", "bento", "powerpoint"]
+      "keywords": ["slides", "presentation", "deck", "bento", "powerpoint", "beta"]
     }
   ]
 }

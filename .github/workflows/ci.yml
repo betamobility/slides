@@ -238,6 +238,11 @@ jobs:
           node scripts/build-beta-templates.mjs
           node scripts/test-beta-layouts.ts
 
+      - name: Beta plugin and skill rig
+        # Static claims of plugins/beta-slides: published URLs, template names,
+        # manifests, inherited rules, and the as-of stamp shape (AE3).
+        run: node scripts/test-beta-skill.mjs
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.

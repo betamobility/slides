@@ -358,6 +358,11 @@ if (app.ownsSiteContent) {
 
   cpSync(join(root, 'LICENSE'), join(site, 'LICENSE'))
   cpSync(join(root, 'site-src/404.html'), join(site, '404.html'))
+
+  // Beta starter decks (plan U4), at the URLs the beta-slides skill names.
+  // They embed the shell this release built (build-beta-templates.mjs reads
+  // slides/dist-single), so they and the release always share a runtime.
+  execFileSync('node', [join(root, 'scripts/build-beta-templates.mjs'), '--shell', shellSrc, '--out', join(site, 'templates')], { stdio: 'inherit' })
 } else {
   console.log(`site content: owned by slides — left as published (${app.appId} release)`)
 }
