@@ -166,11 +166,11 @@ The eighth is the reason sharing "just pops a download". Upstream's model is tha
 - **KTD6. The layout picker always opens beside its anchor, clamped, with a viewport-bound max height.** Drop the "open upward from the add button" branch. Both anchors use the beside branch: left is the anchor's right edge plus a gutter, clamped to the window; top is clamped so the picker fits; `max-height` becomes `calc(100vh - 16px)` so scrolling inside the picker covers the rest. This is the change offered upstream.
 - **KTD7. The store is a sibling worker, `server/deck-store/`.** Same shape as `server/sync-worker/`: `wrangler.toml` with a custom domain, one R2 binding `DECKS`, no Durable Object. Routes: `GET /` index page, `GET /new` handoff page, `GET /api/decks` list, `POST /api/decks` create, `PUT /api/decks/:id` replace, `GET /d/:id` serve, `DELETE /api/decks/:id`, plus `POST /api/harness/decks` and `PUT /api/harness/decks/:id` for service-token callers (same handlers, different Access application). Objects are keyed `decks/<id>.bento.html` with custom metadata for title, owner email, last writer, `docId`, updated time and size; the list reads metadata only. Every metadata field is HTML-escaped when the index renders; a title is untrusted text. Ids are 10 base62 characters from `crypto.getRandomValues`.
 - **KTD8. Access is verified in the worker, not assumed from the header.** Every request validates the `Cf-Access-Jwt-Assertion` JWT against the team's JWKS, exactly as `Docs/auth-setup.md` prescribes, against an explicit set of two audiences: the human application on the hostname and the service-token application scoped to `/api/harness/`. The worker additionally checks the email claim ends in `@betamobility.io` as defence in depth against a misconfigured policy, and fails closed on an unknown key id. The email claim is recorded as owner on create and as the last writer on every `PUT`. Any valid human identity may read, list and `PUT`, because the store's premise is that every `@betamobility.io` identity is a trusted editor; only `DELETE` is restricted to the owner. Service-token callers (Claude from a harness) identify through `common_name` and may only create and replace on the harness routes; a leaked service token cannot list or read decks. Anonymous requests never reach the worker's handlers because Access sits in front, and the worker still refuses if the assertion is missing.
-- **KTD9. Serving is a stream of the stored bytes.** `GET /d/:id` streams the R2 object with `Content-Type: text/html; charset=utf-8`, `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. No body transformation, no HTMLRewriter. A `Content-Security-Policy` ships in v1.1 as `Content-Security-Policy-Report-Only`, derived from what the shell does: inline scripts and styles, `script-src blob:` for the inflated runtime, `data:` for fonts and images, `connect-src` for the relay's WebSocket host, the manifest host and the store itself, and `frame-src https:` because the fork's `embed` element layers a sandboxed iframe over any https URL. It is enforced only after the U8 browser smoke shows no reports.
+- **KTD9. Serving is a stream of the stored bytes.** `GET /d/:id` streams the R2 object with `Content-Type: text/html; charset=utf-8`, `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. No body transformation, no HTMLRewriter. A `Content-Security-Policy` ships in v1.1 as `Content-Security-Policy-Report-Only`, derived from what the shell does: inline scripts and styles, `script-src blob:` for the inflated runtime, `data:` for fonts and images, `img-src` and `media-src` `https: data: blob:` for referenced media, `connect-src` for the relay's WebSocket host, the manifest host and the store itself, and `frame-src https:` because the fork's `embed` element layers a sandboxed iframe over any https URL. Reports go to the browser console (no `report-to` endpoint in v1.1). It is enforced only after the U8 browser smoke shows no reports.
 - **KTD10. On the store origin, the store is a host, not a save branch.** The kernel already has the extension point: a host announces `window.__bentoHost = { ops }` and polyfills `showSaveFilePicker`, and every in-place path (⌘S, the autosave write-back, "Save a copy", the backup beside an update, and `applyUpdateInPlace`) flows through the adopted file handle without the editor knowing who is behind it. That is how `home/ios` and `home/webext` integrate. `slides/src/beta/store.ts` does the same: when `location.origin` equals `storeHost`, at boot it installs a host with `ops: ['write', 'backup']`, adopts a store-backed handle for the current id (its `createWritable()` collects the bytes and `PUT`s `/api/decks/<id>`), and polyfills `showSaveFilePicker` so that a picker id of `bento-doc` returns the same handle, `bento-copy` and `bento-share` `POST` a new object and navigate to its link, and `bento-backup` downloads the rollback copy. Consequences that fall out for free: autosave writes to the store on its existing cadence; "Save as new deck" creates a second object and never overwrites the first; a signed update writes the new shell to the same id after downloading the old one as rollback; `noteSavedFromWeb` is skipped because the origin is the store, not the web demo. Store requests use `redirect: 'manual'`; an `opaqueredirect`, a rejected fetch or a non-JSON body means "signed out", and the handle rejects so the kernel's existing failure path shows a sign-in prompt and offers the file save. On `file://`, `handoffToStore(doc)` opens `<storeHost>/new` in a tab and, on a `ready` message from that tab, posts the serialized document. The `/new` page shows the incoming deck's title and size and uploads only when the person clicks Save; nothing is stored on message receipt. Origin checks on both sides: the deck accepts messages only from `storeHost` and only from the tab it opened; the store page accepts one document, from its opener, and discards later ones.
 - **KTD11. Share panel wiring is one action each.** "Save to Beta" is a new `action()` in `renderSharePanel`, shown off the store origin. "Invite to edit" on a store-origin deck copies the link; off the store it keeps upstream's behaviour. Both are single `if` branches in the existing builders. No other editor code changes for the store.
 - **KTD12. Analytics is server-side.** The worker posts `deck_open` and `deck_save` events to Plausible's events API with `surface: deck-store` and `outcome`, using the request's user agent and no identifying fields. The index page loads the Plausible script. Nothing is injected into a deck.
-- **KTD13. Favicon and marks come from one Beta asset file.** `slides/src/beta/marks.ts` carries the favicon as a data URI SVG (a charcoal rounded square with the cream "b" of Beta's wordmark, drawn from `beta/` assets, not fetched) and the splash mark. `slides/index.html` references the favicon data URI directly, marked `BETA FORK`, and the splash markup uses the same mark. The release site's `site-src/*.html` heads get the same `<link rel="icon">` and the generated `favicon.svg` at the site root.
+- **KTD13. One Beta mark, three copies kept identical by a rig.** The favicon is a data URI SVG: a charcoal rounded square with the cream "b" of Beta's wordmark, drawn from `beta/` assets, not fetched. `slides/index.html` is static and the boot splash is CSS-drawn, so each carries its own copy marked `BETA FORK`; `slides/src/beta/marks.ts` is the runtime copy for the About header. `scripts/test-beta-marks.ts` asserts the copies are byte-identical. The release site's published pages get the same `<link rel="icon">` and `release.mjs` writes `favicon.svg` at the site root.
 
 ### High-Level Technical Design
 
@@ -223,7 +223,7 @@ flowchart TD
   Q[request] --> J{Cf-Access-Jwt-Assertion valid?}
   J -- no --> X[401, no body]
   J -- yes --> R{route}
-  R -- "GET /" --> I[index page: list for this email]
+  R -- "GET /" --> I[index page: list every deck]
   R -- "GET /d/:id" --> S[stream object, private no-store]
   R -- "POST /api/decks" --> C[validate: size ≤ 32 MB, one #bento-doc block, bento/slides doc or bento/enc envelope] --> M[mint id, put with metadata] --> O[201 {id,url}]
   R -- "PUT /api/decks/:id" --> C2[same validation, object exists] --> M2[put, keep created, set updated] --> O2[200]
@@ -294,21 +294,23 @@ scripts/
 - `beta/templates/*.bento.html` (delete from git)
 - `scripts/test-beta-templates-current.ts` (new)
 - `scripts/publish-site.mjs` (extend the shell-consistency gate to `site/templates/*`)
-- `scripts/test-beta-layouts.ts` (read templates from the CI build; no behaviour change expected)
-- `.github/workflows/ci.yml` (add the new rig after `test-beta-layouts.ts`)
+- `scripts/test-publish-gate.mjs` (add a fixture with a mismatched template and assert the gate trips)
+- `scripts/test-beta-pptx.ts`, `scripts/test-beta-skill.mjs`, `scripts/test-beta-layouts.ts` (all read `beta/templates/`; no behaviour change, but they now depend on the build step)
+- `.github/workflows/ci.yml` (a dedicated `build-beta-templates.mjs` step placed before the PPTX rig, which today runs first; the new rig after `test-beta-layouts.ts`)
 - `beta/README.md`, `README.md` (say templates are generated)
 
-**Approach:** KTD1. The new rig extracts the `bento/deflate-b64` payload blocks with the same regular expression `publish-site.mjs` uses, hashes them for the built shell and for each template, and fails on any mismatch, naming the template. The publish gate gains the same loop over `site/templates/*`. `test-ci-registered.ts` will demand the new rig appears in `ci.yml`.
+**Approach:** KTD1. Today the PPTX rig and the skill rig read the tracked templates before the build step runs, so the first CI run after deletion would fail unless the build moves ahead of them. The new rig extracts the `bento/deflate-b64` payload blocks with the same regular expression `publish-site.mjs` uses, hashes them for the built shell and for each template, and fails on any mismatch, naming the template. The publish gate gains the same loop over `site/templates/*`, and because a real publish is a maintainer-only step, `test-publish-gate.mjs` gets a fixture that proves the gate trips. `test-ci-registered.ts` will demand the new rig appears in `ci.yml`.
 
-**Patterns to follow:** the shell-consistency block in `scripts/publish-site.mjs`; the `--check` idiom in `scripts/build-beta-starter.mjs`.
+**Patterns to follow:** the shell-consistency block in `scripts/publish-site.mjs`; the deletion-gate fixture in `scripts/test-publish-gate.mjs`; the `--check` idiom in `scripts/build-beta-starter.mjs`.
 
 **Test scenarios:**
 - Happy path: templates built from the current shell pass the rig with one line per template.
 - Error path: a template file built from a shell with a different payload fails the rig, and the failure names the file.
 - Edge case: a template with no payload blocks fails rather than passing vacuously.
-- Integration: `publish-site.mjs` refuses to publish a `site/` tree whose `templates/` do not match `releases/slides/`. Covers AE1.
+- Integration: `test-publish-gate.mjs` builds a fixture `site/` whose `templates/` deck carries a different payload from `releases/slides/` and asserts `publish-site.mjs --dry` refuses. Covers AE1.
+- Integration: CI on a clean checkout with no `beta/templates/` passes the PPTX, skill and layouts rigs because the build step precedes them.
 
-**Verification:** `git ls-files beta/templates` is empty; CI green with the new step; the rig fails when run against a template copied from the 2026.9.1 commit.
+**Verification:** `git ls-files beta/templates` is empty; CI green with the reordered steps; the rig fails when run against a template copied from the 2026.9.1 commit.
 
 ### U2. About dialog and update section
 
@@ -320,11 +322,11 @@ scripts/
 
 **Files:**
 - `slides/src/beta/about.ts` (new)
-- `slides/src/editor/editor.ts` (`openAbout`, the post-update banner, the launch check)
+- `slides/src/editor/editor.ts` (`openAbout`, `openHelp`, the post-update banner, the launch check)
 - `slides/src/i18n/*.ts` only if a new user-visible string is introduced; prefer reusing existing keys
 - `scripts/test-beta-about.ts` (new, string-level)
 
-**Approach:** KTD2 and KTD3. The fragment file owns every Beta literal. The "up to date" line reuses the existing `t('Version {v}')` style key if one exists, otherwise adds one string to all eight catalogues. Credits name the three OFL faces the Beta deck embeds. Confirm the launch check only badges the chip and never opens the dialog; if a code path opens it, gate that path off.
+**Approach:** KTD2 and KTD3. The fragment file owns every Beta literal, including the help overlay's external guide link (`openHelp` hard-codes `bento.page/help`): the Beta build drops that line, since the fork publishes no help page, and keeps the overlay's shortcuts and tips. The "up to date" line reuses the existing `t('Version {v}')` style key if one exists, otherwise adds one string to all eight catalogues. Credits name the three OFL faces the Beta deck embeds. The "What's new" URL builder derives GitHub's heading anchor for `## [2026.9.x]` and the About rig asserts the anchor shape. Confirm the launch check only badges the chip and never opens the dialog; if a code path opens it, gate that path off.
 
 **Patterns to follow:** the `BETA_WORDMARK_SVG` topbar mark and its `// BETA FORK` comment; `slides/src/main.ts` identity block.
 
@@ -397,17 +399,19 @@ scripts/
 **Files:**
 - `slides/src/beta/marks.ts` (new)
 - `slides/index.html` (favicon, splash mark)
-- `site-src/landing.html`, `site-src/help.html`, `site-src/404.html` (icon link)
-- `scripts/build-site.mjs` or the site build step that copies `site-src/` (emit `favicon.svg`)
+- `site-src/landing.html`, `site-src/404.html` (icon link; `help.html` is upstream content the fork does not publish)
+- `scripts/release.mjs` (the `ownsSiteContent` block that assembles the site tree emits `favicon.svg` beside `index.html`)
 - `scripts/postbuild-compress.mjs` (no change expected; confirm the favicon regex still matches)
+- `scripts/test-beta-marks.ts` (new: the copies of the mark agree)
 
-**Approach:** KTD13. The SVG is hand-drawn from the wordmark's "b" in cream on charcoal at 32 px, kept under 1 KB. The splash's `.bs-mark` uses the same path. The site root gets a `favicon.svg` and each page a `<link rel="icon">`.
+**Approach:** KTD13. The SVG is hand-drawn from the wordmark's "b" in cream on charcoal at 32 px, kept under 1 KB. `index.html` is static and the splash is CSS-drawn, so each carries its own copy of the mark and `marks.ts` is the runtime copy for the About header; a rig asserts the copies are identical so they cannot drift. The site root gets a `favicon.svg` and each published page a `<link rel="icon">`.
 
-**Patterns to follow:** the inline data-URI favicon already in `index.html`; `BETA_WORDMARK_SVG`.
+**Patterns to follow:** the inline data-URI favicon already in `index.html`; `BETA_WORDMARK_SVG`; the `ownsSiteContent` block in `scripts/release.mjs`.
 
 **Test scenarios:**
 - Happy path: the built shell's `<link rel="icon">` href decodes to an SVG containing no upstream colour literals (`#16273E`, `#FF9E8A`).
-- Happy path: `site/favicon.svg` exists after the site build and every `site-src` page links it.
+- Happy path: the favicon in `index.html`, the mark in `marks.ts` and `site/favicon.svg` are byte-identical SVG.
+- Happy path: after `release.mjs` assembles the site, `site/favicon.svg` exists and both published pages link it.
 - Test expectation for the splash: visual, covered by the smoke screenshot.
 
 **Verification:** `shell-gate.mjs` passes; tab icon visible in a browser smoke screenshot of the editor and of the landing page.
@@ -443,7 +447,7 @@ scripts/
 - `.github/workflows/ci.yml` (run the store rig)
 - `README.md` (deck store section)
 
-**Approach:** KTD7, KTD8, KTD9, KTD12. Plain JavaScript like the sync worker, no bundler. JWKS is fetched from the team domain and cached in memory with the certificate's expiry. The index page is a template string with Plausible's script and the list rendered server-side. The `/new` page carries the handoff script from KTD10's store side. Miniflare provides R2 in tests.
+**Approach:** KTD7, KTD8, KTD9, KTD12. Plain JavaScript like the sync worker, no bundler. `wrangler.toml` carries `[vars] ACCESS_TEAM_DOMAIN` and `ACCESS_AUDS` (comma-separated, one per Access application), read by `access.js` and overridable in tests; Johan supplies the two audience tags and the team domain after creating the applications. JWKS is fetched from the team domain and cached in memory with the certificate's expiry; an unknown key id triggers one refresh and then fails closed. The index page is a template string with Plausible's script and the list rendered server-side with every field escaped. The `/new` page carries the handoff script from KTD10's store side. Miniflare provides R2 and a stub JWKS in tests; it is a devDependency of `slides/package.json` (the `@gfx/zopfli` precedent, since `scripts/` has no package of its own) and `test-beta-store.ts` runs from `slides/` after `npm ci`. Object ids come from `location.pathname` (`/d/<id>`) on the client side and never from the document.
 
 **Execution note:** start with a failing test for the request/response contract of each route, including the 401 on a missing assertion, before writing handlers.
 
@@ -498,7 +502,7 @@ scripts/
 - Error path: the Access session has expired: the `PUT` sent with `redirect: 'manual'` yields an `opaqueredirect`, the handle rejects, the kernel's failure path shows a sign-in prompt and offers the file save. A rejected fetch and a bare 401 are handled the same way.
 - Edge case: an encrypted deck round-trips through the store still encrypted; the store never sees plaintext for it.
 - Edge case: Invite to edit on a store-origin deck copies the link and downloads nothing; off the store it behaves as before.
-- Edge case: `noteSavedFromWeb` does not fire on the store origin, so no "this page always starts a new deck" notice appears.
+- Edge case: `noteSavedFromWeb` does not fire on the store origin, so no "this page always starts a new deck" notice appears; the "⌘S will download an updated copy" notice and the Save button tooltip read "Save to Beta" there, because `hostCan('write')` is true.
 - Integration: Save to Beta with the Access cookie cleared: the `/new` tab signs in first, `ready` still reaches the deck and the document is stored. If the login hop severs the opener, the paste-box fallback is implemented before this unit closes.
 - Integration: a colleague opening the link in a second browser joins the live session and both replicas converge, exactly as two disk copies do.
 
@@ -535,7 +539,7 @@ Node 24, from `slides/` unless stated. Every gate in the v1 plan's contract stil
 | Typecheck | `node_modules/.bin/tsc -b` and `node_modules/.bin/tsc -p ../kernel` | app and kernel compile | all |
 | Build and splice | `npm run build:single` then `node ../scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html` | shell builds and honours PLATFORM §2 | all |
 | Templates current | `node ../scripts/build-beta-templates.mjs` then `node ../scripts/test-beta-templates-current.ts` | every template embeds the built shell | U1, U9 |
-| Publish gate | `node ../scripts/publish-site.mjs --dry-run` (or its check mode) | `site/templates/*` match the released shell | U1, U9 |
+| Publish gate | `node ../scripts/test-publish-gate.mjs` in CI; `node ../scripts/publish-site.mjs --dry` before a release | `site/templates/*` match the released shell | U1, U9 |
 | About strings | `node ../scripts/test-beta-about.ts` | Beta dialog, no upstream links, quiet when current | U2 |
 | i18n | `node ../scripts/build-i18n.mjs --check` and `node ../scripts/test-i18n-coverage.mjs` | catalogues untouched or complete | U2, U3 |
 | AppConfig | `node ../scripts/test-beta-appconfig.ts` | identity, `storeHost`, locale pin | U3, U8 |
@@ -545,6 +549,7 @@ Node 24, from `slides/` unless stated. Every gate in the v1 plan's contract stil
 | Export safety | `node ../scripts/test-export-secrets.ts` | no export path carries `collab` | U8 |
 | CI registration | `node ../scripts/test-ci-registered.ts` | every new rig has a CI step | U1, U7, U8 |
 | Layouts and theme | `node ../scripts/test-beta-layouts.ts`, `test-beta-theme.ts` | fork did not regress them | U1, U5 |
+| Marks | `node ../scripts/test-beta-marks.ts` | favicon, splash and About mark are one SVG | U5 |
 | Browser smoke | open the built shell from `file://` and from `https://decks.betamobility.ai/d/<id>`; check the tab icon, About, no globe, picker at 600 px height, Save to Beta with and without a live Access session, ⌘S and autosave on the store, Save as new deck, an in-place update, Invite to edit copies a link; console shows no CSP reports; `curl` the served deck over the live edge and compare bytes to the upload | the thing works where it will be used, and the edge does not rewrite it | U2 to U8 |
 | Release site | fetch manifest, shell, `agents.md` and one template from `slides.betamobility.ai`; verify the signature; open the template and confirm "up to date" | shipped files update and templates are current | U9 |
 
