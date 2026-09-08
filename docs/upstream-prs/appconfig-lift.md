@@ -2,7 +2,7 @@
 
 **Branch:** `upstream-pr/appconfig-lift` (built from `upstream/main`, kernel files only, no attribution trailers)
 **Target:** `nyblnet/bento` `main`
-**Status:** prepared; Johan opens it under his own account. Upstream's hard rule 10 declines agent-authored PRs, so the branch is his to offer, with the provenance that implies.
+**Status:** open as [nyblnet/bento#423](https://github.com/nyblnet/bento/pull/423), from Johan's account, 2026-09-08. Was: prepared for Johan to open. Upstream's hard rule 10 declines agent-authored PRs, so the branch is his to offer, with the provenance that implies.
 
 Open it with:
 

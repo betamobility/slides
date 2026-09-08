@@ -14,16 +14,18 @@ routes = [
   { pattern = "sync.betamobility.ai", custom_domain = true }
 ]
 
-# Encrypted asset blobs (docs/blob-offload.md). The relay pipes ciphertext
-# straight through; it never buffers a blob and cannot read one. NOT optional
-# for Beta: without the binding the /b/ routes answer 501 and an asset over
-# BLOB_INLINE_MAX (64 KB, kernel/src/sync/crdt.ts) is silently left out of
-# live sync, so a pasted photo never reaches the other author. Create the
-# bucket once (`npx wrangler r2 bucket create beta-slides-blobs`) before the
-# first deploy.
-[[r2_buckets]]
-binding = "BLOBS"
-bucket_name = "beta-slides-blobs"
+# Encrypted asset blobs (docs/blob-offload.md) are NOT bound, per plan U2: the
+# relay answers 501 on /b/ and clients fall back to inlining, which upstream
+# documents as supported. The cost is that an asset over BLOB_INLINE_MAX
+# (64 KB, kernel/src/sync/crdt.ts) is left out of LIVE sync and reaches the
+# other author on the next save, not on paste. Binding R2 means a paid
+# Cloudflare subscription on the account (free within 10 GB, card on file),
+# which is the maintainer's decision; to turn it on, enable R2 in the
+# dashboard, `npx wrangler r2 bucket create beta-slides-blobs`, and restore:
+#
+#   [[r2_buckets]]
+#   binding = "BLOBS"
+#   bucket_name = "beta-slides-blobs"
 
 [[durable_objects.bindings]]
 name = "ROOM"

@@ -2,7 +2,7 @@
 
 **Branch:** `upstream-pr/embed-consumer` (built from `upstream/main`, app-zone files only, no attribution trailers)
 **Target:** `nyblnet/bento` `main`
-**Status:** prepared; Johan opens it under his own account. Upstream's hard rule 10 declines agent-authored PRs, so the branch is his to offer, with the provenance that implies. The rig is `scripts/test-embed.ts` (the fork's `test-beta-embed.ts`), registered in `validate`.
+**Status:** open as [nyblnet/bento#424](https://github.com/nyblnet/bento/pull/424), from Johan's account, 2026-09-08. Was: prepared for Johan to open. Upstream's hard rule 10 declines agent-authored PRs, so the branch is his to offer, with the provenance that implies. The rig is `scripts/test-embed.ts` (the fork's `test-beta-embed.ts`), registered in `validate`.
 
 Open it with:
 

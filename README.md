@@ -2,7 +2,7 @@
 
 Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**Production:** https://slides.betamobility.ai (release channel, not yet live; see Status)
+**Production:** https://slides.betamobility.ai (release channel; first release v2026.9.1, 2026-09-08)
 **Client:** Internal
 **Status:** Active, phase one
 
@@ -75,11 +75,26 @@ node ../scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html
 
 The full gate list is the Verification Contract in the plan; CI runs the `beta` job in `.github/workflows/ci.yml`.
 
+## Releasing (Beta)
+
+`docs/RELEASING.md` is upstream's procedure and still applies up to the publish step; the Beta differences are these.
+
+- **Versions are dated, `YYYY.M.N`** (`2026.9.1` was the first). Upstream's `v1.0.x` tags already exist in this repository, so a Beta `1.0.x` line would collide on the next `git fetch upstream`; and `kernel/src/update.ts` compares versions as dotted numbers, so a `-beta.1` suffix would compare as `NaN`. Each release adds a `## [YYYY.M.N]` section to `CHANGELOG.md`; its first six bold lead-ins are the signed notes.
+- **`gh` must default to this fork.** `gh repo set-default betamobility/slides` once per clone, or `publish-site.mjs`'s `gh release create` resolves to `nyblnet/bento` (the fork's parent) and refuses the tag.
+- **The site is deployed to Cloudflare Pages by direct upload**, not by the dashboard's git integration. After `publish-site.mjs` has mirrored and pushed `betamobility/slides-site`:
+
+  ```sh
+  cd ../slides-site && npx wrangler pages deploy . --project-name beta-slides-site --branch main
+  ```
+
+  Project `beta-slides-site`, custom domain `slides.betamobility.ai` (a proxied CNAME to `beta-slides-site.pages.dev`). Wrangler needs `wrangler login` (OAuth); the DNS-only `CLOUDFLARE_API_TOKEN` in the shell cannot deploy Workers or Pages, so run wrangler with `env -u CLOUDFLARE_API_TOKEN`.
+- **Pages answers `.html` URLs with a 308 to the extensionless path.** `…/Bento_Slides.bento.html` redirects to `…/Bento_Slides.bento`; `fetch` and `curl -L` follow it and the bytes match the manifest hash, so shipped decks and the skill are unaffected. A client that does not follow redirects gets an empty 308.
+
 ## Upstream pull requests
 
 Offered to `nyblnet/bento` from this fork. Bodies live in `docs/upstream-prs/`.
 
-- `AppConfig` lift: `publicKeyJwk` and `syncHost` as optional per-app config. Branch `upstream-pr/appconfig-lift`.
-- `embed` element, consumer side in slides, to the `bento/embed` shape. Branch `upstream-pr/embed-consumer`.
+- `AppConfig` lift: `publicKeyJwk` and `syncHost` as optional per-app config. Branch `upstream-pr/appconfig-lift`, open as [nyblnet/bento#423](https://github.com/nyblnet/bento/pull/423).
+- `embed` element, consumer side in slides, to the `bento/embed` shape. Branch `upstream-pr/embed-consumer`, open as [nyblnet/bento#424](https://github.com/nyblnet/bento/pull/424).
 
-Both are prepared for Johan to open: upstream's hard rule 10 declines agent-authored PRs, so they carry no agent attribution and go out under his account.
+Both were opened from Johan's GitHub account on 2026-09-08 at his instruction. The branches carry no agent attribution trailers (upstream's hard rule 8); whether upstream accepts them under its rule 10 is upstream's call.

@@ -143,7 +143,7 @@ verbatim; this section is what the fork adds. The plan of record is
    Colours are palette slots via `themeRefs`, never hex literals in content.
 4. **Upstream tracking is weekly, by merge.** `git fetch upstream && git merge
    upstream/main` on `main`, or before a release. The predictable conflicts are
-   the three kernel files, `CLAUDE.md`/`AGENTS.md` (see below), `render.ts`, the i18n catalogs, `scripts/release.mjs` and `.github/workflows/ci.yml`.
+   the three kernel files, `CLAUDE.md`/`AGENTS.md` (see below), `render.ts`, the i18n catalogs, `scripts/release.mjs`, `.github/workflows/ci.yml`, and on every upstream release `slides/package.json` (keep Beta's dated version, see README "Releasing") and `CHANGELOG.md` (keep both sections).
 5. **CI is the `beta` job** in `.github/workflows/ci.yml`. Upstream's
    `validate` job is gated off with `if:`, not deleted, so
    `test-ci-registered.ts` still sees every rig.
