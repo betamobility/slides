@@ -31,5 +31,8 @@ bucket_name = "beta-decks"
 # who can read a token, and the JWKS is public. The worker fails closed while
 # either is empty or still a placeholder.
 [vars]
-ACCESS_TEAM_DOMAIN = "REPLACE-ME.cloudflareaccess.com"
-ACCESS_AUDS = "REPLACE-ME-HUMAN-AUD,REPLACE-ME-SERVICE-AUD"
+# Filled 2026-09-08: human app "beta/slides deck store" on the hostname, then
+# the path-scoped "beta/slides deck store harness" app on /api/harness/. Both
+# values are public to anyone holding a token; they are vars, not secrets.
+ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
+ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a"
