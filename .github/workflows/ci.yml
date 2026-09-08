@@ -243,6 +243,12 @@ jobs:
         # manifests, inherited rules, and the as-of stamp shape (AE3).
         run: node scripts/test-beta-skill.mjs
 
+      - name: Beta embed rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-beta-embed.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-beta-embed.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-embed.mjs"
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.
