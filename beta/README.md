@@ -8,6 +8,7 @@ beta/
 ├── tokens.slides.json   the Slides overlay: accents, links, chart series, table defaults (hand-edited)
 ├── tokens.json          generated: design-system tokens plus the overlay, with provenance under _source
 ├── fonts/               Inter, Playfair Display, DM Mono woff2 (OFL, see fonts/LICENSES.md)
+├── logo/                favicons + recolorable wordmark, vendored from the design system (see logo/README.md)
 ├── theme.json           generated: the theme + fonts + assets fragment every Beta deck carries
 └── templates/           generated and gitignored: the three starter decks, spliced into the built shell
 ```

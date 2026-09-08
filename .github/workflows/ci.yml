@@ -254,6 +254,15 @@ jobs:
         # configured host, platform default; no throw before configureApp).
         run: node scripts/test-beta-appconfig.ts
 
+      - name: Beta marks rig
+        # v1.1 U5: beta/logo/* hash to the design-system originals; the
+        # favicon data URI (index.html, marks.ts) decodes to favicon-32.png,
+        # the splash and marks.ts inline wordmark.svg's element verbatim,
+        # upstream's svg mark is gone, the site pages link /logo/*.png and
+        # release.mjs copies them; the built shell (from the build step
+        # above) carries the same favicon tag.
+        run: node scripts/test-beta-marks.ts
+
       - name: Beta plugin and skill rig
         # Static claims of plugins/beta-slides: published URLs, template names,
         # manifests, inherited rules, and the as-of stamp shape (AE3).
