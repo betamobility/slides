@@ -29,7 +29,7 @@
 import PptxGenJS from 'pptxgenjs'
 import type {
   BentoDoc, SlideElement, TextElement, CodeElement, ShapeElement, ImageElement,
-  SvgElement, ChartElement, TableElement, MediaElement,
+  SvgElement, ChartElement, TableElement, MediaElement, EmbedElement,
 } from '../model'
 
 export interface DegradeEntry {
@@ -422,18 +422,26 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
           degrade(slide.id, el.id, 'media', `${md.kind === 'audio' ? 'Audio' : 'Video'} is exported as its poster image.`)
           break
         }
+        case 'embed': {
+          // The static `view` tier is the whole point of the shape (KTD3):
+          // it is what prints, thumbnails and exports. Never the live frame.
+          const em = el as EmbedElement
+          const view = asset(em.view)
+          picture(s, view && /^<svg/i.test(view.trim()) ? await svgPicture(view, el.w, el.h) : PLACEHOLDER_PNG, el, 'contain')
+          degrade(slide.id, el.id, 'embed', 'A live embed is exported as a picture of its static view.')
+          break
+        }
         default: {
-          // A kind this mapper does not know (today: `embed`; tomorrow: whatever
-          // upstream adds). Anything carrying a static picture exports as one so
-          // export never crashes on a new element, and the report says so.
+          // A kind this mapper does not know (whatever upstream adds next).
+          // Anything carrying a static picture exports as one so export never
+          // crashes on a new element, and the report says so.
           const any = el as unknown as { id: string; type: string; x: number; y: number; w: number; h: number; rotation: number; opacity: number; view?: string; poster?: string; src?: string }
           const view = asset(any.view) ?? asset(any.poster) ?? (isData(any.src) ? any.src : undefined)
           const data = view
             ? (/^<svg/i.test(view.trim()) ? await svgPicture(view, any.w, any.h) : isData(view) ? view : PLACEHOLDER_PNG)
             : PLACEHOLDER_PNG
           picture(s, data, any as unknown as SlideElement, 'contain')
-          if (any.type === 'embed') degrade(slide.id, any.id, 'embed', 'A live embed is exported as a picture of its static view.')
-          else degrade(slide.id, any.id, `unknown:${any.type}`, `Element kind "${any.type}" is not mapped; a picture stands in.`)
+          degrade(slide.id, any.id, `unknown:${any.type}`, `Element kind "${any.type}" is not mapped; a picture stands in.`)
         }
       }
     }

@@ -171,6 +171,7 @@ option { background: var(--field); color: var(--ink); }
 
 .ed-logo { display: flex; align-items: center; gap: 7px; font-size: 15px; white-space: nowrap; }
 .ed-logo-mark { display: block; border-radius: 5px; }
+.ed-logo-beta { border-radius: 0; height: 18px; width: auto; }
 
 .ed-title {
   font: inherit;

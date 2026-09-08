@@ -17,6 +17,7 @@ import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpda
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
+import { BETA_WORDMARK_SVG } from './brand'
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -231,13 +232,8 @@ export class Editor {
     // topbar
     const bar = div('ed-topbar')
     const logo = div('ed-logo')
-    logo.innerHTML =
-      `<svg class="ed-logo-mark" viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">` +
-      `<rect width="32" height="32" rx="7" fill="#16273E"/>` +
-      `<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>` +
-      `<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>` +
-      `<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>` +
-      `</svg> <b>bento<span style="color:#FF9E8A">/</span>slides</b>`
+    // BETA FORK: the Beta wordmark replaces upstream's mark + "bento/slides".
+    logo.innerHTML = BETA_WORDMARK_SVG
     logo.title = t('About bento/slides — version, updates, licenses')
     logo.style.cursor = 'pointer'
     logo.addEventListener('click', () => this.openAbout())
