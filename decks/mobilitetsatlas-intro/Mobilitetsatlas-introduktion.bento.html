@@ -918,7 +918,7 @@
    "themeRefs": {
     "background": "tx1"
    },
-   "notes": "Danmarks Mobilitetsatlas gives every place in Denmark one comparable A–G grade for mobility. Twenty minutes: what the grade measures, how we calculate it, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G.",
+   "notes": "Danmarks Mobilitetsatlas gives every place in Denmark one comparable A–G grade for mobility. Twenty minutes: what the grade measures, how we calculate it, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G. Every figure in the deck is the published 0.4.0 edition of 22 August 2026, built on Rejseplanen GTFS (CC BY 4.0), OpenStreetMap and Danmarks Statistik. Full source list on mobilitetsatlas.dk/en/metode.",
    "elements": [
     {
      "id": "hero-map",
@@ -957,24 +957,6 @@
      "radius": 0
     },
     {
-     "id": "hero-bar",
-     "x": 96,
-     "y": 232,
-     "w": 96,
-     "h": 6,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#4A7C59",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "accent1"
-     }
-    },
-    {
      "id": "beta-kicker",
      "x": 96,
      "y": 264,
@@ -987,14 +969,14 @@
      "fontSize": 14,
      "fontFamily": "'DM Mono', 'Courier New', monospace",
      "fontWeight": 400,
-     "color": "#999999",
+     "color": "#F5F3EF",
      "align": "left",
      "valign": "middle",
      "lineHeight": 1.3,
      "letterSpacing": 2,
      "role": "kicker",
      "themeRefs": {
-      "color": "accent5"
+      "color": "bg1"
      }
     },
     {
@@ -1032,13 +1014,13 @@
      "fontSize": 24,
      "fontFamily": "'Inter', system-ui, sans-serif",
      "fontWeight": 400,
-     "color": "#999999",
+     "color": "#F5F3EF",
      "align": "left",
      "valign": "top",
      "lineHeight": 1.4,
      "role": "subtitle",
      "themeRefs": {
-      "color": "accent5"
+      "color": "bg1"
      }
     },
     {
@@ -1054,13 +1036,13 @@
      "fontSize": 13,
      "fontFamily": "'DM Mono', 'Courier New', monospace",
      "fontWeight": 400,
-     "color": "#999999",
+     "color": "#F5F3EF",
      "align": "left",
      "valign": "middle",
      "lineHeight": 1.3,
      "role": "kicker",
      "themeRefs": {
-      "color": "accent5"
+      "color": "bg1"
      }
     }
    ]
@@ -1320,90 +1302,6 @@
      "fx": {
       "enter": "fade-up",
       "order": 4
-     }
-    },
-    {
-     "id": "backbone-asof",
-     "x": 96,
-     "y": 596,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · Rejseplanen GTFS (CC BY 4.0) · Data as of 2026-09-09",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
      }
     }
    ]
@@ -1777,90 +1675,6 @@
      "fx": {
       "enter": "fade-up",
       "order": 1
-     }
-    },
-    {
-     "id": "grade-asof",
-     "x": 96,
-     "y": 570,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · Danmarks Mobilitetsatlas · Edition 0.4.0 · 22 August 2026",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
      }
     }
    ]
@@ -2308,90 +2122,6 @@
       "enter": "fade-up",
       "order": 3
      }
-    },
-    {
-     "id": "efg-asof",
-     "x": 96,
-     "y": 586,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · league table, Edition 0.4.0 · 22 August 2026 · Data as of 2026-09-09",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
     }
    ]
   },
@@ -2578,90 +2308,6 @@
      "themeRefs": {
       "color": "tx1"
      }
-    },
-    {
-     "id": "beta-asof",
-     "x": 752,
-     "y": 596,
-     "w": 432,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "DST grouping 2018 · Edition 0.4.0 · 22 August 2026",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
     }
    ]
   },
@@ -2737,68 +2383,6 @@
      "valign": "top",
      "lineHeight": 1.4,
      "role": "subtitle",
-     "themeRefs": {
-      "color": "accent5"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#999999",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent5"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#999999",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
      "themeRefs": {
       "color": "accent5"
      }
@@ -3281,7 +2865,7 @@
      "fill": "#F0EDE8",
      "stroke": "none",
      "strokeWidth": 0,
-     "radius": 8,
+     "radius": 30,
      "themeRefs": {
       "fill": "accent6"
      },
@@ -3289,7 +2873,7 @@
     },
     {
      "id": "limits-label",
-     "x": 120,
+     "x": 128,
      "y": 546,
      "w": 472,
      "h": 60,
@@ -3306,91 +2890,6 @@
      "lineHeight": 1.3,
      "themeRefs": {
       "color": "tx1"
-     },
-     "link": "state-limits"
-    },
-    {
-     "id": "method-asof",
-     "x": 640,
-     "y": 552,
-     "w": 544,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "~75,000 points · 98 municipalities · Edition 0.4.0 · 22 August 2026",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
      }
     }
    ]
@@ -4295,90 +3794,6 @@
      "themeRefs": {
       "color": "accent4"
      }
-    },
-    {
-     "id": "scale-asof",
-     "x": 96,
-     "y": 604,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · Edition 0.4.0 · 22 August 2026 · Data as of 2026-09-09",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
     }
    ]
   },
@@ -4454,68 +3869,6 @@
      "valign": "top",
      "lineHeight": 1.4,
      "role": "subtitle",
-     "themeRefs": {
-      "color": "accent5"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#999999",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent5"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#999999",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
      "themeRefs": {
       "color": "accent5"
      }
@@ -5043,90 +4396,6 @@
      "themeRefs": {
       "color": "tx1"
      }
-    },
-    {
-     "id": "aarhus-asof",
-     "x": 96,
-     "y": 604,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · Edition 0.4.0 · 22 August 2026 · Data as of 2026-09-09",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
     }
    ]
   },
@@ -5171,7 +4440,7 @@
      "opacity": 1,
      "type": "embed",
      "app": "web",
-     "url": "https://staging.mobilitetsatlas.dk/en/embed/kommune/aarhus",
+     "url": "https://staging.mobilitetsatlas.dk/en/embed/kommune/aarhus?bare=1",
      "live": true,
      "view": "asset:view-aarhus"
     },
@@ -5188,7 +4457,7 @@
      "fill": "#F0EDE8",
      "stroke": "none",
      "strokeWidth": 0,
-     "radius": 8,
+     "radius": 22,
      "themeRefs": {
       "fill": "accent6"
      },
@@ -5196,7 +4465,7 @@
     },
     {
      "id": "how-label",
-     "x": 116,
+     "x": 120,
      "y": 616,
      "w": 360,
      "h": 44,
@@ -5213,8 +4482,7 @@
      "lineHeight": 1.3,
      "themeRefs": {
       "color": "tx1"
-     },
-     "link": "state-how-to-read"
+     }
     },
     {
      "id": "live-note",
@@ -6338,7 +5606,7 @@
      "fill": "#F0EDE8",
      "stroke": "none",
      "strokeWidth": 0,
-     "radius": 8,
+     "radius": 22,
      "themeRefs": {
       "fill": "accent6"
      },
@@ -6346,7 +5614,7 @@
     },
     {
      "id": "exp-label",
-     "x": 804,
+     "x": 808,
      "y": 568,
      "w": 360,
      "h": 44,
@@ -6363,29 +5631,6 @@
      "lineHeight": 1.3,
      "themeRefs": {
       "color": "tx1"
-     },
-     "link": "state-explore"
-    },
-    {
-     "id": "exp-asof",
-     "x": 96,
-     "y": 618,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · DST families with a car, 2026 · Edition 0.4.0 · 22 August 2026 · Data as of 2026-09-09",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
      }
     }
    ]
@@ -6399,7 +5644,7 @@
    "themeRefs": {
     "background": "bg1"
    },
-   "notes": "Live as well. The horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab when the room starts asking about one specific number.",
+   "notes": "The chart itself, live, so hovering a dot names the municipality. The horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab when the room starts asking about one specific number.",
    "elements": [
     {
      "id": "beta-title-h",
@@ -6433,7 +5678,7 @@
      "opacity": 1,
      "type": "embed",
      "app": "web",
-     "url": "https://staging.mobilitetsatlas.dk/en/udforsk?x=families_with_car_pct",
+     "url": "https://staging.mobilitetsatlas.dk/en/embed/udforsk?x=families_with_car_pct",
      "live": true,
      "view": "asset:view-explore"
     },
@@ -6446,7 +5691,7 @@
      "rotation": 0,
      "opacity": 1,
      "type": "text",
-     "html": "mobilitetsatlas.dk/en/udforsk  ·  ←  back",
+     "html": "mobilitetsatlas.dk/en/udforsk  ·  hover a dot for the municipality  ·  ←  back",
      "fontSize": 13,
      "fontFamily": "'DM Mono', 'Courier New', monospace",
      "fontWeight": 400,
@@ -6496,7 +5741,7 @@
      "opacity": 1,
      "type": "embed",
      "app": "web",
-     "url": "https://staging.mobilitetsatlas.dk/en/embed/kommune/koebenhavn?view=city",
+     "url": "https://staging.mobilitetsatlas.dk/en/embed/kommune/koebenhavn?view=city&bare=1&zoom=15.4&pitch=60&bearing=-20&lng=12.5750&lat=55.6810",
      "live": true,
      "view": "asset:view-byvisning"
     },
@@ -6531,7 +5776,7 @@
      "rotation": 0,
      "opacity": 1,
      "type": "text",
-     "html": "This map is live. Drag it, zoom in, and the buildings rise as the day's scheduled services move across them.",
+     "html": "Live, and already at street level. Drag it, and the day's scheduled services keep moving across the buildings.",
      "fontSize": 15,
      "fontFamily": "'Inter', system-ui, sans-serif",
      "fontWeight": 400,
@@ -7011,90 +6256,6 @@
      "fx": {
       "enter": "fade-up",
       "order": 5
-     }
-    },
-    {
-     "id": "improve-asof",
-     "x": 96,
-     "y": 604,
-     "w": 1088,
-     "h": 30,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Beta · mobilitetsatlas.dk/en/metode",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-rule",
-     "x": 96,
-     "y": 640,
-     "w": 1088,
-     "h": 1,
-     "rotation": 0,
-     "opacity": 0.25,
-     "type": "shape",
-     "shape": "rect",
-     "fill": "#333333",
-     "stroke": "none",
-     "strokeWidth": 0,
-     "radius": 0,
-     "themeRefs": {
-      "fill": "tx2"
-     }
-    },
-    {
-     "id": "beta-foot-company",
-     "x": 96,
-     "y": 652,
-     "w": 540,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "Danmarks Mobilitetsatlas · {{company}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "left",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
-     }
-    },
-    {
-     "id": "beta-foot-page",
-     "x": 984,
-     "y": 652,
-     "w": 200,
-     "h": 28,
-     "rotation": 0,
-     "opacity": 1,
-     "type": "text",
-     "html": "{{page:2}}",
-     "fontSize": 13,
-     "fontFamily": "'DM Mono', 'Courier New', monospace",
-     "fontWeight": 400,
-     "color": "#666666",
-     "align": "right",
-     "valign": "middle",
-     "lineHeight": 1.3,
-     "role": "kicker",
-     "themeRefs": {
-      "color": "accent4"
      }
     }
    ]

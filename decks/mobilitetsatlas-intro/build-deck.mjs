@@ -118,8 +118,14 @@ function line(id, x, y, w, fill, o = {}) {
   return el;
 }
 
-/** Footer chrome. Shared ids across slides, so it morphs instead of popping. */
-const footer = (onDark = false) => [
+/**
+ * Footer chrome, OFF (Johan, slide-by-slide review): no rule, no company line,
+ * no page number. Kept as a no-op rather than deleted from twelve call sites,
+ * so it is one edit to bring back. The provenance those lines carried lives in
+ * the speaker notes.
+ */
+const footer = (_onDark = false) => [];
+const _footerWas = (onDark = false) => [
   rect('beta-foot-rule', 96, 640, 1088, 1, onDark ? '#333333' : '#333333',
     { ref: 'tx2', opacity: 0.25 }),
   text('beta-foot-company', 96, 652, 540, 28, 'Danmarks Mobilitetsatlas · {{company}}',
@@ -134,7 +140,9 @@ const title = (html, o = {}) => text('beta-title-h', 96, 72, 1088, 84, html,
   { size: o.size ?? 40, weight: 700, family: SERIF, valign: 'middle', lh: 1.1,
     role: 'title', color: o.color ?? CHARCOAL, ref: o.ref ?? 'tx1' });
 
-const asOf = (id, x, y, label, w = 1088) => text(id, x, y, w, 30, label,
+/** Source/as-of kicker, OFF for the same reason. Same no-op shape. */
+const asOf = (_id, _x, _y, _label, _w) => [];
+const _asOfWas = (id, x, y, label, w = 1088) => text(id, x, y, w, 30, label,
   { size: 13, family: MONO, color: MUTED, ref: 'accent4', valign: 'middle', lh: 1.3, role: 'kicker' });
 
 // ---------------------------------------------------------------------------
@@ -194,23 +202,22 @@ const slides = [];
 slides.push({
   id: 'cover', background: CHARCOAL, transition: 'none',
   themeRefs: { background: 'tx1' },
-  notes: 'Danmarks Mobilitetsatlas gives every place in Denmark one comparable A–G grade for mobility. Twenty minutes: what the grade measures, how we calculate it, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G.',
+  notes: 'Danmarks Mobilitetsatlas gives every place in Denmark one comparable A–G grade for mobility. Twenty minutes: what the grade measures, how we calculate it, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G. Every figure in the deck is the published 0.4.0 edition of 22 August 2026, built on Rejseplanen GTFS (CC BY 4.0), OpenStreetMap and Danmarks Statistik. Full source list on mobilitetsatlas.dk/en/metode.',
   elements: [
     { ...base('hero-map', 0, 0, 1280, 720), type: 'image', src: 'asset:cover-map',
       fit: 'cover', radius: 0,
       fx: { ambient: 'kenburns', ken: { dir: 'drift', scale: 1.08, duration: 26 } } },
     rect('hero-scrim', 0, 0, 1280, 720, 'rgba(26,26,26,0.62)'),
-    rect('hero-bar', 96, 232, 96, 6, SAGE, { ref: 'accent1' }),
     text('beta-kicker', 96, 264, 900, 32, 'AN INTRODUCTION FOR DANISH MUNICIPALITIES',
-      { size: 14, family: MONO, color: SUBTLE, ref: 'accent5', valign: 'middle', lh: 1.3,
+      { size: 14, family: MONO, color: CREAM, ref: 'bg1', valign: 'middle', lh: 1.3,
         role: 'kicker', ls: 2 }),
     text('beta-title-h', 96, 306, 940, 180, 'Danmarks\nMobilitetsatlas'.replace('\n', '<br>'),
       { size: 72, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', lh: 1.05, role: 'title' }),
     text('beta-title-sub', 96, 500, 820, 80,
       'One comparable A–G grade for how freely people can move, with and without a car.',
-      { size: 24, color: SUBTLE, ref: 'accent5', lh: 1.4, role: 'subtitle' }),
+      { size: 24, color: CREAM, ref: 'bg1', lh: 1.4, role: 'subtitle' }),
     text('beta-title-byline', 96, 620, 900, 28, '{{company}} · {{author}} · {{date}}',
-      { size: 13, family: MONO, color: SUBTLE, ref: 'accent5', valign: 'middle', lh: 1.3,
+      { size: 13, family: MONO, color: CREAM, ref: 'bg1', valign: 'middle', lh: 1.3,
         role: 'kicker' }),
   ],
 });
@@ -396,11 +403,10 @@ slides.push({
       SAGE, { strokeWidth: 2, strokeStyle: 'dashed', lineEnd: 'arrow',
         fx: { loop: { type: 'dash-march', distance: 16, duration: 1.6 } } })),
     rect('limits-hit', 96, 546, 520, 60, BG2,
-      { ref: 'accent6', radius: 8, link: 'state-limits' }),
-    text('limits-label', 120, 546, 472, 60,
+      { ref: 'accent6', radius: 30, link: 'state-limits' }),
+    text('limits-label', 128, 546, 472, 60,
       '→  What the atlas does not capture (yet)',
-      { size: 17, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1',
-        link: 'state-limits' }),
+      { size: 17, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1' }),
     asOf('method-asof', 640, 552, `~75,000 points · 98 municipalities · ${EDITION}`, 544),
     ...footer(),
   ],
@@ -585,12 +591,11 @@ slides.push({
 // Each embed still carries its `view`, so offline, in print, in a thumbnail and
 // in PowerPoint the deck shows a real screenshot instead of a hole.
     { ...base('aarhus-embed', 96, 176, 1088, 424), type: 'embed', app: 'web',
-      url: `${ATLAS}/en/embed/kommune/aarhus`, live: true,
+      url: `${ATLAS}/en/embed/kommune/aarhus?bare=1`, live: true,
       view: 'asset:view-aarhus' },
-    rect('how-hit', 96, 616, 400, 44, BG2, { ref: 'accent6', radius: 8, link: 'state-how-to-read' }),
-    text('how-label', 116, 616, 360, 44, '→  How to read A–G',
-      { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1',
-        link: 'state-how-to-read' }),
+    rect('how-hit', 96, 616, 400, 44, BG2, { ref: 'accent6', radius: 22, link: 'state-how-to-read' }),
+    text('how-label', 120, 616, 360, 44, '→  How to read A–G',
+      { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1' }),
     text('live-note', 528, 616, 656, 44,
       'mobilitetsatlas.dk/en/kommune/aarhus  ·  CC BY-SA 4.0',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', align: 'right', valign: 'middle',
@@ -661,10 +666,9 @@ slides.push({
     text('exp-body', 784, 312, 400, 240,
       'Each dot is one municipality, coloured by its grade. Vertical: mobility freedom. Horizontal: the share of families with a car.<br><br>Where public transport reaches less, more families keep a car. The spread at any given level is wide, and that spread is where policy lives.<br><br>A pattern between two numbers is not a cause.',
       { size: 16, color: MUTED, ref: 'accent4', lh: 1.55, role: 'body' }),
-    rect('exp-hit', 784, 568, 400, 44, BG2, { ref: 'accent6', radius: 8, link: 'state-explore' }),
-    text('exp-label', 804, 568, 360, 44, '→  Every measure on the site',
-      { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1',
-        link: 'state-explore' }),
+    rect('exp-hit', 784, 568, 400, 44, BG2, { ref: 'accent6', radius: 22, link: 'state-explore' }),
+    text('exp-label', 808, 568, 360, 44, '→  Every measure on the site',
+      { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1' }),
     asOf('exp-asof', 96, 618, `Beta · DST families with a car, 2026 · ${EDITION} · Data as of ${ASOF}`),
   ],
 });
@@ -673,14 +677,14 @@ slides.push({
 slides.push({
   id: 'state-explore', stateOf: 'explore', transition: 'morph', name: 'Explore, live',
   background: CREAM, themeRefs: { background: 'bg1' },
-  notes: 'Live as well. The horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab when the room starts asking about one specific number.',
+  notes: 'The chart itself, live, so hovering a dot names the municipality. The horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab when the room starts asking about one specific number.',
   elements: [
     title('Explore, live'),
     { ...base('explore-embed', 96, 176, 1088, 456), type: 'embed', app: 'web',
-      url: `${ATLAS}/en/udforsk?x=families_with_car_pct`, live: true,
+      url: `${ATLAS}/en/embed/udforsk?x=families_with_car_pct`, live: true,
       view: 'asset:view-explore' },
     text('exp-live-note', 96, 646, 1088, 28,
-      'mobilitetsatlas.dk/en/udforsk  ·  ←  back',
+      'mobilitetsatlas.dk/en/udforsk  ·  hover a dot for the municipality  ·  ←  back',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', valign: 'middle', lh: 1.3,
         role: 'kicker' }),
     rect('exp-dismiss', 0, 640, 1280, 80, 'rgba(0,0,0,0)', { link: 'explore' }),
@@ -694,13 +698,14 @@ slides.push({
   notes: 'The last zoom level: København, street by street. Press Byvisning on any of the four largest municipalities and the map tilts into the buildings, with the day\'s scheduled services moving across it. Planned timetable, not live vehicles, and the panel says so. The green wash on the massing is the same A–G scale as the rest of the deck, now at building resolution. This is where a planner stops nodding at a national average and starts pointing at a street.',
   elements: [
     { ...base('by-embed', 96, 168, 1088, 434), type: 'embed', app: 'web',
-      url: `${ATLAS_STAGING}/en/embed/kommune/koebenhavn?view=city`, live: true,
+      url: `${ATLAS_STAGING}/en/embed/kommune/koebenhavn?view=city&bare=1`
+        + '&zoom=15.4&pitch=60&bearing=-20&lng=12.5750&lat=55.6810', live: true,
       view: 'asset:view-byvisning' },
     text('beta-title-h', 96, 72, 1088, 84, 'København, at street level',
       { size: 40, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', valign: 'middle',
         lh: 1.1, role: 'title' }),
     text('by-note', 96, 618, 700, 56,
-      'This map is live. Drag it, zoom in, and the buildings rise as the day\'s scheduled services move across them.',
+      'Live, and already at street level. Drag it, and the day\'s scheduled services keep moving across the buildings.',
       { size: 15, color: SUBTLE, ref: 'accent5', lh: 1.45, role: 'body' }),
     text('by-src', 812, 618, 372, 56, 'staging.mobilitetsatlas.dk<br>planned timetable · not live vehicles',
       { size: 13, family: MONO, color: SUBTLE, ref: 'accent5', align: 'right', lh: 1.5,
@@ -773,6 +778,12 @@ slides.push({
 // `trustedFrameOrigins` (Beta v1.1+) or the live maps frame under the old
 // sandbox and paint nothing — and a freshly built shell ships with an EMPTY
 // document block, so it cannot be the source of the theme.
+// The footer and as-of helpers are switched off and return [], and they are
+// called unspread inside the element arrays. Flatten and drop the empties, so a
+// disabled helper leaves nothing behind rather than an empty array where an
+// element should be.
+for (const slide of slides) slide.elements = slide.elements.flat().filter(Boolean);
+
 const shell = readFileSync(
   join(HERE, existsSync(join(HERE, 'template-shell.bento.html'))
     ? 'template-shell.bento.html' : 'template.bento.html'), 'utf8');
