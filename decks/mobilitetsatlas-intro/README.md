@@ -7,13 +7,22 @@ the first time.
 **Published:** <https://decks.betamobility.ai/d/ExgV4CeniH> (behind Access,
 `@betamobility.io`).
 
+The three live embeds run against `staging.mobilitetsatlas.dk`, where the
+route shipped in betamobility/dk-mobility#230 (squash-merged 2026-09-09).
+
 **Live surfaces point at staging.** `dk-mobility` merges features to `staging`
 and promotes to production separately, and byvisning's city artifact is
 staging-only regardless — so the three live embeds frame
 `staging.mobilitetsatlas.dk`. The embed route carries no chrome, so nothing on
 it reads "Testversion"; the difference from production is the data edition, not
 the look. Repoint `ATLAS` in `build-deck.mjs` once `/embed/kommune/<slug>` is
-promoted to `mobilitetsatlas.dk`.
+promoted to `mobilitetsatlas.dk` — and note that byvisning needs staging
+regardless until `pt/city/*.json` is published to production.
+
+`https://decks.betamobility.ai/d/49pX778ohx` is a leftover duplicate of this
+deck (it was the pre-merge review copy, now overwritten with the same build so
+it cannot rot). The harness token may create and replace but not delete, so it
+has to be removed from the store UI.
 
 The deck is **generated**, not hand-edited. Every figure is recomputed from the
 atlas's published artifacts and every screenshot is taken by a script here, so
