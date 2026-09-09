@@ -17,7 +17,12 @@ const ASOF = '2026-09-09';
 // Point the live embeds at a local atlas to verify the chain end to end:
 //   ATLAS=http://localhost:3411 node build-deck.mjs
 // Absent, the deck is built against the real hosts, which is what ships.
-const ATLAS = process.env.ATLAS || 'https://mobilitetsatlas.dk';
+// The embed route ships to staging first (dk-mobility merges features there and
+// promotes to production separately), and byvisning's city artifact is staging-
+// only anyway — so the live surfaces point at staging until a promotion puts
+// /embed on mobilitetsatlas.dk. The embed surface carries no chrome, so nothing
+// on it says "Testversion"; the difference is the data edition, not the look.
+const ATLAS = process.env.ATLAS || 'https://staging.mobilitetsatlas.dk';
 const ATLAS_STAGING = process.env.ATLAS || 'https://staging.mobilitetsatlas.dk';
 const EDITION = 'Edition 0.4.0 · 22 August 2026';
 
@@ -587,7 +592,7 @@ slides.push({
       { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1',
         link: 'state-how-to-read' }),
     text('live-note', 528, 616, 656, 44,
-      'mobilitetsatlas.dk/en/embed/kommune/aarhus  ·  CC BY-SA 4.0',
+      'mobilitetsatlas.dk/en/kommune/aarhus  ·  CC BY-SA 4.0',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', align: 'right', valign: 'middle',
         lh: 1.3, role: 'kicker' }),
   ],
@@ -675,7 +680,7 @@ slides.push({
       url: `${ATLAS}/en/udforsk?x=families_with_car_pct`, live: true,
       view: 'asset:view-explore' },
     text('exp-live-note', 96, 646, 1088, 28,
-      'mobilitetsatlas.dk/en/udforsk?x=families_with_car_pct  ·  ←  back',
+      'mobilitetsatlas.dk/en/udforsk  ·  ←  back',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', valign: 'middle', lh: 1.3,
         role: 'kicker' }),
     rect('exp-dismiss', 0, 640, 1280, 80, 'rgba(0,0,0,0)', { link: 'explore' }),

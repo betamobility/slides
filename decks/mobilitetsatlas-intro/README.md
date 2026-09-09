@@ -7,16 +7,13 @@ the first time.
 **Published:** <https://decks.betamobility.ai/d/ExgV4CeniH> (behind Access,
 `@betamobility.io`).
 
-**Live review copy:** <https://decks.betamobility.ai/d/49pX778ohx> — the same
-deck built against the PR preview of `betamobility/dk-mobility#230`, so its
-maps run today. The shipping deck above points at `mobilitetsatlas.dk` and
-`staging.mobilitetsatlas.dk`, where `/embed/kommune/<slug>` does not exist until
-that PR is deployed; **until then those two slides frame a 404**, and the shell
-cannot fall back to the static view because a 404 page fires `load`, not
-`error`. Rebuild and re-publish the shipping deck once the route is live, and
-delete the review copy — its preview URL dies with the branch. Re-publish a rebuild in place with `PUT
-/api/harness/decks/ExgV4CeniH` — a fresh `POST` makes a second deck with a new
-link, which is not what you want once the link has been shared.
+**Live surfaces point at staging.** `dk-mobility` merges features to `staging`
+and promotes to production separately, and byvisning's city artifact is
+staging-only regardless — so the three live embeds frame
+`staging.mobilitetsatlas.dk`. The embed route carries no chrome, so nothing on
+it reads "Testversion"; the difference from production is the data edition, not
+the look. Repoint `ATLAS` in `build-deck.mjs` once `/embed/kommune/<slug>` is
+promoted to `mobilitetsatlas.dk`.
 
 The deck is **generated**, not hand-edited. Every figure is recomputed from the
 atlas's published artifacts and every screenshot is taken by a script here, so
