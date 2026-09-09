@@ -4,6 +4,11 @@
 presenter Robert Martin · audience: Danish municipalities meeting the atlas for
 the first time.
 
+**Published:** <https://decks.betamobility.ai/d/ExgV4CeniH> (behind Access,
+`@betamobility.io`). Re-publish a rebuild in place with `PUT
+/api/harness/decks/ExgV4CeniH` — a fresh `POST` makes a second deck with a new
+link, which is not what you want once the link has been shared.
+
 The deck is **generated**, not hand-edited. Every figure is recomputed from the
 atlas's published artifacts and every screenshot is taken by a script here, so
 the deck can be rebuilt when the atlas publishes a new edition.
@@ -39,7 +44,7 @@ mobilitetsatlas.dk/en/metode.
 
 ## Two things to know before rebuilding
 
-**Live embeds are off, deliberately.** Bento sandboxes an embed's iframe without
+**Live embeds are off, deliberately.** Beta Slides sandboxes an embed's iframe without
 `allow-same-origin`; the atlas reads `document.cookie` at boot, which throws in
 an opaque origin, and the frame renders "This page couldn't load". The shell only
 restores the static view on an `error` event, and a crashed-but-loaded page fires
@@ -61,4 +66,4 @@ the six `beta-*` layouts — and since the atlas inlines Beta's tokens verbatim
 addition is the A–G ramp, which is data-encoding colour rather than decoration,
 so it is written as literals from the app's own `SATURATED_GRADE_HEX` (the ramp
 on municipality pages, and the one in these screenshots) and carries no
-`themeRefs`. Bento's palette has twelve fixed slots and no room for seven more.
+`themeRefs`. The palette has twelve fixed slots and no room for seven more.

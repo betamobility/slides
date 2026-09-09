@@ -1,5 +1,5 @@
 // Does the live embed actually boot in present mode, or does the deck fall back
-// to the static view? The Bento shell layers a SANDBOXED iframe (no
+// to the static view? The Beta Slides shell layers a SANDBOXED iframe (no
 // allow-same-origin) over the view, which gives the framed page an opaque
 // origin — and the atlas touches localStorage in its theme pre-paint script and
 // in mapbox. If that throws, the frame dies and the view shows. Either outcome

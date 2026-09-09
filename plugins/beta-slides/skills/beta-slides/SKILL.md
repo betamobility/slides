@@ -104,6 +104,51 @@ editing an existing deck, never regenerate `docId`.
 
    It writes `<Topic>.pptx` beside the deck and prints the report.
 6. Write back the `#bento-doc` block, or return the replacement JSON.
+7. **Publish to the deck store and hand back the link.** A path on someone's
+   disk is not a delivered deck. See below.
+
+## Publishing — the deck store is the deliverable
+
+`https://decks.betamobility.ai` keeps decks in R2 behind Cloudflare Access and
+serves them unchanged, so a link opens the real, editable deck for anyone on
+`@betamobility.io`. **Finish every deck by publishing it and giving the user the
+URL**, not a file path. Publish without being asked; that is what the store is
+for. The exception is a deck the user said is throwaway, or one whose content
+they have flagged as not for the shared store.
+
+Use the harness endpoint with the service token in 1Password
+(*Development → “Cloudflare Access service token beta-decks-harness”*):
+
+```bash
+CFID=$(op read "op://Development/Cloudflare Access service token beta-decks-harness/username")
+CFSECRET=$(op read "op://Development/Cloudflare Access service token beta-decks-harness/credential")
+
+# first publish → 201 {"id","url"}
+curl -s -X POST https://decks.betamobility.ai/api/harness/decks \
+  -H "CF-Access-Client-Id: $CFID" -H "CF-Access-Client-Secret: $CFSECRET" \
+  -H "Content-Type: text/html" --data-binary @"<Topic>.bento.html"
+
+# every later rebuild → replace IN PLACE, same link
+curl -s -X PUT https://decks.betamobility.ai/api/harness/decks/<id> \
+  -H "CF-Access-Client-Id: $CFID" -H "CF-Access-Client-Secret: $CFSECRET" \
+  -H "Content-Type: text/html" --data-binary @"<Topic>.bento.html"
+```
+
+- **Record the id** (in the deck's README, or tell the user) and `PUT` to it
+  afterwards. A second `POST` creates a second deck on a new link, which strands
+  whatever link was already shared.
+- **A 201 is the only confirmation you get, and it is enough to report — but do
+  not claim you loaded the page.** The service token may create and replace,
+  never list or read, so `GET /d/:id` answers 302 to the Access login even with
+  the token. That is the store working as designed. The worker validates the
+  document block on write and answers 400 (`size`, `block`, `json`, `format`) if
+  the file is malformed, so a 201 means the deck is well-formed and stored. Say
+  exactly that, and that the user opens the link under their own SSO.
+- **The link is Access-gated**, so it is safe to paste into Slack or a calendar
+  invite for colleagues; it is not a public link and will not open for a client.
+  A client needs the file, a PDF, or the PPTX.
+- A deck carrying live-session keys should not go to the store — run the collab
+  check above first.
 
 ## Self-audit (Beta additions to upstream's list)
 
@@ -114,3 +159,5 @@ editing an existing deck, never regenerate `docId`.
 - [ ] `meta.author` set; tokens, not literals, in title slides and footers?
 - [ ] Every fetched figure has a `Data as of` kicker on its slide?
 - [ ] PPTX exported and its degrade report reported to the user?
+- [ ] Published to decks.betamobility.ai, and the user handed the link (not a
+      file path)? On a rebuild, `PUT` to the existing id rather than `POST`?

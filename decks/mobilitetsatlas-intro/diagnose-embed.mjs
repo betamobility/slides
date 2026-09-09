@@ -1,4 +1,4 @@
-// Why does the atlas crash inside Bento's sandboxed embed frame? Two candidate
+// Why does the atlas crash inside the sandboxed embed frame? Two candidate
 // causes: (a) the sandbox has no allow-same-origin, so the framed page has an
 // opaque origin and localStorage throws — the atlas touches it in its theme
 // pre-paint script; (b) something about the file:// parent. (b) is testable by
@@ -11,7 +11,7 @@ const msgs = [];
 page.on('console', (m) => msgs.push(`[${m.type()}] ${m.text().slice(0, 220)}`));
 page.on('pageerror', (e) => msgs.push(`[pageerror] ${e.message.slice(0, 220)}`));
 
-// An https parent, framing exactly as Bento does.
+// An https parent, framing exactly as the shell does.
 await page.goto('https://example.com/', { waitUntil: 'domcontentloaded' });
 await page.evaluate(() => {
   const f = document.createElement('iframe');

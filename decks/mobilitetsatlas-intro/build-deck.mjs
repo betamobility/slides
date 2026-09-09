@@ -20,7 +20,7 @@ const EDITION = 'Edition 0.4.0 · 22 August 2026';
 // Palette. The atlas ships Beta's tokens verbatim (site/app/globals.css is the
 // inlined token file), so the template's palette IS the atlas palette and is
 // left alone. What the atlas adds is the A–G ramp, and that is DATA-ENCODING
-// colour: it means a grade, it is not decoration, and Bento's palette has a
+// colour: it means a grade, it is not decoration, and the palette has a
 // fixed twelve slots with no room for seven more. So grade fills are literals
 // from the app's own SATURATED_GRADE_HEX (the ramp on municipality pages, which
 // is the ramp in this deck's screenshots) and carry no themeRefs.
@@ -552,7 +552,7 @@ slides.push({
   notes: 'This is your municipality\'s page, and the URL is on the slide — open it in a browser tab if you want to drive it live. Three things to point at: the detailed map with cell-level grades, the five-year trend from Statistics Denmark, and "Ask about mobility", which answers from your own municipal and regional plans with the source documents linked. All of it CC BY-SA: screenshot it, quote it, put it in your own papers.',
   elements: [
     title('Every municipality has a page'),
-// LIVE FRAMING IS OFF, DELIBERATELY. Bento sandboxes an embed's iframe without
+// LIVE FRAMING IS OFF, DELIBERATELY. Beta Slides sandboxes the embed iframe without
 // `allow-same-origin`, and mobilitetsatlas.dk reads document.cookie during boot,
 // which throws in an opaque origin: the frame loads, the app dies, and the
 // viewer gets a white "This page couldn't load" panel. The shell only restores
