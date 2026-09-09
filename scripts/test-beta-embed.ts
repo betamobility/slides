@@ -66,6 +66,7 @@ const repoFile = (rel: string): string => {
 // every other check instead of failing at bundle time on a missing export.
 const render = await import('../slides/src/render.ts') as Record<string, unknown>
 const liveFrameAllowed = render.liveFrameAllowed as ((el: unknown) => boolean) | undefined
+const frameOriginTrusted = render.frameOriginTrusted as ((url: string) => boolean) | undefined
 
 const VIEW = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="10" height="10"/></svg>'
 
@@ -366,6 +367,47 @@ async function runBrowserSection(chrome: string) {
   } finally {
     server.close()
     fs.rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+console.log('\nthe trusted-frame allowlist')
+{
+  // WHY THIS EXISTS. Without `allow-same-origin` a framed page has an OPAQUE
+  // origin, and an opaque origin cannot start a worker from a `blob:` URL —
+  // which is how Mapbox GL runs. Measured against the real atlas embed: zero
+  // canvases under the default flags, one with the flag added. So a fork that
+  // frames its own web apps has to grant it, and the grant comes from the
+  // SHELL, never from the document, which is untrusted input.
+  if (!frameOriginTrusted) {
+    console.log('  ⚠ SKIPPED, render.ts exports no frameOriginTrusted')
+  } else {
+    const { configureApp } = await import('../kernel/src/app.ts')
+    const configure = (trustedFrameOrigins?: readonly string[]) => configureApp({
+      appId: 'beta-slides', appName: 'beta/slides',
+      manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',
+      ...(trustedFrameOrigins ? { trustedFrameOrigins } : {}),
+    })
+
+    configure(['https://mobilitetsatlas.dk', 'https://staging.mobilitetsatlas.dk'])
+    ok(frameOriginTrusted('https://mobilitetsatlas.dk/embed/kommune/aarhus'),
+      'a listed origin is trusted, whatever the path')
+    ok(frameOriginTrusted('https://staging.mobilitetsatlas.dk/en/embed/kommune/koebenhavn?view=city'),
+      'a query string and the locale mirror do not change the origin')
+    ok(!frameOriginTrusted('https://bento.page/anything'), 'an unlisted origin is NOT trusted')
+
+    // The suffix trap. `endsWith` would say yes to all three, and each one
+    // hands same-origin access to somebody else's server.
+    ok(!frameOriginTrusted('https://mobilitetsatlas.dk.evil.com/'),
+      'a host that merely ENDS with a listed one is not trusted')
+    ok(!frameOriginTrusted('https://evil.com/?x=https://mobilitetsatlas.dk'),
+      'a listed origin inside a query string is not trusted')
+    ok(!frameOriginTrusted('http://mobilitetsatlas.dk/'),
+      'the scheme is part of the origin: http is not the listed https')
+    ok(!frameOriginTrusted('not a url'), 'an unparseable url is not trusted')
+
+    configure()
+    ok(!frameOriginTrusted('https://mobilitetsatlas.dk/'),
+      'with no allowlist configured, nothing is trusted')
   }
 }
 
