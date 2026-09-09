@@ -194,7 +194,7 @@ const slides = [];
 slides.push({
   id: 'cover', background: CHARCOAL, transition: 'none',
   themeRefs: { background: 'tx1' },
-  notes: 'Welcome. This is Danmarks Mobilitetsatlas: one comparable A–G mobility grade for every place in Denmark. Twenty minutes: what the grade measures, how it is calculated, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G.',
+  notes: 'Danmarks Mobilitetsatlas gives every place in Denmark one comparable A–G grade for mobility. Twenty minutes: what the grade measures, how we calculate it, and what it says about your municipality. The map behind me is the 29 municipalities graded E, F or G.',
   elements: [
     { ...base('hero-map', 0, 0, 1280, 720), type: 'image', src: 'asset:cover-map',
       fit: 'cover', radius: 0,
@@ -207,7 +207,7 @@ slides.push({
     text('beta-title-h', 96, 306, 940, 180, 'Danmarks\nMobilitetsatlas'.replace('\n', '<br>'),
       { size: 72, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', lh: 1.05, role: 'title' }),
     text('beta-title-sub', 96, 500, 820, 80,
-      'One comparable A–G grade for how freely people can move — with and without a car.',
+      'One comparable A–G grade for how freely people can move, with and without a car.',
       { size: 24, color: SUBTLE, ref: 'accent5', lh: 1.4, role: 'subtitle' }),
     text('beta-title-byline', 96, 620, 900, 28, '{{company}} · {{author}} · {{date}}',
       { size: 13, family: MONO, color: SUBTLE, ref: 'accent5', valign: 'middle', lh: 1.3,
@@ -219,9 +219,9 @@ slides.push({
 slides.push({
   id: 'backbone', background: CREAM, transition: 'fade',
   themeRefs: { background: 'bg1' },
-  notes: 'Start where every mobility conversation starts: the network. Denmark has a serious public-transport backbone — these are the counted figures from the Rejseplanen feed, not estimates. But a stop outside your door is not the same as being able to get to work, school or the doctor. That gap is what the atlas measures: not what is scheduled, but where you can actually get to.',
+  notes: 'Denmark has a real public transport backbone. These are counted figures from the Rejseplanen feed, not estimates. But a stop outside your door is not the same as getting to work, school or the doctor. That gap is what the atlas measures.',
   elements: [
-    title('Mobility is not routes. It is where you can get to.'),
+    title('Denmark has the network. The question is what it reaches.'),
     ...[['36,204', 'stops', 'n-stops'], ['1,574', 'routes', 'n-routes'], ['20', 'operators', 'n-ops']]
       .flatMap(([v, label, id], i) => {
         const x = 96 + i * 374;
@@ -239,7 +239,7 @@ slides.push({
       'That is the supply side, and it is the number most reports stop at.',
       { size: 24, lh: 1.5, role: 'body', ref: 'tx1', fx: { enter: 'fade-up', order: 3 } }),
     text('backbone-body-2', 656, 408, 528, 200,
-      'But a departure board is not access. What decides whether a car is a choice is how much of everyday life you can reach — work, groceries, school, health, social — in a reasonable travel time.',
+      'A departure board is not access. What decides whether a car is a choice is how much of everyday life you can reach in a reasonable travel time: work, groceries, school, health, social.',
       { size: 22, color: MUTED, ref: 'accent4', lh: 1.5, role: 'body',
         fx: { enter: 'fade-up', order: 4 } }),
     asOf('backbone-asof', 96, 596, `Beta · Rejseplanen GTFS (CC BY 4.0) · Data as of ${ASOF}`),
@@ -251,11 +251,11 @@ slides.push({
 slides.push({
   id: 'grade-scale', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'So we built one comparable grade. Two measured reaches: public-transport quality — how much of everyday life you reach without a car — and transport choice, how much further the car gets you. Their average is mobility freedom, 0 to 100, and that becomes a letter. The letter is the thing people remember; the score is the thing you can move.',
+  notes: 'One comparable grade, built from two measured reaches. Public transport quality is how much of everyday life you reach without a car. Transport choice is how much further the car gets you. Their average is mobility freedom, 0 to 100, and that becomes the letter. People remember the letter. The score is the part you can move.',
   elements: [
     title('One comparable grade, A to G'),
     text('grade-lede', 96, 186, 1088, 60,
-      'Mobility freedom, 0 to 100, for every place in Denmark — then a letter.',
+      'Mobility freedom, 0 to 100, for every place in Denmark. Then a letter.',
       { size: 24, color: MUTED, ref: 'accent4', lh: 1.4, role: 'body' }),
     ...ramp({ y: 288 }),
     text('ramp-hi', 96, 378, 400, 28, 'high mobility freedom',
@@ -277,7 +277,7 @@ slides.push({
 slides.push({
   id: 'efg', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'Watch the scale: the three weakest bands step forward. Twenty-nine of the ninety-eight municipalities are graded E, F or G — 1.15 million people, about one Dane in five, living somewhere the car is not really a choice. If your municipality is in that group, this is the slide that matters; if it is not, some of your neighbours are.',
+  notes: 'Watch the scale: the three weakest bands step forward. Twenty-nine of the ninety-eight municipalities are graded E, F or G. That is 1.15 million people, about one Dane in five, living where the car is not really a choice. If your municipality is in that group, this is your slide. If it is not, some of your neighbours are.',
   elements: [
     title('Nearly one municipality in three sits in E, F or G'),
     ...ramp({
@@ -299,7 +299,7 @@ slides.push({
         ];
       }),
     text('efg-body', 96, 492, 1088, 76,
-      'In the lowest bands, walking and public transport cover only a small part of everyday life, and the car is in practice necessary — for everyone, including the people who cannot drive.',
+      'In the lowest bands, walking and public transport cover only a small part of everyday life. The car is in practice necessary, including for the people who cannot drive.',
       { size: 22, color: MUTED, ref: 'accent4', lh: 1.5, role: 'body',
         fx: { enter: 'fade-up', order: 3 } }),
     asOf('efg-asof', 96, 586, `Beta · league table, ${EDITION} · Data as of ${ASOF}`),
@@ -311,7 +311,7 @@ slides.push({
 slides.push({
   id: 'groups', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'This is the structural finding, and it is the one that reframes the conversation. Grouped by Statistics Denmark\'s own municipal classification, public-transport quality falls from 80 in the capital municipalities to 25 in the rural ones — a factor of 3.2. Population-weighted, so it is people, not map area. No municipality chose this; it is what density and distance do. But it does mean a national average is useless to you.',
+  notes: 'Grouped by Statistics Denmark\'s own municipal classification, public transport quality falls from 80 in the capital municipalities to 25 in the rural ones. A factor of 3.2, population-weighted, so this counts people rather than map area. No municipality chose this. It is what density and distance do. It does mean a national average is useless to you.',
   elements: [
     title('Five kinds of municipality, five kinds of service'),
     // Vertical bars: charts-lite reads a CATEGORY x-axis and a VALUE y-axis. A
@@ -335,7 +335,7 @@ slides.push({
       { size: 12, family: MONO, color: MUTED, ref: 'accent4', align: 'center', lh: 1.2,
         role: 'kicker' }),
     text('groups-body', 752, 200, 432, 300,
-      'Public-transport quality, population-weighted, by Statistics Denmark\'s municipal grouping.<br><br>The capital municipalities score <b>80.1</b>. The rural municipalities score <b>25.2</b> — a difference of <b>3.2 times</b>.',
+      'Public transport quality, population-weighted, by Statistics Denmark\'s municipal grouping.<br><br>The capital municipalities score 80.1. The rural municipalities score 25.2. A difference of 3.2 times.',
       { size: 21, lh: 1.55, role: 'body', ref: 'tx1' }),
     rect('groups-mark', 752, 520, 432, 64, BG2, { ref: 'accent6', radius: 8 }),
     text('groups-mark-t', 776, 520, 384, 64,
@@ -350,7 +350,7 @@ slides.push({
 slides.push({
   id: 'sec-method', background: CHARCOAL, transition: 'morph',
   themeRefs: { background: 'tx1' },
-  notes: 'Before any municipality accepts a letter grade, it wants to know how the letter was produced. So: the method, in four steps, and then the parts we do not yet capture.',
+  notes: 'Before any municipality accepts a letter grade, it wants to know how the letter was produced. Four steps, then the parts we do not yet capture.',
   elements: [
     text('beta-kicker', 96, 272, 640, 32, 'PART 2',
       { size: 14, family: MONO, color: '#40916C', ref: 'accent2', valign: 'middle', lh: 1.3,
@@ -358,7 +358,7 @@ slides.push({
     text('beta-title-h', 96, 312, 960, 160, 'How the grade is calculated',
       { size: 60, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', lh: 1.05, role: 'title' }),
     text('beta-title-sub', 96, 488, 900, 76,
-      'Same method, same sources, every municipality — which is what makes the comparison fair.',
+      'Same method, same sources, every municipality. That is what makes the comparison fair.',
       { size: 22, color: SUBTLE, ref: 'accent5', lh: 1.4, role: 'subtitle' }),
     ...footer(true),
   ],
@@ -368,13 +368,13 @@ slides.push({
 const STEPS = [
   ['1', 'Two measured reaches', 'Rejseplanen timetables and the OpenStreetMap road network: what you reach by public transport, and by car. Trips over 90 minutes do not count.'],
   ['2', 'Everyday destinations', 'Five kinds: workplaces, groceries, schools, health, social. The first destinations within reach count most.'],
-  ['3', 'Two scores', 'Public transport quality: how much of everyday life you reach without a car. Transport choice: how much further the car gets you.'],
+  ['3', 'Two scores', 'Public transport quality is how much of everyday life you reach without a car. Transport choice is how much further the car gets you.'],
   ['4', 'The grade', 'Their average is mobility freedom, and that determines the letter, A to G.'],
 ];
 slides.push({
   id: 'method', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'About 75,000 points across all 98 municipalities — every neighbourhood in the country. For each one we compute what is reachable, twice: once by public transport, once by car. Over 20 billion journeys in total. Destinations are scored on a saturating curve, so the tenth supermarket adds less than the first. Click the box at the bottom if anyone asks what is missing — and someone always does, which is why we put it on a slide.',
+  notes: 'About 75,000 points across all 98 municipalities, roughly every neighbourhood in the country. For each one we compute what is reachable twice, once by public transport and once by car. Over 20 billion journeys in total. Destinations score on a saturating curve, so the tenth supermarket adds less than the first. Click the box at the bottom if anyone asks what is missing. Someone always does, which is why it has its own slide.',
   elements: [
     title('From analysis to grade'),
     ...STEPS.flatMap(([n, head, body], i) => {
@@ -418,7 +418,7 @@ const LIMITS = [
 slides.push({
   id: 'state-limits', stateOf: 'method', transition: 'morph', name: 'Limits',
   background: CREAM, themeRefs: { background: 'bg1' },
-  notes: 'Say this one plainly. The two that matter most to a Danish municipality are Flextrafik and the bicycle — both work against exactly the municipalities that score lowest. Press ← or click anywhere to go back.',
+  notes: 'Say this one plainly. The two that matter most to a Danish municipality are Flextrafik and the bicycle. Both work against exactly the municipalities that score lowest. Press ← or click anywhere to go back.',
   elements: [
     title('What the atlas does not capture (yet)'),
     ...LIMITS.flatMap(([head, body], i) => {
@@ -448,7 +448,7 @@ const BANDS = [
 slides.push({
   id: 'scale-table', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'The whole distribution on one slide. Note the shape: it is not a bell curve. Denmark is bimodal — a large A group and a large D group, with very little in between. Roskilde on the right is the worked example from the method page: 70.7 and 66.3 average to 68.5, which is a B.',
+  notes: 'The whole distribution on one slide. The shape is not a bell curve. Denmark is bimodal: a large A group, a large D group, very little in between. Roskilde on the right is the worked example from the method page. 70.7 and 66.3 average to 68.5, which is a B.',
   elements: [
     title('The A–G scale, and where Denmark sits'),
     { ...base('bands-table', 96, 192, 624, 400), type: 'table', header: true,
@@ -498,7 +498,7 @@ slides.push({
 slides.push({
   id: 'sec-kommune', background: CHARCOAL, transition: 'morph',
   themeRefs: { background: 'tx1' },
-  notes: 'Now the part you came for: what this looks like for one municipality. Aarhus as the worked example, then the live site, then street level in København.',
+  notes: 'What this looks like for one municipality. Aarhus as the worked example, then the live site, then street level in København.',
   elements: [
     text('beta-kicker', 96, 272, 640, 32, 'PART 3',
       { size: 14, family: MONO, color: '#40916C', ref: 'accent2', valign: 'middle', lh: 1.3,
@@ -516,7 +516,7 @@ slides.push({
 slides.push({
   id: 'aarhus', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'Aarhus: 68.6, a B, twenty-fourth of ninety-eight. Read the two pillars, not just the letter — 70.5 for public-transport quality against 66.7 for transport choice. That balance is unusual and it is good news: it means public transport genuinely competes with the car here. In most municipalities the second number is far larger than the first, and that gap IS the car dependency.',
+  notes: 'Aarhus scores 68.6, a B, twenty-fourth of ninety-eight. Read the two pillars as well as the letter: 70.5 for public transport quality against 66.7 for transport choice. That balance is unusual, and it is good news. Public transport competes with the car here. In most municipalities the second number is far larger than the first, and that gap is the car dependency.',
   elements: [
     title('Aarhus, at municipal level'),
     ...ramp({
@@ -543,7 +543,7 @@ slides.push({
           { size: 14, family: MONO, color: MUTED, ref: 'accent4', lh: 1.35, role: 'kicker' }),
       ]),
     text('aa-note', 688, 424, 496, 90,
-      'The two pillars sit close together. Public transport genuinely competes with the car here — in most municipalities the second number is far larger than the first.',
+      'The two pillars sit close together. Public transport competes with the car here. In most municipalities the second number is far larger than the first.',
       { size: 17, color: MUTED, ref: 'accent4', lh: 1.5, role: 'body',
         fx: { enter: 'fade-up', order: 3 } }),
     rect('aa-facts', 96, 460, 464, 128, BG2, { ref: 'accent6', radius: 8 }),
@@ -559,7 +559,7 @@ slides.push({
 slides.push({
   id: 'aarhus-live', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'This map is live in the slide — drag it, zoom, toggle the routes and the frequency. It is the atlas itself, not a screenshot. Three things to point at: the detailed map with cell-level grades, the five-year trend from Statistics Denmark, and "Ask about mobility", which answers from your own municipal and regional plans with the source documents linked. All of it CC BY-SA: screenshot it, quote it, put it in your own papers.',
+  notes: 'This map is live in the slide. Drag it, zoom, toggle the routes and the frequency. Three things to point at: the detailed map with cell-level grades, the five-year trend from Statistics Denmark, and "Ask about mobility", which answers from your own municipal and regional plans with the source documents linked. All of it CC BY-SA: screenshot it, quote it, put it in your own papers.',
   elements: [
     title('Aarhus, live on the map'),
 // LIVE MAPS. These three embeds run the real atlas, not a picture of it.
@@ -611,7 +611,7 @@ const BAND_TEXT = {
 slides.push({
   id: 'state-how-to-read', stateOf: 'aarhus-live', transition: 'morph', name: 'How to read A–G',
   background: CREAM, themeRefs: { background: 'bg1' },
-  notes: 'The band descriptions are published, not improvised — they come out of the league table itself, so they cannot drift from the thresholds.',
+  notes: 'The band descriptions come out of the published league table itself, so they cannot drift from the thresholds.',
   elements: [
     title('How to read A–G'),
     ...GRADES.flatMap((g, i) => {
@@ -636,7 +636,7 @@ slides.push({
 slides.push({
   id: 'explore', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'Every municipality, one dot, coloured by grade. Horizontally: the share of families owning a car, from Statistics Denmark. Vertically: mobility freedom. The correlation is minus 0.66 across all 98 — strong, but not destiny, and the spread at any given car ownership is the interesting part. Say the caveat out loud: a pattern between two numbers is not a cause. Click through for the live version where you can swap the horizontal axis.',
+  notes: 'Every municipality, one dot, coloured by grade. Horizontally the share of families owning a car, from Statistics Denmark. Vertically mobility freedom. The correlation is minus 0.66 across all 98, and the spread at any given level of car ownership is the interesting part. Say the caveat out loud: a pattern between two numbers is not a cause. Click through for the live version, where the horizontal axis is a dropdown.',
   elements: [
     title('Compare municipalities'),
     // Legend on TOP: at the bottom it landed on the x-axis labels. The grade
@@ -659,7 +659,7 @@ slides.push({
     text('exp-r-l', 784, 264, 400, 28, 'n = 98 municipalities',
       { size: 14, family: MONO, color: MUTED, ref: 'accent4', lh: 1.3, role: 'kicker' }),
     text('exp-body', 784, 312, 400, 240,
-      'Each dot is one municipality, coloured by its grade. Vertical: mobility freedom. Horizontal: the share of families with a car.<br><br>Where public transport reaches less, more families keep a car — but the spread at any given level is wide, and that spread is where policy lives.<br><br><b>A pattern between two numbers is not a cause.</b>',
+      'Each dot is one municipality, coloured by its grade. Vertical: mobility freedom. Horizontal: the share of families with a car.<br><br>Where public transport reaches less, more families keep a car. The spread at any given level is wide, and that spread is where policy lives.<br><br>A pattern between two numbers is not a cause.',
       { size: 16, color: MUTED, ref: 'accent4', lh: 1.55, role: 'body' }),
     rect('exp-hit', 784, 568, 400, 44, BG2, { ref: 'accent6', radius: 8, link: 'state-explore' }),
     text('exp-label', 804, 568, 360, 44, '→  Every measure on the site',
@@ -673,7 +673,7 @@ slides.push({
 slides.push({
   id: 'state-explore', stateOf: 'explore', transition: 'morph', name: 'Explore, live',
   background: CREAM, themeRefs: { background: 'bg1' },
-  notes: 'This one is live too — the horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab if the room starts asking "what about X".',
+  notes: 'Live as well. The horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab when the room starts asking about one specific number.',
   elements: [
     title('Explore, live'),
     { ...base('explore-embed', 96, 176, 1088, 456), type: 'embed', app: 'web',
@@ -691,7 +691,7 @@ slides.push({
 slides.push({
   id: 'byvisning', background: CHARCOAL, transition: 'fade',
   themeRefs: { background: 'tx1' },
-  notes: 'The last zoom level: København, street by street. Press Byvisning on any of the four largest municipalities and the map tilts into the buildings, with the day\'s scheduled services moving across it — the planned timetable, not live vehicles, and it says so on the panel. The green wash on the massing is the same A–G scale you have seen all deck, now at building resolution. This is where a planner stops nodding at a national average and starts pointing at a street.',
+  notes: 'The last zoom level: København, street by street. Press Byvisning on any of the four largest municipalities and the map tilts into the buildings, with the day\'s scheduled services moving across it. Planned timetable, not live vehicles, and the panel says so. The green wash on the massing is the same A–G scale as the rest of the deck, now at building resolution. This is where a planner stops nodding at a national average and starts pointing at a street.',
   elements: [
     { ...base('by-embed', 96, 168, 1088, 434), type: 'embed', app: 'web',
       url: `${ATLAS_STAGING}/en/embed/kommune/koebenhavn?view=city`, live: true,
@@ -700,7 +700,7 @@ slides.push({
       { size: 40, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', valign: 'middle',
         lh: 1.1, role: 'title' }),
     text('by-note', 96, 618, 700, 56,
-      'This map is <b>live</b>: drag it, zoom in, and the buildings rise as the day\'s scheduled services move across them.',
+      'This map is live. Drag it, zoom in, and the buildings rise as the day\'s scheduled services move across them.',
       { size: 15, color: SUBTLE, ref: 'accent5', lh: 1.45, role: 'body' }),
     text('by-src', 812, 618, 372, 56, 'staging.mobilitetsatlas.dk<br>planned timetable · not live vehicles',
       { size: 13, family: MONO, color: SUBTLE, ref: 'accent5', align: 'right', lh: 1.5,
@@ -710,7 +710,7 @@ slides.push({
 
 // 14 — what moves the grade --------------------------------------------------
 const LEVERS = [
-  ['Shorter travel times', 'to everyday destinations — the single most direct lever.'],
+  ['Shorter travel times', 'to everyday destinations. The most direct lever there is.'],
   ['Fewer or faster interchanges', 'a connection saved counts twice: once each way.'],
   ['Service where there was none', 'the largest gains are at the bottom of the scale.'],
   ['Stops closer to housing', 'the walk to the stop is part of the journey time.'],
@@ -720,7 +720,7 @@ const LEVERS = [
 slides.push({
   id: 'improve', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'This is the slide to leave on screen during questions. Two of these six are not transport measures at all — housing near destinations, and new destinations — which is the argument for having the planning department in the room when the timetable is discussed. The grade is recomputed each edition, so a change in service shows up in the letter.',
+  notes: 'The slide to leave on screen during questions. Two of these six are not transport measures at all: housing near destinations, and new destinations. That is the argument for having the planning department in the room when the timetable is discussed. The grade is recomputed each edition, so a change in service shows up in the letter.',
   elements: [
     title('What moves the grade'),
     ...LEVERS.flatMap(([head, body], i) => {
@@ -744,7 +744,7 @@ slides.push({
 slides.push({
   id: 'close', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'Three ways in: look up your own municipality tonight, send us the plans we have missed, or sit down with us and go through your grade cell by cell. The atlas is CC BY-SA — take it, quote it, put it in your own papers.',
+  notes: 'Three ways in: look up your own municipality tonight, send us the plans we have missed, or sit down with us and go through your grade cell by cell. The atlas is CC BY-SA. Take it, quote it, put it in your own papers.',
   elements: [
     ellipse('beta-orbit', 1000, 96, 120, 120, SAGE, { ref: 'accent1',
       fx: { loop: { type: 'motion-path', path: 'M0,0 C40,-30 80,30 0,60 C-60,80 -40,-40 0,0',
@@ -755,7 +755,7 @@ slides.push({
       'Look up your municipality on mobilitetsatlas.dk · Send us the plans we have missed · Or go through your grade with us, cell by cell.',
       { size: 22, color: MUTED, ref: 'accent4', lh: 1.5, role: 'subtitle' }),
     text('close-licence', 96, 536, 800, 56,
-      'Danmarks Mobilitetsatlas is published under CC BY-SA 4.0 — screenshot it, quote it, build on it, with credit to Beta Mobility.',
+      'Danmarks Mobilitetsatlas is published under CC BY-SA 4.0. Screenshot it, quote it, build on it, with credit to Beta Mobility.',
       { size: 15, color: SUBTLE, ref: 'accent5', lh: 1.5, role: 'body' }),
     text('beta-title-byline', 96, 620, 900, 28, '{{company}} · {{author}} · {{date}}',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', valign: 'middle', lh: 1.3,
