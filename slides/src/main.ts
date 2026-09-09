@@ -52,15 +52,6 @@ configureApp({
   // in place (src/beta/store.ts installs a host at boot); a deck on file://
   // hands its document to <storeHost>/new through the Share panel.
   storeHost: 'https://decks.betamobility.ai',
-  // Beta-owned web apps a deck may frame LIVE, with same-origin access. An
-  // opaque origin cannot start a `blob:` worker, which is how Mapbox GL runs,
-  // so Danmarks Mobilitetsatlas' maps render nothing under the default flags.
-  // These are origins the fork controls; anything else a deck names stays fully
-  // sandboxed. See AppConfig.trustedFrameOrigins.
-  trustedFrameOrigins: [
-    'https://mobilitetsatlas.dk',
-    'https://staging.mobilitetsatlas.dk',
-  ],
 })
 // BETA FORK (v1.1 U3, KTD4): English-only build — pin the locale before anything renders, so a
 // German-locale browser and a stale 'bento-lang' localStorage value both render English.

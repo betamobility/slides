@@ -41,27 +41,6 @@ export interface AppConfig {
    *  is a file. A fork that hosts decks behind its own login sets this; the
    *  app decides what to do with it (the kernel only carries the value). */
   storeHost?: string
-  /**
-   * Hosts whose pages a live `embed` frame may run with `allow-same-origin`.
-   * Optional: absent, EVERY embed is fully sandboxed, which is the platform
-   * default and stays the right answer for a deck of unknown provenance.
-   *
-   * WHY IT HAS TO EXIST. A sandbox without `allow-same-origin` gives the framed
-   * document an OPAQUE origin, and an opaque origin cannot create a worker from
-   * a `blob:` URL or touch `document.cookie` / storage. Mapbox GL does the
-   * first and most site chrome does the second, so a real web app in a strict
-   * frame does not degrade — it renders nothing, or dies on boot. Measured, not
-   * assumed: the same page under `allow-scripts allow-forms` produced zero
-   * canvases and under the same flags plus `allow-same-origin` produced one.
-   *
-   * WHY AN ALLOWLIST AND NOT A FLAG ON THE ELEMENT. `allow-same-origin` lets
-   * the framed page reach its own origin's storage and cookies, so granting it
-   * from the DOCUMENT would mean any deck could name any URL and have it run
-   * with that access — and a deck is untrusted input. Granting it from the
-   * SHELL, per host, means a fork can frame the apps it owns and nothing else.
-   * Entries are compared as exact origins (scheme + host + port).
-   */
-  trustedFrameOrigins?: readonly string[]
 }
 
 let config: AppConfig | null = null

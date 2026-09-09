@@ -7,18 +7,13 @@
 // The shell is the Beta insight-brief template, whose #bento-doc block carries
 // the Beta theme, the three embedded faces and the six beta-* layouts. Only the
 // document is replaced; the runtime around it is untouched.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, 'Mobilitetsatlas-introduktion.bento.html');
 const ASOF = '2026-09-09';
-// Point the live embeds at a local atlas to verify the chain end to end:
-//   ATLAS=http://localhost:3411 node build-deck.mjs
-// Absent, the deck is built against the real hosts, which is what ships.
-const ATLAS = process.env.ATLAS || 'https://mobilitetsatlas.dk';
-const ATLAS_STAGING = process.env.ATLAS || 'https://staging.mobilitetsatlas.dk';
 const EDITION = 'Edition 0.4.0 · 22 August 2026';
 
 // ---------------------------------------------------------------------------
@@ -552,33 +547,30 @@ slides.push({
 
 // 11 — Aarhus live -----------------------------------------------------------
 slides.push({
-  id: 'aarhus-live', background: CREAM, transition: 'morph',
+  id: 'aarhus-page', background: CREAM, transition: 'morph',
   themeRefs: { background: 'bg1' },
-  notes: 'This map is live in the slide — drag it, zoom, toggle the routes and the frequency. It is the atlas itself, not a screenshot. Three things to point at: the detailed map with cell-level grades, the five-year trend from Statistics Denmark, and "Ask about mobility", which answers from your own municipal and regional plans with the source documents linked. All of it CC BY-SA: screenshot it, quote it, put it in your own papers.',
+  notes: 'This is your municipality\'s page, and the URL is on the slide — open it in a browser tab if you want to drive it live. Three things to point at: the detailed map with cell-level grades, the five-year trend from Statistics Denmark, and "Ask about mobility", which answers from your own municipal and regional plans with the source documents linked. All of it CC BY-SA: screenshot it, quote it, put it in your own papers.',
   elements: [
-    title('Aarhus, live on the map'),
-// LIVE MAPS. These three embeds run the real atlas, not a picture of it.
-// `/embed/kommune/<slug>` is a route built for this: the DetailMap alone, no
-// header, no consent banner, no analytics, sized by whatever frames it.
-//
-// It needs BOTH halves. The chrome had to go because a sandboxed frame has an
-// opaque origin where `document.cookie` throws, and two chrome components read
-// it unguarded — the ordinary page dies on boot in a frame. And the shell had
-// to grant `allow-same-origin` for these origins (main.ts trustedFrameOrigins),
-// because Mapbox GL starts its worker from a `blob:` URL, which an opaque
-// origin forbids: measured, zero canvases without the flag and one with it.
-//
-// Each still carries its `view`, so offline, in print, in a thumbnail and in
-// PowerPoint the deck shows a real screenshot instead of a hole.
+    title('Every municipality has a page'),
+// LIVE FRAMING IS OFF, DELIBERATELY. Beta Slides sandboxes the embed iframe without
+// `allow-same-origin`, and mobilitetsatlas.dk reads document.cookie during boot,
+// which throws in an opaque origin: the frame loads, the app dies, and the
+// viewer gets a white "This page couldn't load" panel. The shell only restores
+// the static view on an `error` event, and a crashed-but-loaded page fires
+// `load`, so the fallback never runs. Measured both ways in
+// working/diagnose-embed.mjs: identical failure from an https parent, and a
+// clean render the moment allow-same-origin is added. So the view — a real
+// screenshot of the real page — is what these slides show, and the copy points
+// at the URL instead of promising a live surface in the slide.
     { ...base('aarhus-embed', 96, 176, 1088, 424), type: 'embed', app: 'web',
-      url: `${ATLAS}/en/embed/kommune/aarhus`, live: true,
+      url: 'https://mobilitetsatlas.dk/en/kommune/aarhus',
       view: 'asset:view-aarhus' },
     rect('how-hit', 96, 616, 400, 44, BG2, { ref: 'accent6', radius: 8, link: 'state-how-to-read' }),
     text('how-label', 116, 616, 360, 44, '→  How to read A–G',
       { size: 15, weight: 700, family: MONO, valign: 'middle', lh: 1.3, ref: 'tx1',
         link: 'state-how-to-read' }),
     text('live-note', 528, 616, 656, 44,
-      'mobilitetsatlas.dk/en/embed/kommune/aarhus  ·  CC BY-SA 4.0',
+      'mobilitetsatlas.dk/en/kommune/aarhus  ·  CC BY-SA 4.0',
       { size: 13, family: MONO, color: MUTED, ref: 'accent4', align: 'right', valign: 'middle',
         lh: 1.3, role: 'kicker' }),
   ],
@@ -595,7 +587,7 @@ const BAND_TEXT = {
   G: 'Walking and public transport cover almost none of everyday life; the car is the only real option.',
 };
 slides.push({
-  id: 'state-how-to-read', stateOf: 'aarhus-live', transition: 'morph', name: 'How to read A–G',
+  id: 'state-how-to-read', stateOf: 'aarhus-page', transition: 'morph', name: 'How to read A–G',
   background: CREAM, themeRefs: { background: 'bg1' },
   notes: 'The band descriptions are published, not improvised — they come out of the league table itself, so they cannot drift from the thresholds.',
   elements: [
@@ -614,7 +606,7 @@ slides.push({
     text('how-back', 96, 630, 700, 28, '←  back',
       { size: 14, family: MONO, color: MUTED, ref: 'accent4', valign: 'middle', lh: 1.3,
         role: 'kicker' }),
-    rect('how-dismiss', 0, 0, 1280, 720, 'rgba(0,0,0,0)', { link: 'aarhus-live' }),
+    rect('how-dismiss', 0, 0, 1280, 720, 'rgba(0,0,0,0)', { link: 'aarhus-page' }),
   ],
 });
 
@@ -659,11 +651,11 @@ slides.push({
 slides.push({
   id: 'state-explore', stateOf: 'explore', transition: 'morph', name: 'Explore, live',
   background: CREAM, themeRefs: { background: 'bg1' },
-  notes: 'This one is live too — the horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab if the room starts asking "what about X".',
+  notes: 'On the site the horizontal axis is a dropdown: spending per resident, car ownership, population density, road casualties. The table underneath sorts on both measures. Worth opening in a browser tab if the room starts asking "what about X".',
   elements: [
-    title('Explore, live'),
+    title('Compare on any measure'),
     { ...base('explore-embed', 96, 176, 1088, 456), type: 'embed', app: 'web',
-      url: `${ATLAS}/en/udforsk?x=families_with_car_pct`, live: true,
+      url: 'https://mobilitetsatlas.dk/en/udforsk?x=families_with_car_pct',
       view: 'asset:view-explore' },
     text('exp-live-note', 96, 646, 1088, 28,
       'mobilitetsatlas.dk/en/udforsk?x=families_with_car_pct  ·  ←  back',
@@ -680,13 +672,13 @@ slides.push({
   notes: 'The last zoom level: København, street by street. Press Byvisning on any of the four largest municipalities and the map tilts into the buildings, with the day\'s scheduled services moving across it — the planned timetable, not live vehicles, and it says so on the panel. The green wash on the massing is the same A–G scale you have seen all deck, now at building resolution. This is where a planner stops nodding at a national average and starts pointing at a street.',
   elements: [
     { ...base('by-embed', 96, 168, 1088, 434), type: 'embed', app: 'web',
-      url: `${ATLAS_STAGING}/en/embed/kommune/koebenhavn?view=city`, live: true,
+      url: 'https://staging.mobilitetsatlas.dk/en/kommune/koebenhavn',
       view: 'asset:view-byvisning' },
     text('beta-title-h', 96, 72, 1088, 84, 'København, at street level',
       { size: 40, weight: 700, family: SERIF, color: CREAM, ref: 'bg1', valign: 'middle',
         lh: 1.1, role: 'title' }),
     text('by-note', 96, 618, 700, 56,
-      'This map is <b>live</b>: drag it, zoom in, and the buildings rise as the day\'s scheduled services move across them.',
+      'On the live map, press <b>Byvisning</b> and zoom in: the buildings rise and the day\'s scheduled services move across them.',
       { size: 15, color: SUBTLE, ref: 'accent5', lh: 1.45, role: 'body' }),
     text('by-src', 812, 618, 372, 56, 'staging.mobilitetsatlas.dk<br>planned timetable · not live vehicles',
       { size: 13, family: MONO, color: SUBTLE, ref: 'accent5', align: 'right', lh: 1.5,
@@ -753,19 +745,10 @@ slides.push({
 // Assemble: keep the template's theme, fonts, faces and layouts; replace the
 // document around them.
 // ---------------------------------------------------------------------------
-// TWO FILES, TWO JOBS. The theme, the three embedded faces and the six beta-*
-// layouts are read from the TEMPLATE; the document is spliced into the SHELL.
-// They are usually the same file, but the shell has to be one that carries
-// `trustedFrameOrigins` (Beta v1.1+) or the live maps frame under the old
-// sandbox and paint nothing — and a freshly built shell ships with an EMPTY
-// document block, so it cannot be the source of the theme.
-const shell = readFileSync(
-  join(HERE, existsSync(join(HERE, 'template-shell.bento.html'))
-    ? 'template-shell.bento.html' : 'template.bento.html'), 'utf8');
-const templateHtml = readFileSync(join(HERE, 'template.bento.html'), 'utf8');
+const shell = readFileSync(join(HERE, 'template.bento.html'), 'utf8');
 const BLOCK = /(<script type="application\/bento\+json" id="bento-doc">)([\s\S]*?)(<\/script>)/;
-const m = templateHtml.match(BLOCK);
-if (!m?.[2]?.trim()) throw new Error('template.bento.html has no #bento-doc document to take the theme from');
+const m = shell.match(BLOCK);
+if (!m) throw new Error('no #bento-doc block in the template shell');
 const tpl = JSON.parse(m[2].replace(/\\u003c/g, '<'));
 
 const doc = {

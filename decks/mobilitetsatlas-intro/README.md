@@ -42,34 +42,15 @@ came from; `scatter.py` builds the 98-point scatter and the Pearson r.
 Roskilde's 70.7 / 66.3 → 68.5 and the method copy are quoted from
 mobilitetsatlas.dk/en/metode.
 
-## Three things to know before rebuilding
+## Two things to know before rebuilding
 
-**The three embeds are LIVE, and that took a change on each side.** They frame
-`/embed/kommune/<slug>` — an atlas route that renders the map alone, no chrome
-(betamobility/dk-mobility#230) — and the shell grants those origins
-`allow-same-origin` through `trustedFrameOrigins`.
-
-Both halves are load-bearing, and each was measured, not assumed:
-
-- **The chrome had to go.** A sandboxed frame has an opaque origin, where
-  `document.cookie` throws rather than returning `""`. Two chrome components
-  read it unguarded, so the ordinary kommune page dies on boot in a frame and
-  the browser paints its own "This page couldn't load" — which the shell cannot
-  recover from, because it only restores the view on an `error` event and a
-  crashed-but-loaded page fires `load`. `diagnose-embed.mjs` reproduces it.
-- **The sandbox had to open.** Mapbox GL starts its worker from a `blob:` URL,
-  which an opaque origin forbids, so even the chrome-free route renders zero
-  canvases under the default flags. `check-sandbox-gl.mjs` runs the same URL
-  under three flag sets: 0 canvases with Bento's flags, 1 with
-  `allow-same-origin` added, 1 with no sandbox at all.
-
-Every embed still carries its `view`, so offline, in print, in a thumbnail and
-in PowerPoint the deck shows a real screenshot rather than a hole.
-
-**The shell matters.** `build-deck.mjs` splices into `template-shell.bento.html`
-when present (a locally built shell) and the published template otherwise. Only
-a v1.1+ shell carries `trustedFrameOrigins`; splice into an older one and the
-maps frame under the old sandbox and paint nothing.
+**Live embeds are off, deliberately.** Beta Slides sandboxes an embed's iframe without
+`allow-same-origin`; the atlas reads `document.cookie` at boot, which throws in
+an opaque origin, and the frame renders "This page couldn't load". The shell only
+restores the static view on an `error` event, and a crashed-but-loaded page fires
+`load`, so nothing recovers it. `diagnose-embed.mjs` shows the failure and shows
+it disappearing the moment `allow-same-origin` is added. Until one side changes,
+the three embeds carry only their static `view`.
 
 **Byvisning has to be driven by keyboard.** `shoot-byvisning.mjs` reaches the 3D
 massing with mapbox's keyboard handler (`=` zooms exactly one level, `Shift+↑`

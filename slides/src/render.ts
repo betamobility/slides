@@ -4,7 +4,6 @@
 // editor canvas, sidebar thumbnails, and Reveal.js sections.
 
 import { offlineEnabled, isRemoteUrl, remoteSrcBlocked } from '../../kernel/src/net.ts'
-import { appConfig } from '../../kernel/src/app.ts'
 import type { BentoDoc, EmbedElement, ShapeElement, Slide, SlideElement, SvgElement, TableElement } from './model'
 import { morphKey, paginates, isWebUrl } from './model'
 import { chartSnapshotSvg } from './charts'
@@ -162,42 +161,15 @@ export function liveFrameAllowed(el: EmbedElement): boolean {
 }
 
 /**
- * Is this URL on the shell's trusted-frame allowlist (AppConfig)? Compared as
- * exact ORIGINS: a suffix test would match `mobilitetsatlas.dk.evil.com`, and
- * this decides whether a page runs with same-origin access.
- */
-export function frameOriginTrusted(url: string): boolean {
-  try {
-    // appConfig() THROWS when the shell has not been configured (a bare render
-    // harness, a probe page). Fail closed there rather than propagating: no
-    // config is no allowlist, which is the platform default anyway.
-    const allowed = appConfig().trustedFrameOrigins
-    if (!allowed?.length) return false
-    return allowed.includes(new URL(url).origin)
-  } catch {
-    return false
-  }
-}
-
-/**
- * The live frame. Sandboxed with no top navigation: every deck is untrusted
- * input, and a page of someone else's choosing gets a screen, never this
- * document. `error` swaps back to the view underneath; the view is never
- * removed, so a frame that fails to paint still leaves a picture.
- *
- * `allow-same-origin` is added ONLY for a host the SHELL lists in
- * `trustedFrameOrigins` — never on the say-so of the document, which is
- * untrusted. Without it a framed page has an opaque origin, where a `blob:`
- * worker and `document.cookie` both fail, so a real web app renders nothing
- * rather than degrading. See the AppConfig field for the measurement.
+ * The live frame. Sandboxed with NO `allow-same-origin` and no top
+ * navigation: every deck is untrusted input, and a page of someone else's
+ * choosing gets a screen, never this document. `error` swaps back to the
+ * view underneath; the view is never removed, so a frame that fails to paint
+ * still leaves a picture.
  */
 function liveFrame(el: EmbedElement, opts: RenderOpts): HTMLIFrameElement {
   const frame = document.createElement('iframe')
-  const trusted = frameOriginTrusted(el.url ?? '')
-  frame.setAttribute(
-    'sandbox',
-    trusted ? 'allow-scripts allow-forms allow-same-origin' : 'allow-scripts allow-forms',
-  )
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms')
   frame.referrerPolicy = 'no-referrer'
   frame.title = el.url ?? ''
   frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;display:block;background:transparent'
