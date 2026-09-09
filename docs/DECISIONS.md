@@ -6414,3 +6414,26 @@ decks still travel as a read-only file or through `publish`; a store that
 admits a non-Beta writer is a different product and reopens this entry.
 
 Plan of record: `docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md`.
+
+## 2026-09-09 — BETA FORK: the relay carries encrypted asset blobs again
+
+The v1 fork plan deployed `beta-sync` without its `[[r2_buckets]]` binding, for
+one reason only: R2 was not enabled on Beta's Cloudflare account, and enabling
+it is a paid subscription the maintainer had to choose. The relay therefore
+answered 501 on `/b/`, and clients fell back to inlining — upstream's supported
+degraded mode, and the reason the 2026-07-25 blob-offload entry insists R2 is
+optional. The cost was live-sync fidelity: an asset over `BLOB_INLINE_MAX`
+(64 KB) stayed out of the live session and reached the other author on the next
+save rather than on paste.
+
+v1.1 enabled R2 for the deck store, so the reason is gone and the binding is
+restored (`beta-slides-blobs`, separate from the store's `beta-decks`). Nothing
+about the relay's blindness changes: it pipes ciphertext keyed by
+`HMAC(roomKey, sha256(plaintext))` and can neither read a blob nor link one
+room's blobs to another's. The v1.1 plan deferred this deliberately so the
+release did not change relay behaviour; it is a `wrangler.toml` change plus a
+deploy, with no shell release attached.
+
+Operational note unchanged from 2026-07-25: the relay is deployed before any
+client that depends on the blob endpoints. Here the client shipped first and
+degraded, which is the safe order of the two.

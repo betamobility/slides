@@ -11,6 +11,11 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **The relay carries large assets again.** `beta-sync` is deployed with its
+  R2 binding restored, so an asset over 64 KB reaches the other author on paste
+  instead of on the next save. Relay-only: no shell change, nothing to update.
+  See `docs/DECISIONS.md`, 2026-09-09.
+
 ## [2026.9.2] — 2026-09-08
 
 The review of 2026.9.1 found eight places where the build still read as
