@@ -2,7 +2,7 @@
 
 Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**Production:** https://slides.betamobility.ai (release channel; first release v2026.9.1, 2026-09-08; v2026.9.2 prepared, see `CHANGELOG.md`) and the deck store at https://decks.betamobility.ai
+**Production:** https://slides.betamobility.ai (release channel; current release v2026.9.2, 2026-09-08; v2026.9.1 was the first) and the deck store at https://decks.betamobility.ai
 **Client:** Internal
 **Status:** Active, v1.1
 
@@ -23,7 +23,7 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 ## Tech Stack
 
 - **App:** TypeScript, Vite, single-file build (`slides/dist-single/Bento_Slides.bento.html`)
-- **Relay:** Cloudflare Worker + Durable Object (`server/sync-worker`), deployed as `sync.betamobility.ai`
+- **Relay:** Cloudflare Worker + Durable Object + R2 for encrypted asset blobs (`server/sync-worker`), deployed as `sync.betamobility.ai`
 - **Deck store:** Cloudflare Worker + R2 behind Cloudflare Access (`server/deck-store`), deployed as `decks.betamobility.ai`
 - **Release site:** static tree published by `scripts/publish-site.mjs` into `betamobility/slides-site`, served by Cloudflare Pages at `slides.betamobility.ai`
 - **Tests:** upstream's `node scripts/test-*.ts` rigs; Beta rigs are `scripts/test-beta-*`
@@ -48,7 +48,7 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 
 | Service | Used for | Credentials |
 |---------|----------|-------------|
-| Cloudflare Workers | sync relay at `sync.betamobility.ai` | `CLOUDFLARE_API_TOKEN` (wrangler) |
+| Cloudflare Workers + R2 | sync relay at `sync.betamobility.ai` | wrangler OAuth login (`env -u CLOUDFLARE_API_TOKEN`) |
 | Cloudflare Workers + R2 + Access | deck store at `decks.betamobility.ai` | wrangler OAuth login; Access apps in the dashboard |
 | Cloudflare Pages | release site at `slides.betamobility.ai` | dashboard |
 | GitHub `betamobility/slides-site` | published release tree | `gh` auth |
@@ -59,7 +59,7 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 | Variable | Description |
 |----------|-------------|
 | `BENTO_SITE_DIR` | path to a clone of `betamobility/slides-site`, read by `scripts/release.mjs` and `scripts/publish-site.mjs` |
-| `CLOUDFLARE_API_TOKEN` | wrangler auth for the relay deploy |
+| `CLOUDFLARE_API_TOKEN` | Beta's DNS-only Cloudflare token. It cannot deploy Workers or Pages: unset it for every wrangler command (`env -u CLOUDFLARE_API_TOKEN npx wrangler …`) and use the OAuth login instead |
 
 The release signing key lives at `~/.bento/release-key.json` on the maintainer's machine only. Never in the repo, never in CI.
 
@@ -111,4 +111,4 @@ Offered to `nyblnet/bento` from this fork. Bodies live in `docs/upstream-prs/`.
 - `embed` element, consumer side in slides, to the `bento/embed` shape. Branch `upstream-pr/embed-consumer`, open as [nyblnet/bento#424](https://github.com/nyblnet/bento/pull/424).
 - Layout picker clamped to the viewport (the fork's #12). Branch `upstream-pr/layout-picker-clamp`, open as [nyblnet/bento#425](https://github.com/nyblnet/bento/pull/425).
 
-Both were opened from Johan's GitHub account on 2026-09-08 at his instruction. The branches carry no agent attribution trailers (upstream's hard rule 8); whether upstream accepts them under its rule 10 is upstream's call.
+All three were opened from Johan's GitHub account on 2026-09-08 at his instruction. The branches carry no agent attribution trailers (upstream's hard rule 8); whether upstream accepts them under its rule 10 is upstream's call.

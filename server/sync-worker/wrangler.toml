@@ -1,5 +1,5 @@
 # bento-sync relay — Cloudflare Worker + one Durable Object room per docId.
-# Deploy:  npx wrangler deploy          (needs `npx wrangler login` once)
+# Deploy:  env -u CLOUDFLARE_API_TOKEN npx wrangler deploy   (OAuth login once)
 # Dev:     npx wrangler dev --port 8787 (fully local, no account needed)
 #
 # BETA FORK: this is Beta Mobility's relay, deployed under Beta's Cloudflare
@@ -14,18 +14,18 @@ routes = [
   { pattern = "sync.betamobility.ai", custom_domain = true }
 ]
 
-# Encrypted asset blobs (docs/blob-offload.md) are NOT bound, per plan U2: the
-# relay answers 501 on /b/ and clients fall back to inlining, which upstream
-# documents as supported. The cost is that an asset over BLOB_INLINE_MAX
-# (64 KB, kernel/src/sync/crdt.ts) is left out of LIVE sync and reaches the
-# other author on the next save, not on paste. Binding R2 means a paid
-# Cloudflare subscription on the account (free within 10 GB, card on file),
-# which is the maintainer's decision; to turn it on, enable R2 in the
-# dashboard, `npx wrangler r2 bucket create beta-slides-blobs`, and restore:
-#
-#   [[r2_buckets]]
-#   binding = "BLOBS"
-#   bucket_name = "beta-slides-blobs"
+# Encrypted asset blobs (docs/blob-offload.md). Bound since 2026-09-09: v1.1
+# enabled R2 on the account for the deck store, which removed the only reason
+# v1 deployed the relay without this binding. Without it the relay answered 501
+# on /b/ and clients fell back to inlining, so an asset over BLOB_INLINE_MAX
+# (64 KB, kernel/src/sync/crdt.ts) was left out of LIVE sync and reached the
+# other author on the next save rather than on paste. The relay still cannot
+# read a blob: what it stores is ciphertext keyed by HMAC(roomKey, sha256).
+# Create the bucket once with
+#   env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket create beta-slides-blobs
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "beta-slides-blobs"
 
 [[durable_objects.bindings]]
 name = "ROOM"
