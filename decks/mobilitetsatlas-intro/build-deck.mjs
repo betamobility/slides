@@ -559,17 +559,26 @@ slides.push({
     title('Aarhus, live on the map'),
 // LIVE MAPS. These three embeds run the real atlas, not a picture of it.
 // `/embed/kommune/<slug>` is a route built for this: the DetailMap alone, no
-// header, no consent banner, no analytics, sized by whatever frames it.
+// header, no consent banner, no visitor cookie, sized by whatever frames it
+// (betamobility/dk-mobility#230).
 //
-// It needs BOTH halves. The chrome had to go because a sandboxed frame has an
-// opaque origin where `document.cookie` throws, and two chrome components read
-// it unguarded — the ordinary page dies on boot in a frame. And the shell had
-// to grant `allow-same-origin` for these origins (main.ts trustedFrameOrigins),
-// because Mapbox GL starts its worker from a `blob:` URL, which an opaque
-// origin forbids: measured, zero canvases without the flag and one with it.
+// The chrome had to go for more than tidiness. A sandboxed frame has an opaque
+// origin, where `document.cookie` THROWS rather than returning "", and two
+// chrome components read it — so the ordinary kommune page dies on boot inside
+// a frame and the browser paints its own "This page couldn't load", which the
+// deck cannot recover from (it restores the view on `error`, and a
+// crashed-but-loaded page fires `load`).
 //
-// Each still carries its `view`, so offline, in print, in a thumbnail and in
-// PowerPoint the deck shows a real screenshot instead of a hole.
+// NO SHELL CHANGE IS NEEDED. An earlier pass added `allow-same-origin` for
+// these origins, on a measurement that Mapbox GL renders nothing without it.
+// That measurement came from a DEV build: `next dev` serves the GL worker in a
+// form an opaque origin refuses, and a production build does not. Re-measured
+// against `next build` output, the map paints under Bento's default sandbox
+// flags — so the sandbox stays shut, which is where an untrusted deck wants it.
+// `check-sandbox-gl.mjs` is that comparison; point it at a production server.
+//
+// Each embed still carries its `view`, so offline, in print, in a thumbnail and
+// in PowerPoint the deck shows a real screenshot instead of a hole.
     { ...base('aarhus-embed', 96, 176, 1088, 424), type: 'embed', app: 'web',
       url: `${ATLAS}/en/embed/kommune/aarhus`, live: true,
       view: 'asset:view-aarhus' },
