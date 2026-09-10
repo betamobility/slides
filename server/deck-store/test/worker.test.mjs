@@ -13,8 +13,10 @@
 // Access is exercised for real: the test mints RSA keys at runtime (nothing
 // on disk), publishes the public half through a stub JWKS endpoint that the
 // worker's outbound fetch is routed to, and signs assertions with every
-// failure mode the plan lists. The worker's outbound fetch answers only the
-// JWKS and Plausible URLs; anything else is a 502 so a wrong URL surfaces.
+// failure mode the plan lists. The worker's outbound fetch answers the JWKS,
+// Plausible and the stub Pages origin; anything else THROWS, so a subrequest
+// sent to the wrong host is a distinct failure rather than the same 502 the
+// upstream-error scenario expects.
 
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -32,6 +34,10 @@ const HUMAN_AUD = 'a'.repeat(64)
 const SERVICE_AUD = 'b'.repeat(64)
 const PLAUSIBLE_URL = 'https://plausible.io/api/event'
 const MAX_BYTES = 32 * 1024 * 1024
+// The Pages project the worker proxies the public release channel from
+// (KTD2/KTD3). A stub stands in for it; the point of the constant is that the
+// worker must reach THIS host and never the host of the incoming request.
+const PAGES_ORIGIN = 'beta-site-stub.pages.dev'
 
 // ---- helpers --------------------------------------------------------------
 const b64u = (bytes) => Buffer.from(bytes).toString('base64url')
@@ -97,6 +103,12 @@ export async function run(Miniflare) {
   let certsFetches = 0
   const events = []
   let plausible = 'ok' // 'ok' | 'fail' | 'throw'
+  // Every subrequest the worker makes to the Pages origin, in order. The
+  // header-stripping and wrong-host assertions read from here.
+  const proxied = []
+
+  /** What the stub Pages project serves at `path`. Deterministic, per-path. */
+  const pagesBody = (path) => `stub bytes for ${path}\n${'x'.repeat(64)}\n`
 
   const mf = new Miniflare({
     modules: true,
@@ -111,7 +123,10 @@ export async function run(Miniflare) {
     modulesRules: [{ type: 'ESModule', include: ['**/*.js'] }],
     compatibilityDate: '2026-07-01',
     r2Buckets: ['DECKS'],
-    bindings: { ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}` },
+    bindings: {
+      ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
+      PAGES_ORIGIN,
+    },
     outboundService: async (req) => {
       if (req.url === CERTS_URL) {
         certsFetches++
@@ -123,7 +138,22 @@ export async function run(Miniflare) {
         if (plausible === 'fail') return new Response('nope', { status: 500 })
         return new Response('ok', { status: 202 })
       }
-      return new Response(`unexpected outbound fetch: ${req.url}`, { status: 502 })
+      if (req.url.startsWith(`https://${PAGES_ORIGIN}/`)) {
+        proxied.push({ url: req.url, method: req.method, headers: Object.fromEntries(req.headers) })
+        const p = new URL(req.url).pathname
+        // Pages 308s an `.html` URL to its extensionless form (KTD3).
+        if (p === '/releases/slides/redirected.html') {
+          return new Response(null, { status: 308, headers: { location: `https://${PAGES_ORIGIN}/releases/slides/redirected` } })
+        }
+        if (p === '/releases/slides/boom') return new Response('upstream exploded', { status: 500 })
+        return new Response(pagesBody(p), {
+          status: 200,
+          headers: { 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=300', 'etag': '"stub"' },
+        })
+      }
+      // A THROW, not a 502: the error-wrapper scenario asserts a 502, so a
+      // stub that answered 502 here would let a misdirected subrequest pass.
+      throw new Error(`unexpected outbound fetch: ${req.url}`)
     },
   })
 
@@ -154,6 +184,13 @@ export async function run(Miniflare) {
       ['GET', '/'], ['GET', '/new'], ['GET', '/api/decks'], ['POST', '/api/decks', minimal],
       ['PUT', '/api/decks/0123456789', minimal], ['DELETE', '/api/decks/0123456789'], ['GET', '/d/0123456789'],
       ['POST', '/api/harness/decks', minimal], ['PUT', '/api/harness/decks/0123456789', minimal], ['GET', '/nowhere'],
+      // A prefix-boundary match, not a substring one: these start like an
+      // allowlisted prefix and are gated all the same (KTD0).
+      ['GET', '/releases-secret'], ['GET', '/releases-secret/manifest.json'], ['GET', '/templates-private/x'],
+      ['GET', '/agents.md.bak'], ['GET', '/skills'],
+      // The allowlist covers reads. A write to an allowlisted path is not a
+      // pass-through and still needs an assertion.
+      ['POST', '/releases/slides/manifest.json', minimal],
     ]) {
       const r = await call(m, p, { body: b })
       eq(r.status, 401, `${m} ${p} without an assertion is 401`)
@@ -178,11 +215,72 @@ export async function run(Miniflare) {
       }
     }
 
+    // -------------------------------------- the public release channel (U1)
+    // The one behaviour a deck already on someone's disk depends on: after the
+    // host swap its update check reaches THIS worker, with no Access cookie
+    // and no assertion, and must come back with the Pages project's bytes
+    // unaltered. Access is configured to Bypass these prefixes (KTD1), so the
+    // worker sees the request with nothing attached at all.
+    console.log('\npublic release-channel paths: served anonymously, byte-identical, from PAGES_ORIGIN')
+    let r
+    const PUBLIC_PATHS = [
+      '/releases/slides/manifest.json', '/releases/slides/Bento_Slides.bento.html', '/releases/packs.json',
+      '/templates/client-pitch.bento.html', '/templates/blank.bento.html',
+      '/agents.md', '/slides/agents.md',
+      '/skills/SKILL.md', '/skills/beta-slides.zip',
+      '/logo/favicon-32.png',
+      '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+    ]
+    for (const p of PUBLIC_PATHS) {
+      const before = proxied.length
+      r = await call('GET', p) // no `as`: not one header of identity
+      eq(r.status, 200, `GET ${p} with no assertion at all is 200`)
+      eq(await r.text(), pagesBody(p), `GET ${p} returns the origin's exact bytes`)
+      eq(proxied.length - before, 1, `GET ${p} made exactly one subrequest`)
+      eq(new URL(proxied[proxied.length - 1].url).host, PAGES_ORIGIN, `GET ${p} fetched PAGES_ORIGIN, not its own host`)
+    }
+    r = await call('GET', '/releases/slides/manifest.json')
+    eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
+    eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')
+    ok(!r.headers.has('content-security-policy-report-only'), 'a pass-through carries none of the deck headers')
+
+    console.log('\nthe proxy forwards no credential of ours (KTD3)')
+    const sneaky = {
+      'cf-access-jwt-assertion': tokens.alice,
+      'cf-access-authenticated-user-email': 'alice@betamobility.io',
+      'cf-access-client-id': 'id.access',
+      'cf-access-client-secret': 'shhh',
+      cookie: 'CF_Authorization=' + tokens.alice,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+    r = await call('GET', '/releases/slides/manifest.json', { headers: sneaky })
+    eq(r.status, 200, 'a signed-in browser gets the same pass-through')
+    const sub = proxied[proxied.length - 1].headers
+    for (const h of ['cf-access-jwt-assertion', 'cf-access-authenticated-user-email', 'cf-access-client-id', 'cf-access-client-secret', 'cookie']) {
+      ok(!(h in sub), `the subrequest carries no ${h}`)
+    }
+    eq(sub.accept, '*/*', 'the subrequest asks for */* whatever the browser asked for')
+    ok(!JSON.stringify(sub).includes(tokens.alice), 'no assertion of ours reaches another origin in any header')
+
+    console.log('\nupstream redirects and failures')
+    r = await call('GET', '/releases/slides/redirected.html')
+    eq(r.status, 200, 'an upstream 308 resolves to the final bytes, not a redirect')
+    eq(await r.text(), pagesBody('/releases/slides/redirected'), 'and those bytes are the extensionless target’s')
+    r = await call('GET', '/releases/slides/boom')
+    eq(r.status, 502, 'an upstream 500 surfaces as the wrapper’s readable error')
+    ok((await r.text()).length > 0, 'and that error says something')
+
+    console.log('\na pass-through is not tracked (KTD7)')
+    const eventsBefore = events.length
+    await call('GET', '/releases/slides/manifest.json')
+    await new Promise((res) => setTimeout(res, 60))
+    eq(events.length, eventsBefore, 'no Plausible event fires for a release-channel fetch')
+
     // ------------------------------------------------ unknown kid, refresh once
     console.log('\nunknown key id: one JWKS refresh, then fail closed')
     const before = certsFetches
     const rogue = await sign(k2, 'k2', human('alice@betamobility.io'))
-    let r = await call('GET', '/api/decks', { as: rogue })
+    r = await call('GET', '/api/decks', { as: rogue })
     eq(r.status, 401, 'a key the JWKS never carried is 401')
     eq(certsFetches - before, 1, 'exactly one JWKS refresh was attempted for the unknown kid')
     // Rotation: k3 appears in the JWKS, and the refresh picks it up.
@@ -209,9 +307,12 @@ export async function run(Miniflare) {
     const csp = r.headers.get('content-security-policy-report-only') || ''
     ok(csp.length > 0, 'a report-only CSP ships with the deck')
     ok(!r.headers.has('content-security-policy'), 'no enforced CSP in v1.1 (KTD9)')
-    for (const frag of ["script-src 'self' 'unsafe-inline' blob:", 'font-src', 'data:', 'img-src', 'media-src', 'connect-src', 'wss://sync.betamobility.ai', 'https://slides.betamobility.ai', 'frame-src https:']) {
+    for (const frag of ["script-src 'self' 'unsafe-inline' blob:", 'font-src', 'data:', 'img-src', 'media-src', 'connect-src', 'wss://sync.betamobility.ai', 'frame-src https:']) {
       ok(csp.includes(frag), `CSP carries ${frag}`)
     }
+    // The release manifest is same-origin now that the store and the release
+    // channel share a host, so `'self'` covers it and the literal is gone.
+    ok(!csp.includes('https://slides.betamobility.ai'), 'the manifest host is no longer named as foreign in connect-src')
     ok(!csp.includes('report-to') && !csp.includes('report-uri'), 'CSP reports to the console only (no report endpoint in v1.1)')
 
     r = await call('GET', '/d/zzzzzzzzzz', { as: 'alice' })

@@ -35,4 +35,13 @@ bucket_name = "beta-decks"
 # the path-scoped "beta/slides deck store harness" app on /api/harness/. Both
 # values are public to anyone holding a token; they are vars, not secrets.
 ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
+
+# The Pages project that holds the release channel, the templates, the skill
+# and the site's static furniture. slides.betamobility.ai serves both surfaces
+# now, so the worker proxies the public prefixes here (2026-09-10 plan, KTD2:
+# the signed bytes stay on the tree the maintainer publishes, never on the tree
+# an agent happens to be deploying from). NEVER derive this from the incoming
+# request — a Worker on a Custom Domain that fetches its own hostname
+# re-invokes itself.
+PAGES_ORIGIN = "beta-slides-site.pages.dev"
 ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a"

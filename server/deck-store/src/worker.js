@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Beta Mobility
-// Beta deck store — a Cloudflare Worker at decks.betamobility.ai that keeps
-// bento/slides files in R2 and serves them unchanged behind Cloudflare Access.
-// Plan: docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md, U7 (KTD7,
-// KTD8, KTD9, KTD12).
+// Beta deck store — a Cloudflare Worker at slides.betamobility.ai that keeps
+// bento/slides files in R2 and serves them unchanged behind Cloudflare Access,
+// and that passes the public release channel through to the Pages project.
+// Plans: docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md U7 (KTD7 to
+// KTD9, KTD12) and docs/plans/2026-09-10-001-feat-slides-host-swap-plan.md.
+//
+// Public, no assertion, proxied to PAGES_ORIGIN (KTD0):
+//   GET /releases/… /templates/… /skills/… /logo/…
+//   GET /agents.md /slides/agents.md /robots.txt /sitemap.xml /404.html /LICENSE
 //
 // Routes (every one behind a verified Access assertion; 401 with no body
 // otherwise):
@@ -38,9 +43,73 @@ const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 const META_MAX = 512
 
 // Hosts the shell reaches from a stored deck, for the report-only CSP (KTD9).
-// The relay and the manifest host are the fork's own (slides/src/main.ts).
+// The relay is the fork's own (slides/src/main.ts). The release manifest used
+// to be foreign and is now same-origin, so `'self'` covers it (2026-09-10 plan,
+// U1) — the deck store and the release channel share a host.
 const RELAY_HOST = 'sync.betamobility.ai'
-const MANIFEST_HOST = 'slides.betamobility.ai'
+
+// --- the public release channel (2026-09-10 plan, KTD0 to KTD3) -------------
+//
+// slides.betamobility.ai serves BOTH the gated deck store and the public
+// release channel. Access is configured to Bypass the prefixes below, so a
+// request for one of them reaches this worker with no assertion at all — and
+// the worker passes it through to the Pages project that holds the signed
+// bytes. Everything not on this list falls through to verifyAccess, so a path
+// nobody thought about costs a login prompt, never a served deck.
+//
+// The match is a PREFIX BOUNDARY, not a substring: `/releases-secret` is
+// gated. Reads only: a write to an allowlisted path is not a pass-through.
+const PUBLIC_PREFIXES = ['/releases/', '/templates/', '/skills/', '/logo/']
+const PUBLIC_PATHS = new Set([
+  '/agents.md', '/slides/agents.md',
+  '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+])
+const isPublicPath = (path) => PUBLIC_PATHS.has(path) || PUBLIC_PREFIXES.some((p) => path.startsWith(p))
+
+// Credentials that must never leave this origin. The Access assertion is a
+// bearer token bound to THIS application's audience; the cookie is the session
+// it was minted from. Neither is any business of the Pages project.
+const STRIP_FROM_SUBREQUEST = [
+  'cf-access-jwt-assertion', 'cf-access-authenticated-user-email',
+  'cf-access-client-id', 'cf-access-client-secret', 'cookie',
+]
+
+/**
+ * THE one way this worker talks to the Pages origin. Every rule KTD3 names
+ * lives here so a second call site cannot re-implement it and drop one:
+ *
+ *  · the host comes from `[vars]`, never from the incoming request — a worker
+ *    on a Custom Domain that fetched its own hostname would re-invoke itself;
+ *  · redirects are followed, because Pages 308s `.html` to extensionless;
+ *  · the body is returned UNREAD and unmodified, so the manifest's sha256 pin
+ *    over the shell still holds;
+ *  · the Accept header is replaced with the any-type one, because
+ *    Cloudflare's edge has been recorded injecting an analytics beacon into
+ *    HTML fetched with a browser Accept header;
+ *  · no `cf` cache options: whether they are honoured against another
+ *    account's zone is undocumented, and the default is what Cloudflare
+ *    recommends for a middleware fetch.
+ *
+ * An upstream failure surfaces as a readable 502 rather than a platform error,
+ * the way server/sync-worker wraps its Durable Object subrequests.
+ */
+async function passThrough(req, env, url) {
+  const origin = env.PAGES_ORIGIN
+  if (!origin) return text(502, 'store: PAGES_ORIGIN is not configured')
+  const headers = new Headers(req.headers)
+  for (const h of STRIP_FROM_SUBREQUEST) headers.delete(h)
+  headers.set('accept', '*/*')
+  let res
+  try {
+    res = await fetch(`https://${origin}${url.pathname}${url.search}`, {
+      method: req.method, headers, redirect: 'follow',
+    })
+  } catch (err) {
+    return text(502, `store: the release channel origin did not answer (${err?.message || 'fetch failed'})`)
+  }
+  if (res.status >= 500) return text(502, `store: the release channel origin answered ${res.status}`)
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers })
+}
 
 const PLAUSIBLE_URL = 'https://plausible.io/api/event'
 const PLAUSIBLE_DOMAIN = 'betamobility.ai'
@@ -217,7 +286,7 @@ const CSP = [
   "font-src 'self' data:",
   "img-src 'self' https: data: blob:",
   "media-src 'self' https: data: blob:",
-  `connect-src 'self' https://${MANIFEST_HOST} https://${RELAY_HOST} wss://${RELAY_HOST}`,
+  `connect-src 'self' https://${RELAY_HOST} wss://${RELAY_HOST}`,
   'frame-src https:',
   'worker-src blob:',
   "object-src 'none'",
@@ -244,15 +313,22 @@ async function serve(env, ctx, req, id) {
 
 export default {
   async fetch(req, env, ctx) {
-    // Identity first, before any routing: an unknown path without an
-    // assertion is 401, not 404, so nothing about the store is enumerable
-    // without Access.
-    const who = await verifyAccess(req, env)
-    if (!who) return empty(401)
-
     const url = new URL(req.url)
     const path = url.pathname
     const m = req.method
+
+    // The public release channel comes first, and it is the ONLY thing that
+    // does. These paths are anonymous machine traffic from files already on
+    // people's disks (KTD0); Access is configured to Bypass them, so there is
+    // no assertion here to verify and nothing to verify it against.
+    if (isPublicPath(path) && (m === 'GET' || m === 'HEAD')) return passThrough(req, env, url)
+
+    // Identity next, before any routing of our own: an unknown path without an
+    // assertion is 401, not 404, so nothing about the store is enumerable
+    // without Access. Enumerability now stops at the allowlist above, and
+    // that list is reads of maintainer-published bytes only.
+    const who = await verifyAccess(req, env)
+    if (!who) return empty(401)
 
     // Harness routes: same handlers, open to any verified identity.
     if (path === '/api/harness/decks' && m === 'POST') return create(req, env, ctx, who)
