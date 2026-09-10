@@ -143,6 +143,33 @@ Release-channel fetches are anonymous machine requests from shipped files; sendi
 **KTD8. Deck scripts now share an origin with the release channel.**
 The 2026-09-08 decision accepted that a script inside a stored deck runs first-party on the store origin, because every writer is a signed-in colleague. That origin now also serves the public release channel. The exposure is bounded and reviewed as such: the public surface is read-only `GET` of maintainer-published bytes, and no deck script has a write path into it. Record it in `docs/DECISIONS.md` (U7), because the entry says a change of this character reopens it.
 
+**KTD9 — CORRECTED DURING IMPLEMENTATION (2026-09-10).** Two things below did
+not survive contact with the code. Both are implemented as corrected; this note
+stands rather than an edit, so the reasoning is visible.
+
+*One: the exemption is two paths, not one.* `/new` alone is not enough. The
+page `/new` serves posts to a **relative** `/api/decks` and reads it with
+`redirect: 'manual'` (`server/deck-store/src/pages.js`), so a `301` there
+arrives as an `opaqueredirect`, the page reports "Signed out", and the document
+being published is discarded after the ten-minute timeout — the exact failure
+R11 forbids, reached through the fix for it. `POST /api/decks` on the old host
+is exempt too. **This changes U8:** the old host's Access application cannot
+simply be *deleted*. Deleting it is still required (Access answers before the
+worker, so a gated old host never reaches the redirect branch), but it must be
+*replaced* by two path-scoped Allow applications on `decks.betamobility.ai`,
+one for `/new` and one for `/api/decks`, so those two still arrive carrying an
+assertion. The old host's AUD stays in `ACCESS_AUDS` until the host is deleted,
+which the plan already said.
+
+*Two: `NEW_ENABLED` gates the create branch, not the route.* U3 says the route
+is absent while the flag is off. It cannot be: between cutover steps 6 and 9 a
+2026.9.3 shell's Share flow opens `slides.betamobility.ai/new` and would find
+a `404`, breaking the handoff this very KTD exists to protect. The route is
+always present on both hosts; the flag gates only the no-opener create branch
+(and U4's New link). That preserves the flag's stated purpose exactly — the
+reason to wait is that the branch clones a published template which would still
+name the old store host.
+
 **KTD9. The old host keeps serving `/new`, and the redirect is flag-gated.**
 `handoffToStore` in a shipped shell opens `${storeHost}/new` and then **rejects any reply whose origin is not that same host**. So a blanket redirect breaks the handoff twice over: the tab lands on the wrong origin, and `/new` there now means something else. The person would watch a stray blank deck appear while the document they were publishing was silently discarded after a ten-minute timeout. Therefore: `/new` on the old host keeps serving the handoff page, everything else on that host redirects, and the redirect itself sits behind a `[vars]` flag that is off until the new host actually answers (see the cutover table). On the new host, `/new` serves the page from KTD6 — which also answers a handoff when it has a `window.opener`, so a 2026.9.3 shell's Share flow works on the new host with no second URL. R11 is satisfied without asking anyone to re-download anything.
 
@@ -197,7 +224,7 @@ Cutover order, with the two flags that make the ordering real rather than aspira
 | 1 | Land U1–U7 on a branch, rigs green | agent | yes |
 | 2 | Deploy the worker — `REDIRECT_OLD_HOST` off, `NEW_ENABLED` off | maintainer | yes |
 | 3 | Detach the Pages custom domain, attach the worker's | maintainer | yes, re-attach Pages |
-| 4 | Create the per-prefix Bypass applications, **then** the domain-wide Allow application; delete the old host's Access application; set `ACCESS_AUDS`; redeploy with `REDIRECT_OLD_HOST` on | maintainer | yes |
+| 4 | Create the per-prefix Bypass applications, **then** the domain-wide Allow application; **replace** the old host's Access application with two path-scoped Allow applications on `/new` and `/api/decks` (see the KTD9 correction); set `ACCESS_AUDS`; redeploy with `REDIRECT_OLD_HOST` on | maintainer | yes |
 | 5 | Verify: inverted route sweep, byte fidelity under both `Accept` headers, signed-in pass, anonymous refusal, service-token pair, old-host redirect | either | n/a |
 | 6 | Cut release v2026.9.3 | maintainer | **no** — a version is never re-signed |
 | 7 | Publish the site: templates rebuilt from the new shell | maintainer | yes |
@@ -402,7 +429,7 @@ Then the docs: rewrite the store README's route table for two hosts and the allo
 
 **Files.** `server/deck-store/wrangler.toml` (`ACCESS_AUDS` and the two flags).
 
-**Approach.** Follow the cutover table, steps 2 to 5. Answer OQ2 in the Access UI first, because the application count depends on it. Create the per-prefix Bypass applications **before** the domain-wide Allow application (KTD1). Delete the old host's Access application, or U6's redirect never fires for the anonymous caller it exists for. Recreate the service-token application scoped to `/api/harness/` on the new hostname. Put the human and service-token AUDs into `ACCESS_AUDS` and leave the Bypass applications' AUDs out; prune the old host's AUD when that host is deleted, not now. Keep the Pages project. Use `env -u CLOUDFLARE_API_TOKEN npx wrangler ...` — the shell's token is DNS-only and shadows the OAuth login. Access applications are edited with `PUT` and the whole object, never `PATCH`.
+**Approach.** Follow the cutover table, steps 2 to 5. Answer OQ2 in the Access UI first, because the application count depends on it. Create the per-prefix Bypass applications **before** the domain-wide Allow application (KTD1). Delete the old host's domain-wide Access application, or U6's redirect never fires for the anonymous caller it exists for — and **replace** it with path-scoped Allow applications on `/new` and `/api/decks` so the two handoff paths still arrive with an assertion (KTD9 correction). Recreate the service-token application scoped to `/api/harness/` on the new hostname. Put the human and service-token AUDs into `ACCESS_AUDS` and leave the Bypass applications' AUDs out; prune the old host's AUD when that host is deleted, not now. Keep the Pages project. Use `env -u CLOUDFLARE_API_TOKEN npx wrangler ...` — the shell's token is DNS-only and shadows the OAuth login. Access applications are edited with `PUT` and the whole object, never `PATCH`.
 
 If the Worker Route idea from KTD4 is tried on a throwaway subdomain, remove every trace from `wrangler.toml` afterwards.
 
