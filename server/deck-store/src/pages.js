@@ -24,10 +24,14 @@ export const esc = (s) => String(s ?? '')
 
 /**
  * Put `docId` into a template's #bento-doc block and clear the template flag,
- * returning the whole file. This is the ONE piece of logic /new runs over
- * bytes, and it is inlined into that page verbatim (via `.toString()`) so the
- * rig can exercise the code the browser actually runs. Keep it ES5-plain and
- * free of template-literal interpolation for that reason.
+ * returning the whole file. This is the ONE piece of logic a blank-deck create
+ * runs over bytes.
+ *
+ * It used to be inlined into /new verbatim (via `.toString()`), because the
+ * browser did the minting; `GET /new/blank` does it in the worker now and
+ * imports this directly. It stays ES5-plain and free of template-literal
+ * interpolation anyway: the cost is nil and the constraint is one edit away
+ * from mattering again if anything is ever inlined back into a page.
  *
  * The re-serialized JSON escapes `<` the way every builder in this repo does,
  * and the function refuses rather than emit a block a browser would cut short
@@ -137,7 +141,7 @@ export function indexPage(decks, who, { create = false } = {}) {
 <td class="num muted">${esc(fmtSize(d.size))}</td>
 </tr>`).join('\n')
   const newLink = create
-    ? '<a class="cta" href="/new">New deck</a>'
+    ? '<a class="cta" href="/new/blank">New deck</a>'
     : ''
   const body = decks.length
     ? `<div class="wrap"><table>
@@ -146,7 +150,7 @@ export function indexPage(decks, who, { create = false } = {}) {
 ${rows}
 </tbody></table></div>`
     : `<div class="empty">No decks yet. ${create
-        ? 'Start one with <strong><a href="/new">New deck</a></strong>, or open a deck you already have and pick <strong>Save to Beta</strong> in its Share panel.'
+        ? 'Start one with <strong><a href="/new/blank">New deck</a></strong>, or open a deck you already have and pick <strong>Save to Beta</strong> in its Share panel.'
         : 'Open a deck and pick <strong>Save to Beta</strong> in its Share panel.'}</div>`
   return `${head('Beta decks')}
 <body>
@@ -275,32 +279,13 @@ export function newPage(who, { create = false } = {}) {
       })
   }
 
-  ${mintDocIntoBlock.toString()}
-
-  // No opener: a person typed the URL. Clone the public blank template, give
-  // it its own identity, store it, and hand them the editor on its own link.
+  // No opener: a person typed the URL. The making of a blank deck moved to the
+  // worker (\`GET /new/blank\`), which does the same three steps beside the store
+  // instead of pulling a megabyte into this tab and pushing it back. So this is
+  // a redirect, and the card below is never painted for this audience.
   // \`replace\`, not \`assign\`, so Back does not mint a second deck.
   function createBlank() {
-    $('heading').textContent = 'New deck'
-    $('intro').textContent = 'Making a blank deck. This takes a moment.'
-    $('title').textContent = 'Blank deck'
-    saveBtn.hidden = true
-    statusEl.textContent = 'Fetching the blank template…'
-    fetch('/templates/blank.bento.html', { cache: 'no-store' })
-      .then(function (r) {
-        if (!r.ok) throw new Error('The blank template did not load (' + r.status + ').')
-        return r.text()
-      })
-      .then(function (tpl) {
-        var html = mintDocIntoBlock(tpl, crypto.randomUUID())
-        $('size').textContent = size(new TextEncoder().encode(html).length)
-        statusEl.textContent = 'Saving the new deck…'
-        return upload(html, true)
-      })
-      .then(function (j) { location.replace(j.url) })
-      .catch(function (err) {
-        statusEl.textContent = err && err.message ? err.message : 'Could not make a new deck.'
-      })
+    location.replace('/new/blank')
   }
 
   saveBtn.addEventListener('click', save)

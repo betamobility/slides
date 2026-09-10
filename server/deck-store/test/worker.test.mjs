@@ -112,8 +112,33 @@ export async function run(Miniflare) {
   // header-stripping and wrong-host assertions read from here.
   const proxied = []
 
-  /** What the stub Pages project serves at `path`. Deterministic, per-path. */
-  const pagesBody = (path) => `stub bytes for ${path}\n${'x'.repeat(64)}\n`
+  /**
+   * What the stub Pages project serves at `path`. Deterministic, per-path.
+   *
+   * The blank template is the exception and has to be a real document: the
+   * worker mints an identity into those bytes for `GET /new/blank`. Keeping it
+   * here rather than in the outbound stub means the public pass-through
+   * assertions, which compare against this function, stay true of it too.
+   */
+  const pagesBody = (path) => (path === '/templates/blank.bento.html'
+    ? blankTemplate()
+    : `stub bytes for ${path}\n${'x'.repeat(64)}\n`)
+
+  // `GET /new/blank` reads the blank template from PAGES_ORIGIN. Prefer the
+  // real built file — that is the document a colleague's first deck is made
+  // from — and fall back to a minimal template so this route is still covered
+  // before `node scripts/build-beta-templates.mjs` has run.
+  let templateOutage = false
+  const builtBlank = join(repoRoot, 'beta', 'templates', 'blank.bento.html')
+  const blankTemplate = () => (existsSync(builtBlank)
+    ? readFileSync(builtBlank, 'utf8')
+    : `<!doctype html><html><body><script type="application/bento+json" id="bento-doc">${
+        JSON.stringify({
+          format: 'bento/slides', v: 1, template: true, title: 'Blank deck',
+          collab: { on: true, room: 'inherited-should-be-dropped' },
+          slides: [{ id: 's1', elements: [] }],
+        }).replace(/</g, '\\u003c')
+      }</script></body></html>`)
 
   // Kept in a variable so a scenario can flip one flag and put it back
   // without re-stating the whole worker configuration.
@@ -155,6 +180,11 @@ export async function run(Miniflare) {
           return new Response(null, { status: 308, headers: { location: `https://${PAGES_ORIGIN}/releases/slides/redirected` } })
         }
         if (p === '/releases/slides/boom') return new Response('upstream exploded', { status: 500 })
+        // One scenario takes the blank template away, to prove `/new/blank`
+        // answers a readable 502 rather than storing a broken deck.
+        if (p === '/templates/blank.bento.html' && templateOutage) {
+          return new Response('gone', { status: 404 })
+        }
         return new Response(pagesBody(p), {
           status: 200,
           headers: { 'content-type': 'application/octet-stream', 'cache-control': 'public, max-age=300', 'etag': '"stub"' },
@@ -393,7 +423,7 @@ export async function run(Miniflare) {
 
     // -------------------------------------------- the index reads as a home
     console.log('\nthe index is where work starts (U4)')
-    ok(/<a class="cta" href="\/new">/.test(index), 'a New deck action leads the page while the flag is on')
+    ok(/<a class="cta" href="\/new\/blank">/.test(index), 'a New deck action leads the page while the flag is on')
     ok(index.includes('/plugin marketplace add betamobility/slides'), 'the footer carries the plugin-install lines the landing page used to')
     ok(index.includes('/plugin install beta-slides@beta-slides'), 'both of them')
     // The deck links carry whatever origin served the request, so the check
@@ -532,12 +562,53 @@ export async function run(Miniflare) {
     // opener, so the handoff above is untouched by any of this.
     console.log('\nthe blank-deck create branch')
     ok(script.includes('createBlank'), 'the page carries a create branch beside the handoff')
-    ok(script.includes('/templates/blank.bento.html'), 'the create branch fetches the blank template from the public path')
-    ok(script.includes('mintDocIntoBlock'), 'and mints an identity into it before storing')
-    ok(script.includes('crypto.randomUUID()'), 'the docId is a real uuid, minted client-side')
+    ok(script.includes("location.replace('/new/blank')"), 'the create branch redirects to the worker route')
+    ok(!script.includes('/templates/blank.bento.html'),
+      'and does NOT pull the template into the tab any more — that is the worker’s job now')
+    ok(!script.includes('mintDocIntoBlock'), 'nor carry an inlined copy of the minting logic')
     ok(/else if \(true\) createBlank\(\)/.test(script), 'with the flag on, no opener means create')
     ok(script.indexOf('window.opener) window.opener.postMessage') < script.indexOf('createBlank()'),
       'an opener still wins: the handoff branch is tested first')
+
+    // ------------------------------------------- GET /new/blank (the route)
+    // What the index's New deck button and the redirect above both land on.
+    // One navigation, one 302, no megabyte through the person's browser.
+    console.log('\nGET /new/blank makes the deck server-side')
+    const proxiedBefore = proxied.length
+    r = await call('GET', '/new/blank', { as: 'alice' })
+    eq(r.status, 302, 'GET /new/blank is a redirect, never a page')
+    const madeUrl = r.headers.get('location')
+    ok(/\/d\/[0-9A-Za-z]{10}$/.test(madeUrl || ''), 'it redirects straight to the new deck')
+    eq(r.headers.get('cache-control'), 'no-store', 'and is never cached — every visit is a new deck')
+    ok(proxied.slice(proxiedBefore).some((p) => new URL(p.url).pathname === '/templates/blank.bento.html'),
+      'the worker read the blank template from PAGES_ORIGIN itself')
+    const madeId = madeUrl.slice(madeUrl.lastIndexOf('/') + 1)
+    r = await call('GET', `/d/${madeId}`, { as: 'alice' })
+    eq(r.status, 200, 'the deck it made is served')
+    const madeDoc = JSON.parse(/<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/i.exec(await r.text())[1])
+    eq(madeDoc.format, 'bento/slides', 'and is a bento/slides document')
+    ok(!('template' in madeDoc), 'with the template flag cleared')
+    ok(!('collab' in madeDoc), 'and no inherited collab credentials')
+    ok(typeof madeDoc.docId === 'string' && madeDoc.docId.length > 8, 'carrying a freshly minted docId')
+    const madeRow = (await (await call('GET', '/api/decks', { as: 'alice' })).json()).decks.find((d) => d.id === madeId)
+    eq(madeRow?.kind, 'deck', 'the store lists it as a deck, not a template')
+    eq(madeRow?.owner, 'alice@betamobility.io', 'owned by whoever clicked New deck')
+
+    // Two clicks, two decks. A shared identity here would mean two people's
+    // first decks silently syncing with each other.
+    r = await call('GET', '/new/blank', { as: 'bob' })
+    const secondUrl = r.headers.get('location')
+    ok(secondUrl !== madeUrl, 'a second create makes a genuinely different deck')
+
+    r = await call('GET', '/new/blank', { origin: OLD_ORIGIN, as: 'alice' })
+    eq(r.status, 301, 'on the retired host it redirects like everything else — no shipped file asks for it')
+
+    console.log('\nthe blank template failing is a readable 502, never a broken deck')
+    templateOutage = true
+    r = await call('GET', '/new/blank', { as: 'alice' })
+    eq(r.status, 502, 'a missing template answers 502')
+    ok((await r.text()).includes('blank template'), 'and says which upstream failed')
+    templateOutage = false
 
     // The real thing: run the page's own minting logic over the real blank
     // template and check what a colleague's first deck would actually be.
@@ -589,13 +660,15 @@ export async function run(Miniflare) {
     await mf.setOptions({ ...mfOptions, bindings: { ...mfOptions.bindings, NEW_ENABLED: 'off' } })
     r = await call('GET', '/new', { as: 'alice' })
     eq(r.status, 200, 'with the flag off /new still answers — a shipped deck depends on it (KTD9)')
+    const offBlank = await call('GET', '/new/blank', { as: 'alice' })
+    eq(offBlank.status, 404, 'but /new/blank is gone: a typed URL cannot create what the index will not offer')
     const offPage = await r.text()
     ok(offPage.includes('bento-store-ready') && offPage.includes('window.opener'), 'and it is still the handoff page')
     ok(/else if \(false\) createBlank\(\)/.test(offPage), 'but no-opener does not create')
     ok(offPage.includes('Open this page from a deck'), 'a person who arrives early is told what this page is for')
     r = await call('GET', '/', { as: 'alice' })
     const offIndex = await r.text()
-    ok(!offIndex.includes('href="/new"'), 'and the index offers no New deck link it cannot honour')
+    ok(!offIndex.includes('href="/new/blank"'), 'and the index offers no New deck link it cannot honour')
     ok(offIndex.includes('/plugin marketplace add betamobility/slides'), 'the footer is not flag-dependent')
     await mf.setOptions(mfOptions)
     r = await call('GET', '/new', { as: 'alice' })
@@ -658,7 +731,7 @@ export async function run(Miniflare) {
     console.log('\nthe index empty state and the kind tag')
     const emptyIdx = indexPage([], 'alice@betamobility.io', { create: true })
     ok(emptyIdx.includes('class="empty"'), 'an empty store renders the empty state, not an empty table')
-    ok(emptyIdx.includes('href="/new"'), 'and it points at New deck')
+    ok(emptyIdx.includes('href="/new/blank"'), 'and it points at New deck')
     ok(!emptyIdx.includes('<table'), 'with no table at all')
     ok(indexPage([], 'alice@betamobility.io', { create: false }).includes('Save to Beta'),
       'with the flag off the empty state still says where a deck comes from')
