@@ -68,7 +68,7 @@ PAGES_ORIGIN = "beta-slides-site.pages.dev"
 #                      the whole of KTD9.
 STORE_HOST = "slides.betamobility.ai"
 OLD_HOST = "decks.betamobility.ai"
-REDIRECT_OLD_HOST = "off"
+REDIRECT_OLD_HOST = "on"
 NEW_ENABLED = "off"
 # Four applications' AUDs, all four of which the worker must accept while both
 # hostnames live: the human app and the service-token app on EACH host. The
