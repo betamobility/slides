@@ -179,7 +179,8 @@ export function slideFrom(layouts, layoutId, slideId, fill = {}, notes = '') {
   return s
 }
 
-/** The three starter decks (plan R7). Each is `template: true`, no docId, no collab. */
+/** The starter decks (plan R7) plus `blank` (2026-09-10 plan, U2).
+ * Each is `template: true`, no docId, no collab. */
 export function betaTemplates(fragment) {
   const layouts = betaLayouts(fragment.theme)
   const base = (title, subject, slides) => ({
@@ -191,6 +192,14 @@ export function betaTemplates(fragment) {
   })
   const S = (layoutId, id, fill, notes) => slideFrom(layouts, layoutId, id, fill, notes)
   return {
+    // The one /new clones (2026-09-10 plan, U2). One cover slide with every
+    // placeholder intact, so a colleague lands on a deck that is theirs to
+    // fill rather than someone else's to edit down. It carries the same
+    // theme, fonts and six layouts as its siblings, so the first "＋ Slide"
+    // offers the whole design system.
+    blank: base('Untitled deck', '', [
+      S('beta-title', 'cover', {}, 'Give the deck a title, then add slides from the Beta layouts.'),
+    ]),
     'client-pitch': base('Client pitch', 'Client pitch', [
       S('beta-title', 'cover', { 'beta-kicker': 'Proposal', 'beta-title-h': 'A better way to run the network', 'beta-title-sub': 'What we propose, what it costs, and what changes for riders.' }, 'Open with the one thing the client already wants to be true.'),
       S('beta-section', 'why', { 'beta-kicker': 'Part 1', 'beta-title-h': 'Why now', 'beta-title-sub': 'The pressure the client is under this year.' }, ''),

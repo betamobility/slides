@@ -19,7 +19,7 @@ beta/
 
 ```sh
 cd slides && npm run build:single                # the shell the templates embed
-node ../scripts/build-beta-templates.mjs         # writes beta/templates/{client-pitch,insight-brief,workshop}.bento.html
+node ../scripts/build-beta-templates.mjs         # writes beta/templates/{blank,client-pitch,insight-brief,workshop}.bento.html
 node ../scripts/test-beta-templates-current.ts   # fails on any template whose payload differs from the shell's
 ```
 
