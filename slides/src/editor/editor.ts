@@ -19,7 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
-import { handoffToStore, isStoreOrigin, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { handoffToStore, isStoreOrigin, saveToDisk, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -863,6 +863,14 @@ export class Editor {
       item(ICONS.plus, t('Duplicate as new deck…'),
         t('A separate deck for you — same content, new identity; it never syncs with this one.'),
         () => this.saveAsNewDeck())
+      // BETA FORK: on the store origin every save above resolves to a store
+      // object, so this is the only way to put the file on the person's own
+      // disk — a Drive folder, usually (docs/beta-drive-workflow.md).
+      if (isStoreOrigin()) {
+        item(ICONS.download, t('Save to your computer…'),
+          t('Write this deck to a folder you choose — Drive, the desktop, anywhere. Same deck and same live session, so edits either side stay in step; ⌘S here keeps saving to Beta.'),
+          () => void this.saveToComputer())
+      }
       if (isEncryptionActive()) {
         item(ICONS.lock, t('Change password…'),
           t('Pick a new password for this file — takes effect on the next save.'),
@@ -1153,6 +1161,28 @@ export class Editor {
       const url = await handoffToStore(html, isEncryptionActive() ? '' : this.store.doc.title)
       try { await navigator.clipboard.writeText(url) } catch { /* the toast still shows the link */ }
       this.toast(t('Saved to Beta — link copied: {url}', { url }), 8000)
+    } catch (err) {
+      console.error(err)
+      this.toast((err as Error)?.message || t('Save failed — see console'), 6000)
+    }
+  }
+
+  /**
+   * BETA FORK: write the deck to the person's own disk from the store origin.
+   *
+   * `serializeAuto`, never `serializeFile`: a password-protected deck must
+   * land on disk encrypted, exactly as "Save as template" learned the hard
+   * way two methods down. The write itself deliberately bypasses the kernel's
+   * saveFile so the ⌘S target stays the store — see `saveToDisk`.
+   */
+  private async saveToComputer() {
+    try {
+      const name = `${fileBase(suggestedFileName(this.store.doc))}.bento.html`
+      const where = await saveToDisk(await serializeAuto(this.store.doc), name)
+      if (where === 'cancelled') return
+      this.toast(where === 'picked'
+        ? t('Saved to your computer — this deck still lives at Beta too, and the two stay in step')
+        : t('Downloaded — your browser cannot pick a folder, so it went to Downloads'), 6000)
     } catch (err) {
       console.error(err)
       this.toast((err as Error)?.message || t('Save failed — see console'), 6000)
