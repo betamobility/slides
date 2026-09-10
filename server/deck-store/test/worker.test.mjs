@@ -689,9 +689,24 @@ export async function run(Miniflare) {
     r = await call('POST', '/api/decks', { as: 'alice', body: deck(slidesDoc('Handed off from an old shell')), origin: OLD_ORIGIN })
     eq(r.status, 201, 'and the upload that page makes is not redirected either')
     const handedOff = await r.json()
-    eq(handedOff.url, `${ORIGIN}/d/${handedOff.id}`, 'the link handed back is the canonical one, so it outlives the old host')
+    // NOT canonicalized to the new host, deliberately. A 2026.9.2 shell
+    // resolves the handoff only if the url startsWith the host IT opened
+    // (slides/src/beta/store.ts, `bento-store-saved` — frozen code on
+    // someone's disk). A canonical link would be silently ignored there and
+    // the handoff would time out with the document discarded.
+    eq(handedOff.url, `${OLD_ORIGIN}/d/${handedOff.id}`,
+      'the link handed back is on the origin that was called, so a shipped shell accepts it')
     r = await call('GET', `/d/${handedOff.id}`, { as: 'alice' })
-    eq(r.status, 200, 'and that link resolves on the new host')
+    eq(r.status, 200, 'and the deck is there, reachable on the new host')
+    r = await call('GET', `/d/${handedOff.id}`, { origin: OLD_ORIGIN })
+    eq(r.status, 301, 'while the old-host form of that link redirects, for as long as the host lives')
+
+    console.log('\nthe create branch belongs to the store host')
+    r = await call('GET', '/new', { as: 'alice', origin: OLD_ORIGIN })
+    ok(/else if \(false\) createBlank\(\)/.test(await r.text()),
+      'no create branch on the retired host: its template fetch would follow a 301 cross-origin and die on CORS')
+    r = await call('GET', '/new', { as: 'alice' })
+    ok(/else if \(true\) createBlank\(\)/.test(await r.text()), 'and it is there on the store host')
     // Narrow: only those two. A PUT is not part of the handoff.
     r = await call('PUT', `/api/decks/${handedOff.id}`, { as: 'alice', body: minimal, origin: OLD_ORIGIN })
     eq(r.status, 301, 'a PUT on the old host still redirects: the exemption is the handoff, not the API')

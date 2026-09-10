@@ -133,9 +133,6 @@ function mintId() {
 // A wrangler [vars] flag. Vars are strings, so say what counts as on.
 const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
 
-/** Where a deck's link should point, whichever hostname was called. */
-const storeOrigin = (env, req) => (env.STORE_HOST ? `https://${env.STORE_HOST}` : new URL(req.url).origin)
-
 const empty = (status) => new Response(null, { status })
 const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' } })
@@ -257,10 +254,15 @@ async function create(req, env, ctx, who, evt = 'deck_save') {
     },
   })
   track(ctx, req, evt, 'ok')
-  // The CANONICAL link, not the one that happens to have been called. A
-  // handoff answered on the retired host must hand back a link that still
-  // resolves after that host is deleted.
-  return json(201, { id, url: `${storeOrigin(env, req)}/d/${id}` })
+  // The link is on the origin that was CALLED, never canonicalized to
+  // STORE_HOST. That looks like an improvement and is a bug: a 2026.9.2 shell
+  // handing off on the retired host resolves the reply only if the url
+  // `startsWith` the host IT opened (slides/src/beta/store.ts, the
+  // `bento-store-saved` branch — frozen code on someone's disk). A canonical
+  // link would be silently ignored there and the handoff would time out after
+  // ten minutes with the document discarded. An old-host link 301s for as
+  // long as that host lives, which is the grace period's whole job.
+  return json(201, { id, url: `${new URL(req.url).origin}/d/${id}` })
 }
 
 async function replace(req, env, ctx, who, id) {
@@ -342,7 +344,7 @@ export default {
     // opaqueredirect and the person is told they are signed out while the
     // document they were publishing is discarded. So the handoff page and the
     // upload it makes both keep answering here; everything else redirects.
-    if (flagOn(env.REDIRECT_OLD_HOST) && env.OLD_HOST && url.hostname === env.OLD_HOST) {
+    if (flagOn(env.REDIRECT_OLD_HOST) && env.OLD_HOST && env.STORE_HOST && url.hostname === env.OLD_HOST) {
       const handoff = (m === 'GET' && path === '/new') || (m === 'POST' && path === '/api/decks')
       if (!handoff) return Response.redirect(`https://${env.STORE_HOST}${path}${url.search}`, 301)
     }
@@ -368,8 +370,15 @@ export default {
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
 
-    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: flagOn(env.NEW_ENABLED) }))
-    if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: flagOn(env.NEW_ENABLED) }))
+    // Is a blank deck on offer? The flag, and the store's own host: on the
+    // retired one /new is only ever a handoff target, and its fetch of the
+    // blank template would follow a 301 cross-origin and die on CORS with a
+    // confusing error. The index must not offer what /new would not honour,
+    // so both read this.
+    const canCreate = flagOn(env.NEW_ENABLED) && (!env.STORE_HOST || url.hostname === env.STORE_HOST)
+
+    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }))
+    if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: canCreate }))
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
     if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
     const dm = /^\/api\/decks\/([0-9A-Za-z]{10})$/.exec(path)
