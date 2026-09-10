@@ -11,6 +11,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.9.3] — 2026-09-10
+
 - **One address.** `slides.betamobility.ai` is where decks live now: sign in and
   you see them, newest first, and **New deck** makes a blank Beta deck and puts
   you in the editor on its own link — no download, no second hostname. The

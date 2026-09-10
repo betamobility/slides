@@ -61,9 +61,17 @@ const RELAY_HOST = 'sync.betamobility.ai'
 // The match is a PREFIX BOUNDARY, not a substring: `/releases-secret` is
 // gated. Reads only: a write to an allowlisted path is not a pass-through.
 const PUBLIC_PREFIXES = ['/releases/', '/templates/', '/skills/', '/logo/']
+// NOT here, though the plan's KTD0 listed it: /404.html. An unknown path is
+// gated before it ever reaches Pages, so Pages' 404 page is never served to
+// an anonymous visitor and nothing fetches it by name. Listing it bought
+// nothing and cost a second entry, because Pages 308s an `.html` URL to its
+// extensionless form: inside an allowlisted PREFIX the target stays inside
+// that prefix (/templates/x.html → /templates/x), but a root-level EXACT
+// entry's twin escapes the list. Measured on the live host — /404.html 308d
+// to a gated /404. One less public path is the safer direction.
 const PUBLIC_PATHS = new Set([
   '/agents.md', '/slides/agents.md',
-  '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+  '/robots.txt', '/sitemap.xml', '/LICENSE',
 ])
 const isPublicPath = (path) => PUBLIC_PATHS.has(path) || PUBLIC_PREFIXES.some((p) => path.startsWith(p))
 

@@ -30,11 +30,17 @@ can see what reverting would buy back.
 
 **Four things settled with it, each of which someone could otherwise re-open:**
 
-**Access shape.** Public prefixes get one path-scoped **Bypass application
-each**, created *before* the domain-wide Allow application. The mechanism is
-per-application path scoping — the narrower application wins and inherits
-nothing from the broader one — not policy ordering inside one application,
-which is a different rule and gives no path specificity. Never put a
+**Access shape.** The public prefixes go in **one Bypass application with a
+destination each**, created *before* the domain-wide Allow application. The
+mechanism is *destination* path scoping — the narrower destination wins and
+inherits nothing from the broader one — not policy ordering inside one
+application, which is a different rule and gives no path specificity. An
+application takes fifty destinations, so ten destinations in one application
+and ten single-destination applications are the same thing; the plan said the
+latter, and this is it said shorter. A path destination is a bare prefix with
+no wildcard, confirmed against the harness application that has been running
+on `decks.betamobility.ai/api/harness/` since 2026-09-08 — which is the
+answer to the plan's OQ2. Never put a
 device-posture check in a Bypass policy: documented as broken when a Worker
 intercepts. Bypassed requests carry no assertion and are not logged, so their
 AUDs stay out of `ACCESS_AUDS` and drift there is silent — which is why

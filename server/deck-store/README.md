@@ -93,9 +93,13 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
 
 4. **Access applications, in this order** (Zero Trust, Access, Applications, Self-hosted). Order matters: create the Bypass applications *first*, or the machine paths are gated for however long the gap lasts, and every shipped deck's update check gets a login page instead of a manifest — silently, with no user seeing an error.
 
-   1. **One path-scoped Bypass application per public prefix** on `slides.betamobility.ai`: `/releases/`, `/templates/`, `/skills/`, `/logo/`, `/agents.md`, `/slides/agents.md`, `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE`. Each carries a single Bypass policy. Their AUDs stay **out** of `ACCESS_AUDS`.
+   1. **One Bypass application carrying every public destination** on `slides.betamobility.ai`: `/releases/`, `/templates/`, `/skills/`, `/logo/`, `/agents.md`, `/slides/agents.md`, `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE`. One Bypass policy (`Everyone`) covers them all. Its AUD stays **out** of `ACCESS_AUDS`.
 
-      The mechanism is *per-application* path scoping — the narrower application wins and inherits nothing from the broader one. That is a different rule from policy ordering inside one application, which would not give path specificity. **Never put a device-posture check in a Bypass policy:** that combination is documented as broken when a Worker intercepts the request. Bypassed requests carry no assertion and **are not logged**, which is acceptable for anonymous fetches of already-public signed bytes, and is why the live checker below is the only thing that would catch drift.
+      A self-hosted application takes up to **fifty destinations**, and Access matches on the most specific *destination* across applications — so ten destinations in one application behave exactly like ten single-destination applications, and are a tenth of the work. (An earlier draft of the plan said one application per prefix; this is the same thing, said shorter.)
+
+      The mechanism is *destination* path scoping — the narrower destination wins and inherits nothing from the broader one. That is a different rule from policy ordering inside one application, which would not give path specificity. **Never put a device-posture check in a Bypass policy:** that combination is documented as broken when a Worker intercepts the request. Bypassed requests carry no assertion and **are not logged**, which is acceptable for anonymous fetches of already-public signed bytes, and is why the live checker below is the only thing that would catch drift.
+
+      A path destination is a bare prefix with **no wildcard**: `slides.betamobility.ai/releases/` covers everything beneath it. Confirmed against production — the harness application has run on `decks.betamobility.ai/api/harness/`, written exactly that way, since 2026-09-08, and it matches `/api/harness/decks`.
 
    2. **The domain-wide human app** on `slides.betamobility.ai`, policy Allow with the existing Google Workspace login restricted to `@betamobility.io`. Note its AUD.
 
