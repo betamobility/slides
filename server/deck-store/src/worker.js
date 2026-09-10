@@ -133,6 +133,9 @@ function mintId() {
 // A wrangler [vars] flag. Vars are strings, so say what counts as on.
 const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
 
+/** Where a deck's link should point, whichever hostname was called. */
+const storeOrigin = (env, req) => (env.STORE_HOST ? `https://${env.STORE_HOST}` : new URL(req.url).origin)
+
 const empty = (status) => new Response(null, { status })
 const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' } })
@@ -254,7 +257,10 @@ async function create(req, env, ctx, who, evt = 'deck_save') {
     },
   })
   track(ctx, req, evt, 'ok')
-  return json(201, { id, url: `${new URL(req.url).origin}/d/${id}` })
+  // The CANONICAL link, not the one that happens to have been called. A
+  // handoff answered on the retired host must hand back a link that still
+  // resolves after that host is deleted.
+  return json(201, { id, url: `${storeOrigin(env, req)}/d/${id}` })
 }
 
 async function replace(req, env, ctx, who, id) {
@@ -323,10 +329,28 @@ export default {
     const path = url.pathname
     const m = req.method
 
-    // The public release channel comes first, and it is the ONLY thing that
-    // does. These paths are anonymous machine traffic from files already on
-    // people's disks (KTD0); Access is configured to Bypass them, so there is
-    // no assertion here to verify and nothing to verify it against.
+    // The retired host, before anything else, so a signed-out person
+    // following an old link is redirected rather than bounced through a login
+    // on a host that is going away. (Which also means the old host's Access
+    // application has to go: Access answers before this worker runs, and a
+    // gated old host would never reach this branch.)
+    //
+    // TWO EXEMPTIONS, both the same reason. A shell already on someone's disk
+    // opens <its own storeHost>/new and rejects any reply from another origin
+    // (KTD9) — and the page it lands on posts to a RELATIVE /api/decks, which
+    // it reads with redirect:'manual', so a 301 there arrives as an
+    // opaqueredirect and the person is told they are signed out while the
+    // document they were publishing is discarded. So the handoff page and the
+    // upload it makes both keep answering here; everything else redirects.
+    if (flagOn(env.REDIRECT_OLD_HOST) && env.OLD_HOST && url.hostname === env.OLD_HOST) {
+      const handoff = (m === 'GET' && path === '/new') || (m === 'POST' && path === '/api/decks')
+      if (!handoff) return Response.redirect(`https://${env.STORE_HOST}${path}${url.search}`, 301)
+    }
+
+    // The public release channel comes next, and it is the ONLY other thing
+    // ahead of identity. These paths are anonymous machine traffic from files
+    // already on people's disks (KTD0); Access is configured to Bypass them,
+    // so there is no assertion here to verify and nothing to verify it against.
     if (isPublicPath(path) && (m === 'GET' || m === 'HEAD')) return passThrough(req, env, url)
 
     // Identity next, before any routing of our own: an unknown path without an

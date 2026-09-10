@@ -133,6 +133,8 @@ export async function run(Miniflare) {
     bindings: {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
       PAGES_ORIGIN, NEW_ENABLED: 'on',
+      STORE_HOST: 'slides.betamobility.ai', OLD_HOST: 'decks.betamobility.ai',
+      REDIRECT_OLD_HOST: 'on',
     },
     outboundService: async (req) => {
       if (req.url === CERTS_URL) {
@@ -165,17 +167,21 @@ export async function run(Miniflare) {
   }
   const mf = new Miniflare(mfOptions)
 
-  const ORIGIN = 'https://decks.betamobility.ai'
+  // The store's host. OLD_ORIGIN is the retired one, used only by the
+  // redirect scenarios — every other assertion in this file is about the host
+  // the store actually lives on now.
+  const ORIGIN = 'https://slides.betamobility.ai'
+  const OLD_ORIGIN = 'https://decks.betamobility.ai'
   const tokens = {
     alice: await sign(k1, 'k1', human('alice@betamobility.io')),
     bob: await sign(k1, 'k1', human('bob@betamobility.io')),
     service: await sign(k1, 'k1', service()),
   }
   /** Dispatch a request; `as` names a canned identity or is a raw assertion string. */
-  async function call(method, path, { as, body, headers = {} } = {}) {
+  async function call(method, path, { as, body, headers = {}, origin = ORIGIN, redirect = 'manual' } = {}) {
     const h = { 'user-agent': 'rig/1.0', ...headers }
     if (as) h['cf-access-jwt-assertion'] = tokens[as] || as
-    return mf.dispatchFetch(ORIGIN + path, { method, headers: h, body })
+    return mf.dispatchFetch(origin + path, { method, headers: h, body, redirect })
   }
   const bodyOf = async (r) => Buffer.from(await r.arrayBuffer())
   async function waitFor(pred, ms = 3000) {
@@ -661,6 +667,44 @@ export async function run(Miniflare) {
     eq((tagged.match(/class="kind"/g) || []).length, 1, 'and an ordinary one beside it is not')
     ok(indexPage([{ id: 'z', url: '/d/z', title: '<img src=x onerror=alert(1)>', kind: 'deck', owner: '', writer: '', updated: '', size: 0 }], 'a@b.io', {})
       .includes('&lt;img src=x onerror=alert(1)&gt;'), 'a title carrying markup is still escaped')
+
+    // ------------------------------------------------------ the old host
+    console.log('\nthe retired host redirects, except what a shipped deck needs (U6)')
+    r = await call('GET', `/d/${second.id}`, { origin: OLD_ORIGIN })
+    eq(r.status, 301, 'covers AE7: an old deck link is a 301')
+    eq(r.headers.get('location'), `${ORIGIN}/d/${second.id}`, 'to the same path on the new host')
+    eq((await bodyOf(r)).length, 0, 'and no deck bytes leave the old host')
+    r = await call('GET', '/d/abc?x=1&y=%C3%A6', { origin: OLD_ORIGIN })
+    eq(r.headers.get('location'), `${ORIGIN}/d/abc?x=1&y=%C3%A6`, 'the query survives the redirect intact')
+    r = await call('GET', '/', { origin: OLD_ORIGIN })
+    eq(r.status, 301, 'the old index redirects with no assertion in play at all')
+    r = await call('GET', '/api/decks', { as: 'alice', origin: OLD_ORIGIN })
+    eq(r.status, 301, 'and so does a signed-in request: the host is going away, not gated')
+
+    // The two exemptions. Both exist because a shell already on disk drives
+    // this flow and rejects an answer from any other origin (KTD9).
+    r = await call('GET', '/new', { as: 'alice', origin: OLD_ORIGIN })
+    eq(r.status, 200, '/new on the old host is NOT redirected')
+    ok((await r.text()).includes('bento-store-ready'), 'and still serves the handoff page')
+    r = await call('POST', '/api/decks', { as: 'alice', body: deck(slidesDoc('Handed off from an old shell')), origin: OLD_ORIGIN })
+    eq(r.status, 201, 'and the upload that page makes is not redirected either')
+    const handedOff = await r.json()
+    eq(handedOff.url, `${ORIGIN}/d/${handedOff.id}`, 'the link handed back is the canonical one, so it outlives the old host')
+    r = await call('GET', `/d/${handedOff.id}`, { as: 'alice' })
+    eq(r.status, 200, 'and that link resolves on the new host')
+    // Narrow: only those two. A PUT is not part of the handoff.
+    r = await call('PUT', `/api/decks/${handedOff.id}`, { as: 'alice', body: minimal, origin: OLD_ORIGIN })
+    eq(r.status, 301, 'a PUT on the old host still redirects: the exemption is the handoff, not the API')
+    r = await call('GET', '/new', { as: 'alice' })
+    eq(r.status, 200, 'a request to the new host is never redirected')
+
+    console.log('\nwith the flag off, the old host is exactly what it is today')
+    await mf.setOptions({ ...mfOptions, bindings: { ...mfOptions.bindings, REDIRECT_OLD_HOST: 'off' } })
+    r = await call('GET', `/d/${second.id}`, { origin: OLD_ORIGIN })
+    eq(r.status, 401, 'no assertion is 401 again, not a redirect')
+    r = await call('GET', `/d/${second.id}`, { as: 'alice', origin: OLD_ORIGIN })
+    eq(r.status, 200, 'and a signed-in deck open still serves the deck')
+    await mf.setOptions(mfOptions)
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

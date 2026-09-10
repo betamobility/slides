@@ -10,7 +10,19 @@ name = "beta-decks"
 main = "src/worker.js"
 compatibility_date = "2026-07-01"
 
+# BOTH hostnames, on one worker. slides.betamobility.ai is the store now and
+# also serves the public release channel through PAGES_ORIGIN; the retired
+# decks.betamobility.ai stays here only to answer 301 (and the two handoff
+# paths a shipped deck depends on) until it is deleted. Without the first
+# entry a wrangler deploy from a fresh clone would reproduce only the retired
+# address.
+#
+# A Worker Custom Domain cannot be created on a hostname that already has a
+# CNAME, and the Pages custom domain is one — so the maintainer detaches it
+# from Pages first. Do not delete the Pages project: re-attaching its domain
+# is the rollback.
 routes = [
+  { pattern = "slides.betamobility.ai", custom_domain = true },
   { pattern = "decks.betamobility.ai", custom_domain = true }
 ]
 
@@ -44,4 +56,22 @@ ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
 # request — a Worker on a Custom Domain that fetches its own hostname
 # re-invokes itself.
 PAGES_ORIGIN = "beta-slides-site.pages.dev"
+
+# The two hostnames, named rather than inferred, and the two rollout flags.
+# The flags exist so the cutover ORDER is a control and not an aspiration
+# (2026-09-10 plan, "Cutover order"):
+#
+#   REDIRECT_OLD_HOST  off until the new host actually answers as the store.
+#                      Turned on at cutover step 4. While it is off the old
+#                      host behaves exactly as it does today.
+#   NEW_ENABLED        off until release v2026.9.3 is published, because /new
+#                      clones the published blank template and a pre-release
+#                      clone would name the OLD store host. Turned on last,
+#                      at step 9. It gates the create branch only — /new keeps
+#                      answering a shipped deck's handoff throughout, which is
+#                      the whole of KTD9.
+STORE_HOST = "slides.betamobility.ai"
+OLD_HOST = "decks.betamobility.ai"
+REDIRECT_OLD_HOST = "off"
+NEW_ENABLED = "off"
 ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a"
