@@ -63,6 +63,26 @@ in `johan@betamobility.io`'s Drive.
    overwrite once and the handle is retained, after which ⌘S and the 2.5s
    autosave write-back run with no dialog.
 
+8. **A template opened from the folder is a genuinely new deck.** All four
+   carry `template: true` and no `docId` and no `collab`, and `parseDoc`
+   (`slides/src/model.ts`) treats that flag as instantiation: it deletes the
+   flag, mints a fresh `docId` and deletes `collab`. So the file route needs no
+   equivalent of the store's `/new`, and two people starting from the same
+   template never end up sharing an identity or a live room.
+
+   **The hazard is the picker, not the identity.** `pickHandle` pre-fills the
+   opened file's own name and the browser remembers the last directory per
+   picker id, so a first ⌘S straight from `Blank.bento.html` offers to write
+   back over the template, in a Shared drive folder everyone can write to. The
+   guide therefore tells people to change both name and folder on that first
+   save. Worth revisiting if `saveFile` ever grows a template-aware default.
+
+9. **Live co-editing does not mean two people opening one Drive file.** Off the
+   store origin, "Invite to edit…" saves a *copy* to send
+   (`editor.ts inviteToEdit`); the recipient's copy joins the same relay room
+   and both edit live. That is the flow to teach, and it sidesteps the unrun
+   case below entirely.
+
 ### Not measured
 
 **Two machines editing the same Drive-synced deck at once.** The reasoning
