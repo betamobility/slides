@@ -199,7 +199,32 @@ ${body}
 export function newPage(who, { create = false } = {}) {
   return `${head('Save to Beta')}
 <body>
-<main>
+${create ? `<script>
+// THE BRANCH IS DECIDED BEFORE THE CARD IS PARSED, and that placement is the
+// whole point of this script existing separately from the one at the end.
+//
+// A person arriving at /new with no opener is going to /new/blank, and the
+// card below is not for them. Deciding that at the BOTTOM of the body — where
+// the rest of the page's script lives — means the browser has already parsed
+// and PAINTED the card by the time the redirect fires: heading, Deck and Size
+// rows, a Save button, a Close button, and a footer about keeping the tab
+// open, all of it addressed to the other audience, on screen for as long as
+// the redirect and the create take. That flash is what it looked like when
+// this was still doing the work in the browser, so it read as "not fixed".
+//
+// Same trick as the preview remover in kernel/src/save.ts: a parser-blocking
+// inline script placed BEFORE the markup it concerns, so the markup never
+// reaches the screen.
+//
+// Emitted ONLY when the create branch is on, so "is this page willing to make
+// a deck" stays answerable by reading the bytes, which is how the rig and the
+// retired host's behaviour are both checked.
+(function () {
+  if (window.opener) return  // the handoff: the card IS for them
+  location.replace('/new/blank')
+})()
+</script>
+` : ''}<main>
 <header>
 <div><div class="mark">beta/slides</div><h1 id="heading">Save to Beta</h1></div>
 <div class="who">${esc(who)}</div>
@@ -279,22 +304,17 @@ export function newPage(who, { create = false } = {}) {
       })
   }
 
-  // No opener: a person typed the URL. The making of a blank deck moved to the
-  // worker (\`GET /new/blank\`), which does the same three steps beside the store
-  // instead of pulling a megabyte into this tab and pushing it back. So this is
-  // a redirect, and the card below is never painted for this audience.
-  // \`replace\`, not \`assign\`, so Back does not mint a second deck.
-  function createBlank() {
-    location.replace('/new/blank')
-  }
-
   saveBtn.addEventListener('click', save)
   $('close').addEventListener('click', function () { window.close() })
 
   // Announce readiness. The opener is a file:// deck with a null origin, so
   // the target must be '*'; the deck checks event.origin and event.source.
+  //
+  // The no-opener case was handled at the TOP of the body, before any of this
+  // markup was parsed — see the script up there. Reaching here without an
+  // opener therefore means the create branch is off, and the card needs to say
+  // what it is for.
   if (window.opener) window.opener.postMessage({ type: 'bento-store-ready' }, '*')
-  else if (${create ? 'true' : 'false'}) createBlank()
   else $('intro').textContent = 'Open this page from a deck: Share panel, Save to Beta.'
 })()
 </script>

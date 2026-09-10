@@ -561,14 +561,25 @@ export async function run(Miniflare) {
     // The same page, second branch (KTD6). It runs only when there is NO
     // opener, so the handoff above is untouched by any of this.
     console.log('\nthe blank-deck create branch')
-    ok(script.includes('createBlank'), 'the page carries a create branch beside the handoff')
-    ok(script.includes("location.replace('/new/blank')"), 'the create branch redirects to the worker route')
+    ok(page.includes("location.replace('/new/blank')"), 'the create branch redirects to the worker route')
     ok(!script.includes('/templates/blank.bento.html'),
       'and does NOT pull the template into the tab any more — that is the worker’s job now')
     ok(!script.includes('mintDocIntoBlock'), 'nor carry an inlined copy of the minting logic')
-    ok(/else if \(true\) createBlank\(\)/.test(script), 'with the flag on, no opener means create')
-    ok(script.indexOf('window.opener) window.opener.postMessage') < script.indexOf('createBlank()'),
-      'an opener still wins: the handoff branch is tested first')
+
+    // THE PLACEMENT IS THE FEATURE. Deciding this at the bottom of the body
+    // let the browser paint the whole handoff card — heading, Save button,
+    // Close button, "keep this tab open" footer — before the redirect fired,
+    // for the audience that card is not addressed to. It read as the fix not
+    // having landed at all.
+    const redirectAt = page.indexOf("location.replace('/new/blank')")
+    ok(redirectAt !== -1 && redirectAt < page.indexOf('<main>'),
+      'and it is decided BEFORE <main>, so the card is never parsed for that audience')
+    ok(redirectAt < page.indexOf('id="save"'),
+      'before the Save button that belongs to the other audience')
+    ok(redirectAt < page.indexOf('The document stays in this tab'),
+      'and before the footer telling them to keep a tab open')
+    ok(page.indexOf('if (window.opener) return') < redirectAt,
+      'an opener still wins: the handoff is tested before the redirect')
 
     // ------------------------------------------- GET /new/blank (the route)
     // What the index's New deck button and the redirect above both land on.
@@ -664,7 +675,7 @@ export async function run(Miniflare) {
     eq(offBlank.status, 404, 'but /new/blank is gone: a typed URL cannot create what the index will not offer')
     const offPage = await r.text()
     ok(offPage.includes('bento-store-ready') && offPage.includes('window.opener'), 'and it is still the handoff page')
-    ok(/else if \(false\) createBlank\(\)/.test(offPage), 'but no-opener does not create')
+    ok(!offPage.includes("location.replace('/new/blank')"), 'but no-opener does not create')
     ok(offPage.includes('Open this page from a deck'), 'a person who arrives early is told what this page is for')
     r = await call('GET', '/', { as: 'alice' })
     const offIndex = await r.text()
@@ -672,7 +683,7 @@ export async function run(Miniflare) {
     ok(offIndex.includes('/plugin marketplace add betamobility/slides'), 'the footer is not flag-dependent')
     await mf.setOptions(mfOptions)
     r = await call('GET', '/new', { as: 'alice' })
-    ok(/else if \(true\) createBlank\(\)/.test(await r.text()), 'and the flag flips back')
+    ok((await r.text()).includes("location.replace('/new/blank')"), 'and the flag flips back')
 
     // ------------------------------------------------- the real built shell
     // The synthetic deck above proves the contract; this proves the validator
@@ -779,10 +790,10 @@ export async function run(Miniflare) {
 
     console.log('\nthe create branch belongs to the store host')
     r = await call('GET', '/new', { as: 'alice', origin: OLD_ORIGIN })
-    ok(/else if \(false\) createBlank\(\)/.test(await r.text()),
-      'no create branch on the retired host: its template fetch would follow a 301 cross-origin and die on CORS')
+    ok(!(await r.text()).includes("location.replace('/new/blank')"),
+      'no create branch on the retired host: /new/blank there is a 301 the handoff audience must not be sent through')
     r = await call('GET', '/new', { as: 'alice' })
-    ok(/else if \(true\) createBlank\(\)/.test(await r.text()), 'and it is there on the store host')
+    ok((await r.text()).includes("location.replace('/new/blank')"), 'and it is there on the store host')
     // Narrow: only those two. A PUT is not part of the handoff.
     r = await call('PUT', `/api/decks/${handedOff.id}`, { as: 'alice', body: minimal, origin: OLD_ORIGIN })
     eq(r.status, 301, 'a PUT on the old host still redirects: the exemption is the handoff, not the API')
