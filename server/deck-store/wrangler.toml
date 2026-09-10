@@ -69,7 +69,7 @@ PAGES_ORIGIN = "beta-slides-site.pages.dev"
 STORE_HOST = "slides.betamobility.ai"
 OLD_HOST = "decks.betamobility.ai"
 REDIRECT_OLD_HOST = "on"
-NEW_ENABLED = "off"
+NEW_ENABLED = "on"
 # Four applications' AUDs, all four of which the worker must accept while both
 # hostnames live: the human app and the service-token app on EACH host. The
 # old host's two are pruned when it is deleted, not before.
@@ -78,4 +78,4 @@ NEW_ENABLED = "off"
 # (c3f68dd2…, "beta/slides public paths"). A bypassed request carries no
 # assertion at all, so there is nothing for the worker to verify — listing it
 # would suggest otherwise.
-ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a,8290c45f6aa41eb619b944e9113f374f8046070023b6f6b7c065770ef25b7175,547e529820867f3e06b129f20582647d9edcf12a7203a88235c5b7877ad0eb3e"
+ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a,3ed30ed3c945ed29b8f8c680555cc7d3b4535e2df9301a3542b9a5de5349272d,547e529820867f3e06b129f20582647d9edcf12a7203a88235c5b7877ad0eb3e"
