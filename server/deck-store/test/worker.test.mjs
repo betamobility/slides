@@ -25,7 +25,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 // The page's own minting logic, imported from the module the page inlines it
 // from — so what the rig exercises is the code the browser runs, not a copy.
-import { mintDocIntoBlock } from '../src/pages.js'
+import { mintDocIntoBlock, indexPage } from '../src/pages.js'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -382,6 +382,22 @@ export async function run(Miniflare) {
       'the index loads the Plausible script for betamobility.ai')
     eq(r.headers.get('content-type'), 'text/html; charset=utf-8', 'index is served as html')
 
+    // -------------------------------------------- the index reads as a home
+    console.log('\nthe index is where work starts (U4)')
+    ok(/<a class="cta" href="\/new">/.test(index), 'a New deck action leads the page while the flag is on')
+    ok(index.includes('/plugin marketplace add betamobility/slides'), 'the footer carries the plugin-install lines the landing page used to')
+    ok(index.includes('/plugin install beta-slides@beta-slides'), 'both of them')
+    // The deck links carry whatever origin served the request, so the check
+    // that matters is the page's own prose: it no longer tells anyone where
+    // the store lives, because the store lives where they already are.
+    ok(!index.includes('Stored at decks.betamobility.ai'), 'and the footer no longer names the retired host')
+    ok(index.indexOf('<th>Updated</th>') < index.indexOf('<th>Owner</th>'),
+      'when it changed comes before who owns it')
+    ok(!index.includes('<th>Kind</th>'), 'kind is no longer a column of its own')
+    // Every deck so far is an ordinary deck, so no kind tag is drawn; the
+    // encrypted and template decks below prove the other half.
+    ok(!index.includes('class="kind"'), 'an ordinary deck carries no kind tag')
+
     // ----------------------------------------------------------------- put
     console.log('\nreplace')
     const edited = deck(slidesDoc('Strategi 2026 for Bærum, edited'))
@@ -568,6 +584,10 @@ export async function run(Miniflare) {
     ok(offPage.includes('bento-store-ready') && offPage.includes('window.opener'), 'and it is still the handoff page')
     ok(/else if \(false\) createBlank\(\)/.test(offPage), 'but no-opener does not create')
     ok(offPage.includes('Open this page from a deck'), 'a person who arrives early is told what this page is for')
+    r = await call('GET', '/', { as: 'alice' })
+    const offIndex = await r.text()
+    ok(!offIndex.includes('href="/new"'), 'and the index offers no New deck link it cannot honour')
+    ok(offIndex.includes('/plugin marketplace add betamobility/slides'), 'the footer is not flag-dependent')
     await mf.setOptions(mfOptions)
     r = await call('GET', '/new', { as: 'alice' })
     ok(/else if \(true\) createBlank\(\)/.test(await r.text()), 'and the flag flips back')
@@ -623,6 +643,25 @@ export async function run(Miniflare) {
     ok(longTitle.startsWith(lrow.title) && lrow.title.length > 0, `the listed title is a clean prefix of the original (${lrow.title.length} chars)`)
 
     // ---------------------------------------------------------- misc routes
+    // Rendered directly, because these two states are hard to reach live: an
+    // empty store, and a deck the index should mark. Same function the route
+    // calls.
+    console.log('\nthe index empty state and the kind tag')
+    const emptyIdx = indexPage([], 'alice@betamobility.io', { create: true })
+    ok(emptyIdx.includes('class="empty"'), 'an empty store renders the empty state, not an empty table')
+    ok(emptyIdx.includes('href="/new"'), 'and it points at New deck')
+    ok(!emptyIdx.includes('<table'), 'with no table at all')
+    ok(indexPage([], 'alice@betamobility.io', { create: false }).includes('Save to Beta'),
+      'with the flag off the empty state still says where a deck comes from')
+    const tagged = indexPage([
+      { id: 'x', url: '/d/x', title: 'A player', kind: 'player', owner: 'a@b.io', writer: 'a@b.io', updated: new Date().toISOString(), size: 10 },
+      { id: 'y', url: '/d/y', title: 'A deck', kind: 'deck', owner: 'a@b.io', writer: 'a@b.io', updated: new Date().toISOString(), size: 10 },
+    ], 'alice@betamobility.io', { create: true })
+    ok(/class="kind">player</.test(tagged), 'a deck that is not an ordinary deck is tagged')
+    eq((tagged.match(/class="kind"/g) || []).length, 1, 'and an ordinary one beside it is not')
+    ok(indexPage([{ id: 'z', url: '/d/z', title: '<img src=x onerror=alert(1)>', kind: 'deck', owner: '', writer: '', updated: '', size: 0 }], 'a@b.io', {})
+      .includes('&lt;img src=x onerror=alert(1)&gt;'), 'a title carrying markup is still escaped')
+
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
     eq(r.status, 404, 'an unknown path with a valid assertion is 404')

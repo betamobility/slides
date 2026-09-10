@@ -66,6 +66,13 @@ th,td{text-align:left;padding:.65rem .5rem;border-bottom:1px solid var(--color-b
 th{font-weight:500;color:var(--color-on-surface-muted);font-size:.75rem;font-family:var(--font-mono);letter-spacing:.02em}
 td.num,td.tag,td.time{font-family:var(--font-mono);font-size:.8125rem;white-space:nowrap}
 td.tag span{border:1px solid var(--color-border);border-radius:var(--radius-full);padding:.05rem .5rem;font-size:.75rem}
+.kind{font-family:var(--font-mono);font-size:.6875rem;color:var(--color-on-surface-muted);border:1px solid var(--color-border);border-radius:var(--radius-full);padding:.05rem .45rem;margin-left:.4rem;white-space:nowrap}
+.lede{display:flex;align-items:flex-start;justify-content:space-between;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.75rem}
+.lede p{margin:0}
+a.cta{background:var(--color-surface-emphasis);color:var(--color-on-emphasis);border-radius:var(--radius-full);padding:.55rem 1.25rem;text-decoration:none;font-weight:500;white-space:nowrap;flex:none}
+a.cta:hover{opacity:.88}
+footer p{margin:0 0 .5rem}
+footer pre{font-family:var(--font-mono);font-size:.8125rem;background:var(--color-surface-alt);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:.75rem 1rem;overflow-x:auto;color:var(--color-on-surface-muted);margin:0}
 a{color:inherit;text-decoration:underline;text-underline-offset:.15em}
 a.deck{font-weight:500;text-decoration:none}
 a.deck:hover{text-decoration:underline}
@@ -110,25 +117,37 @@ function fmtTime(iso) {
 }
 
 /**
- * The index: every deck in the store, newest first. `decks` is the list the
- * API returns; `who` is the signed-in identity.
+ * The index: every deck in the store, newest first, and the place a colleague
+ * starts work (2026-09-10 plan, U4/R1/R10). `decks` is the list the API
+ * returns; `who` is the signed-in identity; `create` is the NEW_ENABLED flag,
+ * which is the only thing that decides whether New deck is offered.
+ *
+ * What leads is what someone came for: the New deck action, then the deck's
+ * title and when it last changed. Owner, last writer and size are still here
+ * — that is how you find your own — but they are not the first thing read.
+ * `kind` is shown only when it is worth knowing, i.e. not an ordinary deck.
  */
-export function indexPage(decks, who) {
+export function indexPage(decks, who, { create = false } = {}) {
   const rows = decks.map((d) => `<tr>
-<td><a class="deck" href="${esc(d.url)}">${esc(d.title) || '<span class="muted">Untitled</span>'}</a></td>
-<td class="tag"><span>${esc(d.kind)}</span></td>
-<td>${esc(d.owner)}</td>
-<td>${esc(d.writer)}</td>
+<td><a class="deck" href="${esc(d.url)}">${esc(d.title) || '<span class="muted">Untitled</span>'}</a>${
+    d.kind && d.kind !== 'deck' ? ` <span class="kind">${esc(d.kind)}</span>` : ''}</td>
 <td class="time">${esc(fmtTime(d.updated))}</td>
-<td class="num">${esc(fmtSize(d.size))}</td>
+<td class="muted">${esc(d.owner)}</td>
+<td class="muted">${esc(d.writer)}</td>
+<td class="num muted">${esc(fmtSize(d.size))}</td>
 </tr>`).join('\n')
+  const newLink = create
+    ? '<a class="cta" href="/new">New deck</a>'
+    : ''
   const body = decks.length
     ? `<div class="wrap"><table>
-<thead><tr><th>Deck</th><th>Kind</th><th>Owner</th><th>Last writer</th><th>Updated</th><th>Size</th></tr></thead>
+<thead><tr><th>Deck</th><th>Updated</th><th>Owner</th><th>Last writer</th><th>Size</th></tr></thead>
 <tbody>
 ${rows}
 </tbody></table></div>`
-    : `<div class="empty">No decks yet. Open a deck and pick <strong>Save to Beta</strong> in its Share panel.</div>`
+    : `<div class="empty">No decks yet. ${create
+        ? 'Start one with <strong><a href="/new">New deck</a></strong>, or open a deck you already have and pick <strong>Save to Beta</strong> in its Share panel.'
+        : 'Open a deck and pick <strong>Save to Beta</strong> in its Share panel.'}</div>`
   return `${head('Beta decks')}
 <body>
 <main>
@@ -136,9 +155,17 @@ ${rows}
 <div><div class="mark">beta/slides</div><h1>Decks</h1></div>
 <div class="who">${esc(who)}</div>
 </header>
+<div class="lede">
 <p class="muted">Every deck saved to Beta, newest first. Anyone signed in here can open and edit any of them; the link is the invitation.</p>
+${newLink}
+</div>
 ${body}
-<footer>Stored at decks.betamobility.ai. A deck opened from a link saves back here with ⌘S.</footer>
+<footer>
+<p>A deck opened from a link saves back here with ⌘S.</p>
+<p>To make decks with Claude Code, install the plugin:</p>
+<pre>/plugin marketplace add betamobility/slides
+/plugin install beta-slides@beta-slides</pre>
+</footer>
 </main>
 </body>
 </html>

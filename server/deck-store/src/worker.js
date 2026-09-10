@@ -344,7 +344,7 @@ export default {
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
 
-    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id))
+    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: flagOn(env.NEW_ENABLED) }))
     if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: flagOn(env.NEW_ENABLED) }))
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
     if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
