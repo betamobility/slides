@@ -6,6 +6,7 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
 execution: code
+deepened: 2026-09-10
 ---
 
 # feat: slides.betamobility.ai becomes the deck surface
@@ -41,7 +42,7 @@ Nothing is in use yet, so this is the cheapest moment to fix the shape.
 - **R1.** A signed-in colleague opening `slides.betamobility.ai` sees the decks in the store, newest first.
 - **R2.** Opening `slides.betamobility.ai/new` creates a blank Beta-branded deck and lands the person in the editor on that deck's own link, with no file download and no handoff step.
 - **R3.** A deck opens at `slides.betamobility.ai/d/<id>` and ⌘S saves back to the same link in place.
-- **R4.** Every path that shipped software or the Claude skill fetches stays reachable with no login and byte-identical to what Pages serves today: `/releases/*`, `/templates/*`, `/agents.md`, `/slides/agents.md`, `/skills/*`, `/logo/*`, `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE`.
+- **R4.** Every path in the KTD1 allowlist stays reachable with no login and byte-identical to what Pages serves today. That list is authoritative; this requirement does not restate it, so the two cannot drift.
 - **R5.** No human surface links the paths in R4. They are public in the sense that an anonymous fetch succeeds, invisible in the sense that nothing points at them.
 - **R6.** The Claude skill publishes through `slides.betamobility.ai/api/harness/*` with the existing service token, and the skill's own instructions name that host.
 - **R7.** `decks.betamobility.ai` answers `301` to the same path on `slides.betamobility.ai` for a grace period, then is deleted by the maintainer.
@@ -92,7 +93,22 @@ Nothing is in use yet, so this is the cheapest moment to fix the shape.
 
 ### Key Technical Decisions
 
-**KTD1. Access shape: one gated application on the hostname, plus Bypass policies on the machine prefixes.**
+**KTD0. The public allowlist, verified against the live host on 2026-09-10.**
+This is the authoritative list; the worker's allowlist and the Access Bypass policies are both derived from it, and R4 points here rather than repeating it.
+
+| Prefix | Who fetches it | Verified |
+|---|---|---|
+| `/releases/` | shipped decks checking for updates; the skill downloading a shell | manifest, shell and `packs.json` all `200` |
+| `/templates/` | the skill; `/new` cloning the blank deck | three templates `200`, `blank` added by U2 |
+| `/agents.md` | the skill and any agent harness | `200` |
+| `/slides/agents.md` | same guide at its per-app path; a rig asserts it is published | `200` |
+| `/skills/` | `/plugin marketplace add betamobility/slides` fetches `SKILL.md` and the zip | both `200` |
+| `/logo/` | favicons for the pages | `200` |
+| `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE` | crawlers and the site's own furniture | all `200` |
+
+`/q` and `/help` are upstream's pages and already answer `404` on this host, so they are not on the list and nothing is lost by omitting them. Anything not on this list is gated, which is the safe default direction: a forgotten path costs a login prompt, never a leaked deck.
+
+**KTD1. Access shape: one gated application on the hostname, plus Bypass policies on the allowlisted prefixes.**
 Access enforces before the Worker *executes*, so an anonymous request to a gated path is answered by Access and the worker never runs. A public path therefore needs Access-side treatment; there is no worker-only solution. Two shapes work — a narrower app per public prefix, or Bypass policies — and Bypass is chosen because it keeps the root as the deck list with no redirect hop. The cost is that bypassed requests are not logged, which is acceptable for anonymous machine fetches of already-public signed bytes. Never put a device-posture check in these Bypass policies: that combination is documented as broken when a Worker intercepts the request. The worker keeps verifying the assertion itself, so a wrong Access policy costs availability, never deck confidentiality (R9).
 
 **KTD2. Pages stays the origin of the signed bytes; the worker proxies them.**
@@ -294,13 +310,16 @@ Cutover order matters, because two of these steps are irreversible from an agent
 
 **Approach.** One string changes in `slides/src/main.ts`. `scripts/test-beta-appconfig.ts` pins the old value literally and must pin the new one; `scripts/test-beta-store-client.ts` pins the store origin in its fake `location` and in its assertion about which URL the handoff opens, which now ends `/save`. In the skill, the two harness `curl` commands and the surrounding prose move to the new host. `kernel/src/app.ts` is deliberately untouched (KTD5) — if a change there starts to look necessary, stop: that is a kernel-zone edit and a different unit.
 
+`scripts/test-beta-skill.mjs` will fail on this unit for a non-obvious reason: it asserts that *every* URL the skill names under the site origin is in a `published` set of static release paths. The skill is about to name `/api/harness/decks` on that same origin, which is a route, not a published file. Extend the rig so the store's routes are legitimate rather than deleting the check — it is the thing that stops the skill pointing at a URL the site does not serve.
+
 The editor's Save-to-Beta tooltip names the old host in English and in eight locale catalogs. Leave it for now: it stays true while the redirect is live, and changing it triggers the all-catalogs rule for a string that will be revisited when the old host is deleted. Note it as follow-up rather than half-doing it.
 
 **Test scenarios.**
 - The app config rig sees exactly one store host and it is the new one.
 - The client rig's handoff test opens `<store>/save` and rejects a message from any other origin.
 - A save from a deck served on the store origin still resolves to an in-place `PUT` rather than a download.
-- The skill rig still finds every template URL it names in the published set, and the harness host in the skill matches the app's store host.
+- The skill rig accepts the store's routes as legitimate URLs under the site origin, and still refuses a skill URL that the site genuinely does not serve.
+- The harness host named in the skill matches the app's configured store host.
 
 **Verification.** `slides/node_modules/.bin/tsc -b`, `node scripts/test-beta-appconfig.ts`, `node scripts/test-beta-store-client.ts`, `node scripts/test-beta-skill.mjs`, `node scripts/test-offline.ts`.
 
@@ -371,6 +390,37 @@ The editor's Save-to-Beta tooltip names the old host in English and in eight loc
 **Test scenarios.** `Test expectation: none -- release and publish.`
 
 **Verification.** The manifest reports 2026.9.3; a fresh `/new` deck saves in place with ⌘S rather than downloading; a template opened from the site reports up to date.
+
+---
+
+## System-Wide Impact
+
+**The auth boundary gains a second gate and a second failure mode.** Confidentiality still rests on the worker's own assertion check, which is unchanged. What is new is that *availability* of the public paths now depends on Access configuration being right, and Access config lives in a dashboard, not in this repo. That asymmetry is deliberate (KTD1): a wrong policy costs a login prompt on a machine path, never a served deck.
+
+**The release channel acquires a dependency it did not have.** Today Pages serves those bytes directly. After this, every update check traverses our worker. The worker is small and the path is a pass-through, but it is now in the path of software we cannot patch remotely. This is the strongest argument for KTD2 — the *bytes* stay on the safe path even though the *route* to them no longer does.
+
+**Analytics gains a surface.** The same worker now answers anonymous machine traffic. KTD7 keeps it untracked, so no new event shape appears, but the Mission Control fleet-manifest entry that was already outstanding for this store now covers two surfaces.
+
+**The Claude skill's contract moves.** The publishing host in `plugins/beta-slides/skills/beta-slides/SKILL.md` is what an agent reads before publishing a deck. It changes in U5, and the rig that guards it changes with it. A skill left pointing at the old host keeps working through the redirect and then silently stops when the host is deleted.
+
+**The report-only CSP simplifies.** `MANIFEST_HOST` in `server/deck-store/src/worker.js` names the manifest host as foreign; it becomes same-origin. One assertion in the store rig pins the old literal and moves with it.
+
+**Eight locale catalogs hold a hostname.** The editor's Save-to-Beta tooltip names the old host in English and in every catalog. Deliberately not touched here (U5): it stays true while the redirect lives, and changing it invokes the all-catalogs rule for a string that will be revisited when the host is deleted.
+
+---
+
+## Risks & Dependencies
+
+| Risk | If it happens | Mitigation |
+|---|---|---|
+| An Access policy covers a machine prefix that should be public | Every shipped deck's update check gets a login page instead of a manifest, silently — no user sees an error | Verify anonymously immediately after the cutover, using the derived route sweep, before cutting the release. Rollback is re-attaching the Pages custom domain |
+| A Bypass policy is written too broadly and covers a deck path | A deck is reachable without a login | The worker verifies the assertion itself for every non-allowlisted path, so the deck is still refused. The sweep asserts each gated path answers a redirect anonymously |
+| The proxy alters bytes — an injected beacon, a re-compression, a transformation | Shells fail their sha256 pin and silently refuse to update; nothing surfaces as an error | Return the upstream body unread (KTD3), send `Accept: */*`, and verify the shell's hash against the signed payload as a gate before the release. There is a recorded 359-byte precedent for exactly this |
+| The store already holds decks from before the cutover | Their ⌘S downloads a file instead of saving in place, because their shell names the retired host | OQ1 answers whether any exist. If they do, re-save each after the release |
+| The old host is deleted before links stop circulating | Shared links stop resolving | The redirect (U6) ships with this work; deletion is a separate, later maintainer action and is not part of Definition of Done |
+| The cutover window is longer than expected — certificate issuance re-runs | The host is down for longer than the "nobody is using it" assumption comfortably covers | Downtime is accepted by decision. Do not delete the Pages project; poll the worker's domain status rather than probing the hostname, which can poison the local resolver for the negative TTL |
+
+**Dependencies.** R2 (Cloudflare) enabled and the `beta-decks` bucket live — already true. The zone on SSL/TLS Full (Strict) — already set, and worth re-confirming since a wrong mode produces a redirect loop only signed-in users see. Wrangler authenticated by OAuth, with the shell's DNS-only token unset for every Workers or Pages call. Cloudflare Web Analytics off for the zone, or the edge may inject bytes into proxied HTML.
 
 ---
 
