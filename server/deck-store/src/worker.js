@@ -33,7 +33,7 @@
 // bento/enc envelope. Serving is a stream of the stored object.
 
 import { verifyAccess } from './access.js'
-import { indexPage, newPage } from './pages.js'
+import { indexPage, mintDocIntoBlock, newPage } from './pages.js'
 
 const MAX_BYTES = 32 * 1024 * 1024
 const KEY = (id) => `decks/${id}.bento.html`
@@ -250,6 +250,17 @@ function track(ctx, req, name, outcome) {
 async function create(req, env, ctx, who, evt = 'deck_save') {
   const bytes = await readBody(req)
   if (!bytes) { track(ctx, req, evt, 'rejected'); return text(400, 'size') }
+  return storeBytes(req, env, ctx, who, bytes, evt)
+}
+
+/**
+ * The storage half of a create, shared by `POST /api/decks` and `GET /new/blank`.
+ *
+ * Extracted so the server-side blank deck cannot drift from the uploaded one:
+ * the same shape check, the same metadata, the same analytics, the same link.
+ * `create` is now the body read plus this; nothing about its behaviour moved.
+ */
+async function storeBytes(req, env, ctx, who, bytes, evt) {
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, evt, 'rejected'); return text(400, meta.reason) }
   const id = mintId()
@@ -271,6 +282,50 @@ async function create(req, env, ctx, who, evt = 'deck_save') {
   // ten minutes with the document discarded. An old-host link 301s for as
   // long as that host lives, which is the grace period's whole job.
   return json(201, { id, url: `${new URL(req.url).origin}/d/${id}` })
+}
+
+/**
+ * `GET /new/blank` — a blank deck, made HERE, answered as a redirect to it.
+ *
+ * The client used to do this: fetch the 1 MB template into the browser, mint a
+ * docId, POST the 1 MB back, then navigate. That is two megabytes across the
+ * person's connection and a visible "Making a blank deck. This takes a moment."
+ * card with a Close button, for what is one internal fetch from the worker.
+ * Here the same three steps run beside the store, and the person's browser sees
+ * only a 302 into the editor.
+ *
+ * `mintDocIntoBlock` is the SAME function the page inlined, imported rather
+ * than copied, so the rig keeps exercising the code that actually runs.
+ *
+ * Gated by the same `NEW_ENABLED` flag as the index button and /new's own
+ * branch: a typed URL must not create decks on a host whose index says it
+ * cannot. Unlike `/new`, this route is NOT exempt from the old host's redirect
+ * — no shipped file asks for it, so a 301 to the live host is correct.
+ */
+async function createBlank(req, env, ctx, who) {
+  const origin = env.PAGES_ORIGIN
+  if (!origin) return text(502, 'store: PAGES_ORIGIN is not configured')
+  let tpl
+  try {
+    // Pages answers `.html` with a 308 to the extensionless path (see the
+    // README's release notes), so this follows redirects like every other
+    // reader of that origin.
+    const res = await fetch(`https://${origin}/templates/blank.bento.html`, { redirect: 'follow' })
+    if (!res.ok) return text(502, `store: the blank template answered ${res.status}`)
+    tpl = await res.text()
+  } catch (err) {
+    return text(502, `store: the blank template did not load (${err?.message || 'fetch failed'})`)
+  }
+  let html
+  try {
+    html = mintDocIntoBlock(tpl, crypto.randomUUID())
+  } catch (err) {
+    return text(502, `store: the blank template could not be prepared (${err?.message || 'mint failed'})`)
+  }
+  const stored = await storeBytes(req, env, ctx, who, new TextEncoder().encode(html), 'deck_new')
+  if (stored.status !== 201) return stored
+  const { url } = await stored.json()
+  return new Response(null, { status: 302, headers: { location: url, 'cache-control': 'no-store' } })
 }
 
 async function replace(req, env, ctx, who, id) {
@@ -387,6 +442,10 @@ export default {
 
     if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }))
     if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: canCreate }))
+    if (path === '/new/blank' && m === 'GET') {
+      if (!canCreate) return empty(404)
+      return createBlank(req, env, ctx, who)
+    }
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
     if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
     const dm = /^\/api\/decks\/([0-9A-Za-z]{10})$/.exec(path)

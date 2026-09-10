@@ -30,7 +30,8 @@ Anything not on that list is gated, so a path nobody thought about costs a login
 | Route | Who | Answer |
 |---|---|---|
 | `GET /` | person | index page, every deck newest first, and New deck |
-| `GET /new` | person, or a deck on `file://` | with an opener: the handoff page. Without one, and with `NEW_ENABLED` on: clone the blank template, mint a `docId`, store it, go to its link |
+| `GET /new` | person, or a deck on `file://` | with an opener: the handoff page. Without one, and with `NEW_ENABLED` on: redirect to `/new/blank` |
+| `GET /new/blank` | person (the index's New deck) | clone the blank template, mint a `docId`, store it, `302` to `/d/<id>`. `404` when `NEW_ENABLED` is off |
 | `GET /api/decks` | person | `{decks:[{id,url,title,kind,owner,writer,created,updated,size,docId?}]}` |
 | `POST /api/decks` | person | body = the `.bento.html`; `201 {id,url}`. `?new=1` only changes the analytics event |
 | `PUT /api/decks/:id` | person | replace in place; keeps `owner` and `created`, records `writer` |
@@ -64,7 +65,7 @@ The branch runs **before** the worker's own Access check, so a signed-out person
 | `STORE_HOST` | `slides.betamobility.ai`. The canonical origin a created deck's link points at, whichever hostname was called |
 | `OLD_HOST` | `decks.betamobility.ai`, the host that redirects |
 | `REDIRECT_OLD_HOST` | `on` from cutover step 4. Off until the new host actually answers as the store |
-| `NEW_ENABLED` | `on` from cutover step 9, after release v2026.9.3. It gates the blank-deck create branch only — `/new` keeps answering a shipped deck's handoff throughout |
+| `NEW_ENABLED` | `on` from cutover step 9, after release v2026.9.3. It gates the blank-deck create only — the index's button, `/new`'s no-opener redirect and `/new/blank` itself, which `404`s when off. `/new` keeps answering a shipped deck's handoff throughout |
 
 None of these are secrets: an AUD tag is public to anyone holding a token, and the JWKS is public. The worker fails closed while the Access vars are empty or still placeholders.
 
