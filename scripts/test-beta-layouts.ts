@@ -85,7 +85,7 @@ ok(layouts.every((l) => l.elements.some((e) => e.id === 'beta-title-h')), 'every
 
 console.log('\ntemplates')
 const built = betaTemplates(fragment) as Record<string, BentoDoc>
-for (const name of ['client-pitch', 'insight-brief', 'workshop']) {
+for (const name of ['blank', 'client-pitch', 'insight-brief', 'workshop']) {
   const file = join(root, 'beta/templates', `${name}.bento.html`)
   ok(existsSync(file), `${name}.bento.html is built`)
   if (!existsSync(file)) continue

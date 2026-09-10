@@ -303,6 +303,15 @@ jobs:
         # `npm ci`.
         run: node scripts/test-beta-store-client.ts
 
+      - name: Live-route checker's own logic
+        # The checker itself needs the network and the live host, so it does
+        # NOT run here (and is named check-* rather than test-*, which is why
+        # test-ci-registered.ts does not demand it). Its three cases do: given
+        # a fake inventory and a stubbed fetch, it passes when every published
+        # path is reachable, fails when one is gated and unlisted, and passes
+        # when that path is on the exception list.
+        run: node scripts/check-store-live.mjs --selftest
+
   validate:
     # BETA FORK: disabled. The fork builds bento/slides only; see the `beta`
     # job above and docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md.

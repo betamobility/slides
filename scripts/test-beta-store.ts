@@ -6,7 +6,7 @@
 //   node scripts/test-beta-store.ts          (from the repo root)
 //   node ../scripts/test-beta-store.ts       (from slides/, after npm ci)
 //
-// WHAT THIS PROVES. decks.betamobility.ai is the first Beta surface in this
+// WHAT THIS PROVES. slides.betamobility.ai is the first Beta surface in this
 // repository that serves documents behind a login, so the contract worth
 // pinning is the refusal path as much as the happy path: every route answers
 // 401 with no body unless the Cloudflare Access assertion verifies against the

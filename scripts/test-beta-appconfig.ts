@@ -105,7 +105,8 @@ console.log('\nproduct name (v1.1)')
   const m = /storeHost:\s*'([^']*)'/.exec(main)
   ok(!!m, "slides/src/main.ts configures storeHost")
   ok(!!m && /^https:\/\/[a-z0-9.-]+$/.test(m[1]), `…shaped as an https origin, no path, no trailing slash (${m?.[1]})`)
-  ok(!!m && m[1] === 'https://decks.betamobility.ai', '…and it is https://decks.betamobility.ai')
+  ok(!!m && m[1] === 'https://slides.betamobility.ai', '…and it is https://slides.betamobility.ai — ONE store host, the release-channel host (KTD5)')
+  ok(!/decks.betamobility.ai/.test(main), 'main.ts names no second store host: the app knows exactly one (R8)')
   const kernelApp = slidesDir ? readFileSync(join(slidesDir, '../kernel/src/app.ts'), 'utf8') : ''
   const fields = kernelApp.match(/^\s*storeHost\?: string$/gm) ?? []
   ok(fields.length === 1, `kernel/src/app.ts carries exactly one optional storeHost?: string field (${fields.length})`)

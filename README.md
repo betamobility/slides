@@ -2,7 +2,7 @@
 
 Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**Production:** https://slides.betamobility.ai (release channel; current release v2026.9.2, 2026-09-08; v2026.9.1 was the first) and the deck store at https://decks.betamobility.ai
+**Production:** https://slides.betamobility.ai — one host, two surfaces: the deck store (sign in, your decks, `/new`) and the public release channel shipped decks self-update from (current release v2026.9.2, 2026-09-08; v2026.9.1 was the first). `decks.betamobility.ai` is the store's former address and answers `301` until it is deleted.
 **Client:** Internal
 **Status:** Active, v1.1
 
@@ -24,8 +24,8 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 
 - **App:** TypeScript, Vite, single-file build (`slides/dist-single/Bento_Slides.bento.html`)
 - **Relay:** Cloudflare Worker + Durable Object + R2 for encrypted asset blobs (`server/sync-worker`), deployed as `sync.betamobility.ai`
-- **Deck store:** Cloudflare Worker + R2 behind Cloudflare Access (`server/deck-store`), deployed as `decks.betamobility.ai`
-- **Release site:** static tree published by `scripts/publish-site.mjs` into `betamobility/slides-site`, served by Cloudflare Pages at `slides.betamobility.ai`
+- **Deck store:** Cloudflare Worker + R2 behind Cloudflare Access (`server/deck-store`), deployed as `slides.betamobility.ai`, which also passes the public release paths through to Pages
+- **Release site:** static tree published by `scripts/publish-site.mjs` into `betamobility/slides-site`, served by Cloudflare Pages at `beta-slides-site.pages.dev` and reached through the worker
 - **Tests:** upstream's `node scripts/test-*.ts` rigs; Beta rigs are `scripts/test-beta-*`
 - **Deploy:** releases are cut locally and signed with an offline ECDSA key (`docs/RELEASING.md`)
 
@@ -49,8 +49,8 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 | Service | Used for | Credentials |
 |---------|----------|-------------|
 | Cloudflare Workers + R2 | sync relay at `sync.betamobility.ai` | wrangler OAuth login (`env -u CLOUDFLARE_API_TOKEN`) |
-| Cloudflare Workers + R2 + Access | deck store at `decks.betamobility.ai` | wrangler OAuth login; Access apps in the dashboard |
-| Cloudflare Pages | release site at `slides.betamobility.ai` | dashboard |
+| Cloudflare Workers + R2 + Access | deck store at `slides.betamobility.ai` | wrangler OAuth login; Access apps in the dashboard |
+| Cloudflare Pages | release tree at `beta-slides-site.pages.dev` | dashboard |
 | GitHub `betamobility/slides-site` | published release tree | `gh` auth |
 | `Tools/design-system/tokens.json` | source of `beta/tokens.json` | none (sibling repo) |
 
@@ -89,12 +89,15 @@ The full gate list is the Verification Contract in the plan; CI runs the `beta` 
   cd ../slides-site && npx wrangler pages deploy . --project-name beta-slides-site --branch main
   ```
 
-  Project `beta-slides-site`, custom domain `slides.betamobility.ai` (a proxied CNAME to `beta-slides-site.pages.dev`). Wrangler needs `wrangler login` (OAuth); the DNS-only `CLOUDFLARE_API_TOKEN` in the shell cannot deploy Workers or Pages, so run wrangler with `env -u CLOUDFLARE_API_TOKEN`.
-- **Pages answers `.html` URLs with a 308 to the extensionless path.** `…/Bento_Slides.bento.html` redirects to `…/Bento_Slides.bento`; `fetch` and `curl -L` follow it and the bytes match the manifest hash, so shipped decks and the skill are unaffected. A client that does not follow redirects gets an empty 308.
+  Project `beta-slides-site`. Its custom domain was `slides.betamobility.ai`; that hostname belongs to the deck-store worker now, which fetches this project by its `*.pages.dev` name. Do not delete the project — re-attaching its custom domain is the rollback for the host swap. Wrangler needs `wrangler login` (OAuth); the DNS-only `CLOUDFLARE_API_TOKEN` in the shell cannot deploy Workers or Pages, so run wrangler with `env -u CLOUDFLARE_API_TOKEN`.
+- **Pages answers `.html` URLs with a 308 to the extensionless path.** `…/Bento_Slides.bento.html` redirects to `…/Bento_Slides.bento`; `fetch` and `curl -L` follow it and the bytes match the manifest hash, so shipped decks and the skill are unaffected. A client that does not follow redirects gets an empty 308. The store worker's pass-through follows redirects for the same reason.
+- **The old release-channel landing page is still in the published tree, and nothing links to it.** `site-src/landing.html` used to be what `slides.betamobility.ai/` served; the root is the deck list now, and the two plugin-install lines that page carried moved into that list's footer. It is left published rather than deleted so no shipped link 404s — it is not live, and it is not an entry point.
 
 ## Deck store
 
-`server/deck-store/` is a worker at `decks.betamobility.ai` that stores decks in an R2 bucket (`beta-decks`) and serves them unchanged behind Cloudflare Access: one Access application on the hostname for people (Google Workspace, `@betamobility.io`), one path-scoped to `/api/harness/` for a service token so Claude can save from a file harness. The worker verifies the `Cf-Access-Jwt-Assertion` itself against the team JWKS and refuses everything without one, including `GET /d/<id>`. Any signed-in Beta identity can open, list and edit any deck; only delete is the owner's.
+`server/deck-store/` is a worker at `slides.betamobility.ai` that stores decks in an R2 bucket (`beta-decks`) and serves them unchanged behind Cloudflare Access: a domain-wide Access application for people (Google Workspace, `@betamobility.io`), one path-scoped to `/api/harness/` for a service token so Claude can save from a file harness, and one Bypass application per public prefix. The worker verifies the `Cf-Access-Jwt-Assertion` itself against the team JWKS and refuses everything without one, including `GET /d/<id>`. Any signed-in Beta identity can open, list and edit any deck; only delete is the owner's.
+
+The same worker answers the public release channel on that host by passing `/releases/`, `/templates/`, `/skills/`, `/logo/` and a handful of exact paths through to the Pages project, unread and unmodified. Access governs whether those paths need a login; the worker governs whether a deck is ever served without one. `server/deck-store/README.md` has the route table, the Access setup in the order it must be done, and the live checker.
 
 ```sh
 cd server/deck-store

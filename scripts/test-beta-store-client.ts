@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Beta Mobility
 // Beta deck-store CLIENT rig (plan 2026-09-08-002, U8, KTD10 + KTD11): the
-// editor side of decks.betamobility.ai, in node, against a fake browser.
+// editor side of slides.betamobility.ai, in node, against a fake browser.
 //
 //   node scripts/test-beta-store-client.ts
 //
@@ -84,7 +84,7 @@ if (import.meta.url.endsWith('.ts')) {
 }
 
 // ---- §2 module: a fake browser ---------------------------------------------------
-const STORE = 'https://decks.betamobility.ai'
+const STORE = 'https://slides.betamobility.ai'
 const g = globalThis as any
 
 // localStorage: net.ts reads the offline switch, save.ts nothing at import

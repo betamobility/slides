@@ -104,6 +104,34 @@ editing an existing deck, never regenerate `docId`.
 
    It writes `<Topic>.pptx` beside the deck and prints the report.
 6. Write back the `#bento-doc` block, or return the replacement JSON.
+7. **Offer to publish it**, if the user wants a link rather than a file. The
+   deck store lives on the same host as everything else above, behind Beta's
+   login, and a harness publishes through the service-token routes with
+   `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` in the environment
+   (they are in 1Password, Development; never put them in a file):
+
+   ```bash
+   # create → 201 {"id":"<id>","url":"https://slides.betamobility.ai/d/<id>"}
+   curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+             -H 'content-type: text/html; charset=utf-8' \
+             --data-binary "@<Topic>.bento.html" \
+             https://slides.betamobility.ai/api/harness/decks
+
+   # replace an existing deck in place → 200
+   curl -fsS -X PUT -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+             -H 'content-type: text/html; charset=utf-8' \
+             --data-binary "@<Topic>.bento.html" \
+             https://slides.betamobility.ai/api/harness/decks/<id>
+   ```
+
+   Give the user the `url` from the reply. The token may only create and
+   replace on these two routes — it cannot list or read decks, so a leaked
+   token cannot enumerate anyone's work, and there is no harness way to
+   discover an id you were not given. Anyone signed in at
+   `https://slides.betamobility.ai/` sees the deck in the list and can edit
+   it; the link is the invitation.
 
 ## Self-audit (Beta additions to upstream's list)
 

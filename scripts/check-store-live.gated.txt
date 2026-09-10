@@ -1,0 +1,11 @@
+# Published paths that are deliberately NOT reachable without a login.
+#
+# scripts/check-store-live.mjs walks the published tree and requires every
+# path in it to answer 200 anonymously. A path listed here is exempt — so
+# every line is a decision someone made, and needs the reason beside it.
+#
+# Keep this short. The reason the sweep is inverted is that a long list of
+# exceptions is the same blind spot as no check at all.
+
+# (nothing yet — the whole published tree is public by design; the gated
+# surface is the deck store's own routes, which are not published files)

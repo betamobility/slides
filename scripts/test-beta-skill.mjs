@@ -45,9 +45,31 @@ const published = new Set([
   `/${APPS.slides.dir}/agents.md`,
   ...readdirSync(join(root, 'beta/templates')).filter((f) => f.endsWith('.bento.html')).map((f) => `/templates/${f}`),
 ])
+// The site's own host also serves the deck store now (2026-09-10 plan, U5),
+// so a URL the skill names is legitimate if the site publishes it as a file
+// OR the worker answers it as a route. The routes are enumerated, not
+// pattern-matched loosely, so this stays the check it was: a skill pointing
+// at a URL nothing serves is still a failure.
+const storeRoute = (u) => u === '/'
+  || u === '/new'
+  || u === '/api/decks'
+  || u === '/api/harness/decks'
+  || /^\/api\/harness\/decks\/(<id>|[0-9A-Za-z]{10})$/.test(u)
+  || /^\/d\/(<id>|[0-9A-Za-z]{10})$/.test(u)
+const serves = (u) => published.has(u) || storeRoute(u)
+// The predicate's own negative case, so a later widening cannot quietly turn
+// this into a check that passes for anything.
+ok(!serves('/api/harness/nowhere') && !serves('/releases/slides/nope.json') && !serves('/d/'),
+  'a URL the site neither publishes nor routes is still refused')
 const urls = [...new Set([...skill.matchAll(new RegExp(`${SITE.origin.replace(/[.]/g, '\\.')}(/[^\\s)"'\`]*)`, 'g'))].map((m) => m[1].replace(/[.,:;]+$/, '')))]
 ok(urls.length >= 3, `the skill names ${urls.length} URL(s) under ${SITE.origin}`)
-for (const u of urls) ok(published.has(u), `${u} is published by the release site`)
+for (const u of urls) ok(serves(u), `${u} is published or routed by ${SITE.origin}`)
+// R6: the host the skill publishes to is the host the app is configured with.
+const configuredStore = /storeHost:\s*'([^']*)'/.exec(read('slides/src/main.ts'))?.[1]
+ok(configuredStore === SITE.origin, `the skill's harness host is the app's storeHost (${configuredStore})`)
+ok(/\/api\/harness\/decks/.test(skill), 'the skill says how a harness publishes a deck')
+ok(/CF-Access-Client-Id/.test(skill) && /CF-Access-Client-Secret/.test(skill), 'and names the service-token headers it needs')
+ok(!/CF_ACCESS_CLIENT_SECRET\s*=\s*\S/.test(skill), 'without carrying a secret of its own')
 ok(!/bento\.page\/releases/.test(skill), 'the skill never downloads the upstream shell')
 ok(/build-beta-templates\.mjs[\s\S]*join\(site, 'templates'\)/.test(read('scripts/release.mjs')), 'release.mjs publishes the Beta templates at /templates/')
 

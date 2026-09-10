@@ -501,7 +501,10 @@ points here.
   `beta-closing`. Each text element has a `role` and a `placeholder`; footer
   chrome shares ids so it morphs. Start from a template at
   `/templates/client-pitch.bento.html`, `/templates/insight-brief.bento.html`
-  or `/templates/workshop.bento.html`.
+  or `/templates/workshop.bento.html`. `/templates/blank.bento.html` is the
+  same design system with one empty cover slide; it is what
+  `slides.betamobility.ai/new` clones, and it is the right start only when the
+  three shaped templates all fit badly.
 - `meta.company` is `Beta Mobility`; set `meta.author`. Title slides and
   footers use `{{company}}`, `{{author}}`, `{{date}}`, `{{page:2}}`.
 - A deck records the design-system version it was generated from in a

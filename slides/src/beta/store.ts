@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Beta Mobility
 // BETA FORK (plan 2026-09-08-002, U8, KTD10): the deck store, seen from the
-// editor. decks.betamobility.ai keeps decks behind Cloudflare Access and
+// editor. slides.betamobility.ai keeps decks behind Cloudflare Access and
 // serves them unchanged; this module is the only code that knows it exists.
+// (It moved there from decks.betamobility.ai on 2026-09-10; that host answers
+// 301 for a grace period, except /new — see below.)
 //
 // TWO SITUATIONS, ONE MODULE.
 //
-// · ON THE STORE ORIGIN (a deck opened from https://decks…/d/<id>) the store
+// · ON THE STORE ORIGIN (a deck opened from https://slides…/d/<id>) the store
 //   is a HOST in the kernel's sense — the same extension point home/ios and
 //   home/webext use. `installStoreHost()` announces `window.__bentoHost`,
 //   polyfills `showSaveFilePicker` by picker id, and adopts a store-backed
@@ -24,6 +26,15 @@
 //   store origin and only from the tab it opened (the page's `ready` must go
 //   to "*" because our origin is null), and posts the document to the store
 //   origin only. server/deck-store/src/pages.js is the other half.
+//
+//   THIS IS WHY THE OLD HOST STILL SERVES /new. A shell already on someone's
+//   disk opens the host IT was built naming, and rejects any reply from a
+//   different origin — so a blanket redirect on the old host would break the
+//   handoff twice over, and the person would watch a stray deck appear while
+//   the document they were publishing was discarded. The old host keeps /new
+//   (and the POST that page makes); everything else there redirects. The new
+//   host's /new answers this same protocol, so a shell built from here needs
+//   no second URL.
 //
 // SIGNED OUT. When the Access session has lapsed, Access answers a fetch with
 // a redirect to the team login page, not a 401. Requests are sent with
