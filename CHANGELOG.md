@@ -11,6 +11,15 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **One address.** `slides.betamobility.ai` is where decks live now: sign in and
+  you see them, newest first, and **New deck** makes a blank Beta deck and puts
+  you in the editor on its own link — no download, no second hostname. The
+  release channel keeps its URLs on that host, public and unlinked, so decks
+  already shipped keep self-updating. `decks.betamobility.ai` redirects until it
+  is deleted, and a deck saved there before the move still opens.
+  **This shell names the new store host**, so a deck saved from an older shell
+  keeps saving to the old one until it is re-saved from this release.
+  See `docs/DECISIONS.md`, 2026-09-10.
 - **The relay carries large assets again.** `beta-sync` is deployed with its
   R2 binding restored, so an asset over 64 KB reaches the other author on paste
   instead of on the next save. Relay-only: no shell change, nothing to update.

@@ -152,10 +152,15 @@ verbatim; this section is what the fork adds. The plan of record is
    Upstream's rule 8 applies to the branches offered upstream, not to the
    fork's own history.
 7. **Releases are Beta's, from Beta's key.** `appId` is `beta-slides`; the
-   manifest is served from `slides.betamobility.ai`; the relay is
-   `sync.betamobility.ai`; the deck store is `decks.betamobility.ai`
-   (`server/deck-store/`, a Beta zone upstream never sees). Never point any
-   of them at bento.page.
+   relay is `sync.betamobility.ai`; and `slides.betamobility.ai` is BOTH the
+   release-manifest host and the deck store (`server/deck-store/`, a Beta zone
+   upstream never sees) — one worker, the public release paths passed through
+   to Pages, everything else behind Cloudflare Access. The app knows exactly
+   one store host and `kernel/src/app.ts` is untouched by it.
+   `decks.betamobility.ai` is the store's former address, answering `301`
+   until it is deleted; it still serves `/new` and `POST /api/decks`, because
+   shells already on disk drive that handoff. Never point any of them at
+   bento.page.
 
 ## CLAUDE.md and AGENTS.md
 

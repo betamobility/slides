@@ -14,6 +14,67 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-09-10 — BETA FORK: one host serves the deck store and the release channel
+
+**Decision.** The deck store moves onto `slides.betamobility.ai`, the host that
+already serves the public release channel, and `decks.betamobility.ai` becomes
+a `301` until it is deleted. Signing in at that address shows your decks;
+`/new` mints a blank one and drops you in the editor on its own link. Plan:
+`docs/plans/2026-09-10-001-feat-slides-host-swap-plan.md`. Upstream is not
+affected: this is the fork's worker and the fork's hostnames.
+
+**Why one host.** The ask was that a colleague type one address. A second
+hostname behind a link is the shape being removed, not a cheaper way to keep
+it. The cost is recorded in the plan's Alternatives section so a later reader
+can see what reverting would buy back.
+
+**Four things settled with it, each of which someone could otherwise re-open:**
+
+**Access shape.** Public prefixes get one path-scoped **Bypass application
+each**, created *before* the domain-wide Allow application. The mechanism is
+per-application path scoping — the narrower application wins and inherits
+nothing from the broader one — not policy ordering inside one application,
+which is a different rule and gives no path specificity. Never put a
+device-posture check in a Bypass policy: documented as broken when a Worker
+intercepts. Bypassed requests carry no assertion and are not logged, so their
+AUDs stay out of `ACCESS_AUDS` and drift there is silent — which is why
+`scripts/check-store-live.mjs` exists and is run after any Access change.
+
+**Pages keeps the signed bytes; the worker only carries them.** Workers Static
+Assets would have served both surfaces from one Worker with no cross-zone
+subrequest, and the tree fits. Rejected, and the claim is narrow: it stops a
+stale working tree on a deploying machine from becoming the release channel.
+It does **not** take the worker out of the delivery path — every update check
+now traverses an agent-deployable proxy — so the shell's sha256 is asserted
+after every worker deploy, not only at cutover.
+
+**`/new` mints identity client-side.** The page clones the blank template,
+mints a `docId` into the block and posts the result, so a fresh link is a real
+deck with one stable identity. Storing a template verbatim would leave
+`parseDoc` minting a different `docId` on every open: two colleagues on one
+fresh link would save two identities under one store id, and a reload before
+the first save would orphan the autosave snapshot. The fetch is the *client's*,
+so no assertion is ever forwarded to another origin.
+
+**Deck scripts now share an origin with the release channel.** The 2026-09-08
+entry accepted that a script inside a stored deck runs first-party on the store
+origin, because every writer is a signed-in colleague. That origin is now also
+the public release channel. Reviewed and accepted as bounded: the public
+surface is read-only `GET` of maintainer-published bytes and no deck script has
+a write path into it. This is the third consequence of that entry, recorded
+here because the entry says a change of this character reopens it.
+
+**One correction to the plan, found in the code.** KTD9 exempts `GET /new` on
+the retired host from the redirect. That is not enough: the page it serves
+posts to a *relative* `/api/decks` with `redirect: 'manual'`, so a `301` there
+arrives as an `opaqueredirect` and the page reports "Signed out" while the
+document being published is discarded — the exact failure R11 forbids, reached
+through the fix for it. `POST /api/decks` is exempt too, and the old host's
+Access application is therefore *replaced* by path-scoped Allow applications on
+those two paths rather than simply deleted.
+
+---
+
 ## 2026-08-19 — Cross-app embedding: static render + source, never a second renderer
 
 **Decision.** One block/element shape, `bento/embed`, shared by every app in both

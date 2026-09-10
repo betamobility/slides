@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Beta Mobility
 // Cloudflare Access verification for the deck store (plan KTD8).
 //
-// Access sits in front of decks.betamobility.ai and forwards a signed JWT in
+// Access sits in front of slides.betamobility.ai and forwards a signed JWT in
 // `Cf-Access-Jwt-Assertion` on every request it lets through. The header is
 // verified here, never trusted: signature against the team's JWKS, issuer,
 // audience (an explicit set, one tag per Access application), expiry, and a
