@@ -11,6 +11,22 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.9.4] — 2026-09-10
+
+- **Save a deck to your own computer.** Save as… → **Save to your computer…**
+  writes the deck to a folder you choose: a Drive folder, the desktop,
+  anywhere. It is the same deck and the same live session, not a copy that
+  drifts, so edits on either side stay in step, and ⌘S in the browser keeps
+  saving to Beta. A password-protected deck lands on disk encrypted. Without
+  the File System Access API (Safari) there is no folder to choose and it is a
+  download. Shown only on `slides.betamobility.ai`: on a file you already have
+  the file. This is the piece that was missing for keeping decks beside a
+  project's material on Drive — see `docs/beta-drive-workflow.md`.
+- **New deck goes straight to the deck.** Clicking **New deck** used to show a
+  progress card while the browser fetched a megabyte of template, minted an
+  identity and pushed the megabyte back. The store does it now and answers with
+  the deck. Store-side and already live: nothing to update for this one.
+
 ## [2026.9.3] — 2026-09-10
 
 - **One address.** `slides.betamobility.ai` is where decks live now: sign in and
