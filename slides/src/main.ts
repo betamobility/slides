@@ -51,7 +51,14 @@ configureApp({
   // v1.1 U8: the deck store. A deck served from this origin saves back to it
   // in place (src/beta/store.ts installs a host at boot); a deck on file://
   // hands its document to <storeHost>/new through the Share panel.
-  storeHost: 'https://decks.betamobility.ai',
+  //
+  // ONE host, deliberately (2026-09-10 plan, KTD5): the store moved onto the
+  // release-channel host, and the old one is a redirect until it is deleted.
+  // A list of store origins would have to live in kernel/src/app.ts, and the
+  // kernel zone is not ours to widen. The cost is bounded and known: a deck
+  // stored before the cutover carries a shell naming the old host, so its ⌘S
+  // downloads a file instead of saving in place.
+  storeHost: 'https://slides.betamobility.ai',
 })
 // BETA FORK (v1.1 U3, KTD4): English-only build — pin the locale before anything renders, so a
 // German-locale browser and a stale 'bento-lang' localStorage value both render English.
