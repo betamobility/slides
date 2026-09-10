@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Beta Mobility
 // The two pages the deck store serves itself: the index (every deck in the
-// store) and /new (the handoff target for a deck on file://). Template
-// strings, no framework; every value that came from a deck or a person is
-// escaped on the way in, because a deck title is untrusted text (KTD7).
+// store) and /new. Template strings, no framework; every value that came from
+// a deck or a person is escaped on the way in, because a deck title is
+// untrusted text (KTD7).
+//
+// /new serves TWO audiences from one page, told apart by `window.opener`
+// (2026-09-10 plan, KTD6/KTD9). A deck on file:// opens it and hands over its
+// document — that protocol is shipped code on the other side and does not
+// change. A person opening it directly gets a blank deck made for them: the
+// page fetches the public blank template, mints a docId into it and posts the
+// result, so the stored bytes are a real deck with one stable identity from
+// the outset, rather than a template that would mint a different docId on
+// every open.
 //
 // Styling follows Beta's design system with the eight semantic tokens
 // inlined: cream surface, charcoal ink, Playfair Display for the one
@@ -12,6 +21,31 @@
 export const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+/**
+ * Put `docId` into a template's #bento-doc block and clear the template flag,
+ * returning the whole file. This is the ONE piece of logic /new runs over
+ * bytes, and it is inlined into that page verbatim (via `.toString()`) so the
+ * rig can exercise the code the browser actually runs. Keep it ES5-plain and
+ * free of template-literal interpolation for that reason.
+ *
+ * The re-serialized JSON escapes `<` the way every builder in this repo does,
+ * and the function refuses rather than emit a block a browser would cut short
+ * (AGENTS.md hard rule 1).
+ */
+export function mintDocIntoBlock(html, docId) {
+  var re = /(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)([\s\S]*?)(<\/script>)/i
+  var m = re.exec(html)
+  if (!m) throw new Error('no #bento-doc block in the template')
+  var doc = JSON.parse(m[2])
+  if (!doc || doc.format !== 'bento/slides') throw new Error('the template is not a bento/slides document')
+  delete doc.template
+  delete doc.collab
+  doc.docId = docId
+  var json = JSON.stringify(doc).replace(/</g, '\\u003c')
+  if (json.indexOf('</scr' + 'ipt') !== -1) throw new Error('a literal closing script tag survived escaping')
+  return html.slice(0, m.index) + m[1] + json + m[3] + html.slice(m.index + m[0].length)
+}
 
 const PLAUSIBLE = '<script defer data-domain="betamobility.ai" src="https://plausible.io/js/script.js"></script>'
 
@@ -112,18 +146,31 @@ ${body}
 }
 
 /**
- * /new: the handoff target. A deck on file:// opens this page in a tab and
- * posts its serialized document once the page announces itself. The page
- * shows the title and size and uploads ONLY when the person clicks Save.
- * Nothing is stored on message receipt; one document is accepted, from the
- * opener only, and later ones are discarded.
+ * /new, for both audiences.
+ *
+ * · WITH AN OPENER — the handoff. A deck on file:// opens this page in a tab
+ *   and posts its serialized document once the page announces itself. The
+ *   page shows the title and size and uploads ONLY when the person clicks
+ *   Save. Nothing is stored on message receipt; one document is accepted,
+ *   from the opener only, and later ones are discarded. This half is a
+ *   contract with slides/src/beta/store.ts in files already on disk: do not
+ *   change it, add beside it.
+ *
+ * · WITHOUT ONE, and with `create` on — a person typed the URL. Fetch the
+ *   public blank template, mint a docId into it, post it, go to its link.
+ *
+ * `create` is the NEW_ENABLED flag. It gates only the second branch, never
+ * the route: between the cutover and the release, a 2026.9.3 shell's Share
+ * flow must still find a handoff page here, and the reason the create branch
+ * waits is only that it clones a published template that would still name the
+ * old store host.
  */
-export function newPage(who) {
+export function newPage(who, { create = false } = {}) {
   return `${head('Save to Beta')}
 <body>
 <main>
 <header>
-<div><div class="mark">beta/slides</div><h1>Save to Beta</h1></div>
+<div><div class="mark">beta/slides</div><h1 id="heading">Save to Beta</h1></div>
 <div class="who">${esc(who)}</div>
 </header>
 <div class="card">
@@ -173,13 +220,7 @@ export function newPage(who) {
     if (!doc) return
     saveBtn.disabled = true
     statusEl.textContent = 'Saving…'
-    fetch('/api/decks', { method: 'POST', body: doc, credentials: 'same-origin', redirect: 'manual',
-      headers: { 'content-type': 'text/html; charset=utf-8' } })
-      .then(function (r) {
-        if (r.type === 'opaqueredirect' || r.status === 401) throw new Error('Signed out. Reload this tab to sign in, then try again.')
-        if (!r.ok) return r.text().then(function (t) { throw new Error('The store refused the deck (' + r.status + (t ? ': ' + t : '') + ').') })
-        return r.json()
-      })
+    upload(doc, false)
       .then(function (j) {
         statusEl.textContent = 'Saved.'
         var res = $('result')
@@ -193,12 +234,55 @@ export function newPage(who) {
         saveBtn.disabled = false
       })
   }
+
+  // The ONE upload. Both branches end here, so the create route is named once
+  // and neither branch can drift from the other's error handling. \`fresh\`
+  // only tells the worker which analytics event this was.
+  function upload(html, fresh) {
+    return fetch('/api/decks' + (fresh ? '?new=1' : ''), { method: 'POST', body: html, credentials: 'same-origin', redirect: 'manual',
+      headers: { 'content-type': 'text/html; charset=utf-8' } })
+      .then(function (r) {
+        if (r.type === 'opaqueredirect' || r.status === 401) throw new Error('Signed out. Reload this tab to sign in, then try again.')
+        if (!r.ok) return r.text().then(function (t) { throw new Error('The store refused the deck (' + r.status + (t ? ': ' + t : '') + ').') })
+        return r.json()
+      })
+  }
+
+  ${mintDocIntoBlock.toString()}
+
+  // No opener: a person typed the URL. Clone the public blank template, give
+  // it its own identity, store it, and hand them the editor on its own link.
+  // \`replace\`, not \`assign\`, so Back does not mint a second deck.
+  function createBlank() {
+    $('heading').textContent = 'New deck'
+    $('intro').textContent = 'Making a blank deck. This takes a moment.'
+    $('title').textContent = 'Blank deck'
+    saveBtn.hidden = true
+    statusEl.textContent = 'Fetching the blank template…'
+    fetch('/templates/blank.bento.html', { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('The blank template did not load (' + r.status + ').')
+        return r.text()
+      })
+      .then(function (tpl) {
+        var html = mintDocIntoBlock(tpl, crypto.randomUUID())
+        $('size').textContent = size(new TextEncoder().encode(html).length)
+        statusEl.textContent = 'Saving the new deck…'
+        return upload(html, true)
+      })
+      .then(function (j) { location.replace(j.url) })
+      .catch(function (err) {
+        statusEl.textContent = err && err.message ? err.message : 'Could not make a new deck.'
+      })
+  }
+
   saveBtn.addEventListener('click', save)
   $('close').addEventListener('click', function () { window.close() })
 
   // Announce readiness. The opener is a file:// deck with a null origin, so
   // the target must be '*'; the deck checks event.origin and event.source.
   if (window.opener) window.opener.postMessage({ type: 'bento-store-ready' }, '*')
+  else if (${create ? 'true' : 'false'}) createBlank()
   else $('intro').textContent = 'Open this page from a deck: Share panel, Save to Beta.'
 })()
 </script>

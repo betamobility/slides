@@ -13,7 +13,8 @@
 // Routes (every one behind a verified Access assertion; 401 with no body
 // otherwise):
 //   GET    /                       index page, every deck newest first
-//   GET    /new                    handoff page for a deck on file://
+//   GET    /new                    handoff page for a deck on file://, and
+//                                  (with NEW_ENABLED) the blank-deck create page
 //   GET    /api/decks              list (metadata only)
 //   POST   /api/decks              create → 201 {id, url}
 //   PUT    /api/decks/:id          replace in place → 200
@@ -129,6 +130,9 @@ function mintId() {
   return out
 }
 
+// A wrangler [vars] flag. Vars are strings, so say what counts as on.
+const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
+
 const empty = (status) => new Response(null, { status })
 const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' } })
@@ -233,11 +237,13 @@ function track(ctx, req, name, outcome) {
 
 // --- handlers -----------------------------------------------------------------
 
-async function create(req, env, ctx, who) {
+// `evt` is the analytics name: a deck made at /new is a deck_new, every other
+// create is a deck_save. Nothing else about the two paths differs.
+async function create(req, env, ctx, who, evt = 'deck_save') {
   const bytes = await readBody(req)
-  if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
+  if (!bytes) { track(ctx, req, evt, 'rejected'); return text(400, 'size') }
   const meta = inspect(bytes)
-  if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
+  if (meta.reason) { track(ctx, req, evt, 'rejected'); return text(400, meta.reason) }
   const id = mintId()
   const now = new Date().toISOString()
   await env.DECKS.put(KEY(id), bytes, {
@@ -247,7 +253,7 @@ async function create(req, env, ctx, who) {
       owner: encMeta(who.id), writer: encMeta(who.id), created: now, updated: now,
     },
   })
-  track(ctx, req, 'deck_save', 'ok')
+  track(ctx, req, evt, 'ok')
   return json(201, { id, url: `${new URL(req.url).origin}/d/${id}` })
 }
 
@@ -339,9 +345,9 @@ export default {
     if (who.kind !== 'user') return empty(403)
 
     if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id))
-    if (path === '/new' && m === 'GET') return html(newPage(who.id))
+    if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: flagOn(env.NEW_ENABLED) }))
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
-    if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who)
+    if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
     const dm = /^\/api\/decks\/([0-9A-Za-z]{10})$/.exec(path)
     if (dm && m === 'PUT') return replace(req, env, ctx, who, dm[1])
     if (dm && m === 'DELETE') return remove(env, who, dm[1])

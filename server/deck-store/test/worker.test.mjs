@@ -23,8 +23,13 @@ import { dirname, join } from 'node:path'
 import { webcrypto } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
+// The page's own minting logic, imported from the module the page inlines it
+// from — so what the rig exercises is the code the browser runs, not a copy.
+import { mintDocIntoBlock } from '../src/pages.js'
+
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = join(here, '..', '..', '..')
 
 // ---- config the worker is started with ----------------------------------
 const TEAM_DOMAIN = 'beta-test.cloudflareaccess.com'
@@ -110,7 +115,9 @@ export async function run(Miniflare) {
   /** What the stub Pages project serves at `path`. Deterministic, per-path. */
   const pagesBody = (path) => `stub bytes for ${path}\n${'x'.repeat(64)}\n`
 
-  const mf = new Miniflare({
+  // Kept in a variable so a scenario can flip one flag and put it back
+  // without re-stating the whole worker configuration.
+  const mfOptions = {
     modules: true,
     // Module names are computed relative to modulesRoot; without it they are
     // relative to the cwd, and from slides/ that puts a `..` in the name,
@@ -125,7 +132,7 @@ export async function run(Miniflare) {
     r2Buckets: ['DECKS'],
     bindings: {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
-      PAGES_ORIGIN,
+      PAGES_ORIGIN, NEW_ENABLED: 'on',
     },
     outboundService: async (req) => {
       if (req.url === CERTS_URL) {
@@ -155,7 +162,8 @@ export async function run(Miniflare) {
       // stub that answered 502 here would let a misdirected subrequest pass.
       throw new Error(`unexpected outbound fetch: ${req.url}`)
     },
-  })
+  }
+  const mf = new Miniflare(mfOptions)
 
   const ORIGIN = 'https://decks.betamobility.ai'
   const tokens = {
@@ -494,14 +502,83 @@ export async function run(Miniflare) {
       'the page accepts a document from its opener only')
     ok(script.includes('received') , 'the page keeps a received flag so later documents are discarded')
 
+    // ------------------------------------------------- /new creates a deck
+    // The same page, second branch (KTD6). It runs only when there is NO
+    // opener, so the handoff above is untouched by any of this.
+    console.log('\nthe blank-deck create branch')
+    ok(script.includes('createBlank'), 'the page carries a create branch beside the handoff')
+    ok(script.includes('/templates/blank.bento.html'), 'the create branch fetches the blank template from the public path')
+    ok(script.includes('mintDocIntoBlock'), 'and mints an identity into it before storing')
+    ok(script.includes('crypto.randomUUID()'), 'the docId is a real uuid, minted client-side')
+    ok(/else if \(true\) createBlank\(\)/.test(script), 'with the flag on, no opener means create')
+    ok(script.indexOf('window.opener) window.opener.postMessage') < script.indexOf('createBlank()'),
+      'an opener still wins: the handoff branch is tested first')
+
+    // The real thing: run the page's own minting logic over the real blank
+    // template and check what a colleague's first deck would actually be.
+    const blankPath = join(repoRoot, 'beta', 'templates', 'blank.bento.html')
+    if (existsSync(blankPath)) {
+      const blank = readFileSync(blankPath, 'utf8')
+      const minted = mintDocIntoBlock(blank, 'a-fresh-uuid-0001')
+      const mm = /<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/i.exec(minted)
+      ok(!!mm, 'the minted file still has one plaintext, extractable #bento-doc block')
+      const mdoc = JSON.parse(mm[1])
+      eq(mdoc.format, 'bento/slides', 'the minted document is a bento/slides document')
+      eq(mdoc.docId, 'a-fresh-uuid-0001', 'it carries the docId that was minted into it')
+      ok(!('template' in mdoc), 'the template flag is cleared, so it is a deck and not a template')
+      ok(!('collab' in mdoc), 'and it carries no inherited collab credentials')
+      eq(mdoc.slides.length, 1, 'one slide, the blank cover')
+      // Through the worker's own validator, on the route the page posts to:
+      // this is exactly what /new stores.
+      r = await call('POST', '/api/decks?new=1', { as: 'alice', body: minted })
+      eq(r.status, 201, 'the store accepts what the create branch would post')
+      const mintedId = (await r.json()).id
+      const mrow = (await (await call('GET', '/api/decks', { as: 'alice' })).json()).decks.find((d) => d.id === mintedId)
+      eq(mrow?.kind, 'deck', 'and lists it as a deck, not a template')
+      eq(mrow?.docId, 'a-fresh-uuid-0001', 'under the identity the page minted, so a reload finds the same deck')
+    } else {
+      console.log('  skip  beta/templates/blank.bento.html is not built here (node scripts/build-beta-templates.mjs); CI builds it first')
+    }
+
+    // A document whose CONTENT contains a closing script tag must not produce
+    // one in the block. This is the rule that has broken shipped files before.
+    const hostile = `<!doctype html><html><body><script type="application/bento+json" id="bento-doc">${
+      JSON.stringify({ format: 'bento/slides', v: 1, template: true, title: 'x', slides: [{ id: 's', elements: [{ id: 'e', type: 'text', html: 'a </scr' + 'ipt><scr' + 'ipt>alert(1)</scr' + 'ipt> b' }] }] }).replace(/</g, '\\u003c')
+    }</script></body></html>`
+    const mintedHostile = mintDocIntoBlock(hostile, 'uuid-hostile')
+    ok(!/<\/script\s*>/i.test(mintedHostile.slice(mintedHostile.indexOf('id="bento-doc"'), mintedHostile.lastIndexOf('</script>'))),
+      'a closing script tag inside the document never survives into the block')
+    ok(mintedHostile.includes('\\u003c/scr' + 'ipt'), 'it is escaped the way every builder in this repo escapes it')
+    const rt = JSON.parse(/<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/i.exec(mintedHostile)[1])
+    ok(rt.slides[0].elements[0].html.includes('</scr' + 'ipt>'), 'and the content itself survives the round trip intact')
+
+    console.log('\ndeck_new')
+    ok(await waitFor(() => events.some((e) => e.body.name === 'deck_new')), 'a deck_new event reached Plausible')
+    for (const e of events.filter((e) => e.body.name === 'deck_new')) {
+      eq(Object.keys(e.body.props).sort().join(','), 'outcome,surface', 'deck_new props are surface and outcome, nothing else')
+      eq(e.body.props.surface, 'deck-store', 'deck_new surface is deck-store')
+      ok(!JSON.stringify(e).includes('alice') && !JSON.stringify(e).includes('blank'), 'deck_new carries no email, id or path')
+    }
+
+    console.log('\nthe create branch is behind NEW_ENABLED; the handoff never is')
+    await mf.setOptions({ ...mfOptions, bindings: { ...mfOptions.bindings, NEW_ENABLED: 'off' } })
+    r = await call('GET', '/new', { as: 'alice' })
+    eq(r.status, 200, 'with the flag off /new still answers — a shipped deck depends on it (KTD9)')
+    const offPage = await r.text()
+    ok(offPage.includes('bento-store-ready') && offPage.includes('window.opener'), 'and it is still the handoff page')
+    ok(/else if \(false\) createBlank\(\)/.test(offPage), 'but no-opener does not create')
+    ok(offPage.includes('Open this page from a deck'), 'a person who arrives early is told what this page is for')
+    await mf.setOptions(mfOptions)
+    r = await call('GET', '/new', { as: 'alice' })
+    ok(/else if \(true\) createBlank\(\)/.test(await r.text()), 'and the flag flips back')
+
     // ------------------------------------------------- the real built shell
     // The synthetic deck above proves the contract; this proves the validator
     // accepts what the product actually writes (the shell's tooling comment
     // names #bento-doc in prose, and a comment-blind regex must not trip on
     // it). CI builds the shell before the Beta rigs; locally it may be absent.
     console.log('\nreal files round-trip (AE4)')
-    const repo = join(here, '..', '..', '..')
-    const shellPath = join(repo, 'slides', 'dist-single', 'Bento_Slides.bento.html')
+    const shellPath = join(repoRoot, 'slides', 'dist-single', 'Bento_Slides.bento.html')
     if (existsSync(shellPath)) {
       // The bare shell's #bento-doc is EMPTY (the starter deck is generated
       // at boot), so it is not a deck and must be refused as unparseable.
@@ -511,7 +588,7 @@ export async function run(Miniflare) {
     } else {
       console.log('  skip  slides/dist-single/Bento_Slides.bento.html is not built here (npm run build:single); CI has it')
     }
-    const templatePath = join(repo, 'beta', 'templates', 'client-pitch.bento.html')
+    const templatePath = join(repoRoot, 'beta', 'templates', 'client-pitch.bento.html')
     if (existsSync(templatePath)) {
       const tpl = readFileSync(templatePath)
       r = await call('POST', '/api/decks', { as: 'alice', body: tpl })
