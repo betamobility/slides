@@ -61,9 +61,15 @@ const RELAY_HOST = 'sync.betamobility.ai'
 // The match is a PREFIX BOUNDARY, not a substring: `/releases-secret` is
 // gated. Reads only: a write to an allowlisted path is not a pass-through.
 const PUBLIC_PREFIXES = ['/releases/', '/templates/', '/skills/', '/logo/']
+// `/404` and `/404.html` are BOTH here, and that is not belt-and-braces.
+// Pages 308s an `.html` URL to its extensionless form, and for a path inside
+// an allowlisted prefix the target is still inside that prefix — but a
+// root-level exact entry's twin escapes the list entirely. Measured against
+// the live host: /404.html 308s to /404, which Access then gated. The
+// extensionless form is Pages' canonical URL; the `.html` one is the alias.
 const PUBLIC_PATHS = new Set([
   '/agents.md', '/slides/agents.md',
-  '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+  '/robots.txt', '/sitemap.xml', '/404', '/404.html', '/LICENSE',
 ])
 const isPublicPath = (path) => PUBLIC_PATHS.has(path) || PUBLIC_PREFIXES.some((p) => path.startsWith(p))
 

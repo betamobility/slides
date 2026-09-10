@@ -244,6 +244,10 @@ export async function run(Miniflare) {
       '/skills/SKILL.md', '/skills/beta-slides.zip',
       '/logo/favicon-32.png',
       '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+      // Pages' canonical form of the 404 page. A root-level exact entry's
+      // extensionless twin escapes the allowlist unless it is named too —
+      // measured on the live host, where /404.html 308d to a gated /404.
+      '/404',
     ]
     for (const p of PUBLIC_PATHS) {
       const before = proxied.length
