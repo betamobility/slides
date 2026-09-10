@@ -213,6 +213,62 @@ export const newDeckHandle = (name: string, settled: () => void = () => {}, open
 export const backupHandle = (name: string): StoreHandle =>
   handleOver(name, async (html) => { downloadFile(html, name) })
 
+/** The real `showSaveFilePicker`, captured before the host replaces it. */
+let nativePicker: ((opts: any) => Promise<any>) | undefined
+
+/**
+ * Write the open deck to the PERSON'S OWN disk: a Drive folder, the desktop,
+ * anywhere. The one save on the store origin that deliberately misses the
+ * store.
+ *
+ * WHY THIS EXISTS. `installStoreHost` polyfills the picker, so every kernel
+ * save purpose — ⌘S, "Save a copy", every share export — resolves to a store
+ * object. That is correct for all of them and it left the store with no way
+ * out: a deck made at slides.betamobility.ai could not be put in a project
+ * folder on Drive, which is the other half of how Beta keeps decks
+ * (docs/beta-drive-workflow.md). This is that door.
+ *
+ * IT DOES NOT ADOPT THE HANDLE. The kernel's `saveFile` adopts what a picker
+ * returns and writes ⌘S through it from then on; going through it here would
+ * quietly move the deck OFF the store, so this writes the handle directly and
+ * leaves the ⌘S target alone. Same reason `writeUpdatedFileAs` grew
+ * `keepHandle` (AGENTS.md, share exports): a copy is not a relocation.
+ *
+ * The file keeps its `collab`, so it is the SAME deck, live-synced with the
+ * one in the store, and not a fork. "Duplicate as new deck…" is the fork.
+ *
+ * Without the File System Access API (Safari) there is no picker to offer and
+ * this is a download, which lands in the browser's download folder rather than
+ * one the person chose. Still the file, still theirs.
+ */
+export async function saveToDisk(html: string, name: string): Promise<'picked' | 'downloaded' | 'cancelled'> {
+  if (nativePicker) {
+    let handle: any
+    try {
+      handle = await nativePicker({
+        suggestedName: name,
+        // Its own picker id, so the browser remembers THIS folder: a person
+        // who keeps decks in a Drive folder lands back there next time,
+        // rather than wherever an unrelated export last went.
+        id: 'bento-disk',
+        types: [{ description: appConfig().appName, accept: { 'text/html': ['.bento.html'] } }],
+      })
+    } catch (err: any) {
+      // Cancelling is a decision, not a failure: write nothing, anywhere.
+      if (err?.name === 'AbortError') return 'cancelled'
+      handle = null
+    }
+    if (handle) {
+      const writable = await handle.createWritable()
+      await writable.write(new Blob([html], { type: 'text/html' }))
+      await writable.close()
+      return 'picked'
+    }
+  }
+  downloadFile(html, name)
+  return 'downloaded'
+}
+
 /**
  * Become the kernel's host for the open deck. Call at boot, on the store
  * origin, BEFORE the editor builds (it reads hasFileHandle() at construction).
@@ -224,6 +280,11 @@ export function installStoreHost(): boolean {
   const w = window as any
   const native: ((opts: any) => Promise<any>) | undefined =
     typeof w.showSaveFilePicker === 'function' ? w.showSaveFilePicker.bind(window) : undefined
+  // The browser's own picker, kept for `saveToDisk` below. Once this function
+  // returns, `window.showSaveFilePicker` is OURS, and every kernel save path
+  // reaches the store through it — which is the whole point, and also why the
+  // one save that must NOT reach the store needs the real one held aside.
+  nativePicker = native
 
   w.__bentoHost = Object.freeze({ name: 'beta/store', ops: Object.freeze(['write', 'backup']) })
   w.showSaveFilePicker = async (opts: any = {}) => {
