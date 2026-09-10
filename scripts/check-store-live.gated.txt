@@ -23,6 +23,15 @@
 /slides/
 /slides/index.html
 
+# Pages' 404 page. The plan's KTD0 listed it as public "site furniture"; that
+# was thin. An unknown path is gated before it ever reaches Pages, so this
+# page is never served to an anonymous visitor, and nothing fetches it by
+# name. It also cost a second entry to keep public — Pages 308s an `.html`
+# URL to its extensionless form, and a root-level exact entry's twin escapes
+# the allowlist (measured: /404.html 308d to a gated /404). One less public
+# path is the safer direction.
+/404.html
+
 # Deploy furniture for the Pages project, of no use to any caller.
 /CNAME
 /.nojekyll
