@@ -3,9 +3,12 @@
 # Dev:     npx wrangler dev --port 8788                       (local R2, no account needed)
 #
 # BETA FORK: this worker exists only in the fork. It stores bento/slides files
-# at decks.betamobility.ai and serves them unchanged; every request must carry
-# a Cloudflare Access assertion the worker verifies itself (src/access.js).
-# Plan: docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md, U7.
+# at slides.betamobility.ai and serves them unchanged behind Cloudflare Access,
+# and passes that host's PUBLIC release-channel paths through to Pages unread.
+# Every gated request must carry an assertion the worker verifies itself
+# (src/access.js); the public ones carry none, by design.
+# Plans: docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md U7 and
+#        docs/plans/2026-09-10-001-feat-slides-host-swap-plan.md.
 name = "beta-decks"
 main = "src/worker.js"
 compatibility_date = "2026-07-01"
@@ -33,19 +36,12 @@ routes = [
 binding = "DECKS"
 bucket_name = "beta-decks"
 
-# Access configuration, read by src/access.js. The maintainer fills both after
-# creating the two Access applications (README.md, "Access"):
-#   ACCESS_TEAM_DOMAIN  the team domain, e.g. betamobility.cloudflareaccess.com
-#   ACCESS_AUDS         comma-separated Application Audience (AUD) tags, one
-#                       per application: the human app on the hostname and the
-#                       service-token app scoped to /api/harness/
-# Both are plain vars, not secrets: the AUD tag is public knowledge to anyone
-# who can read a token, and the JWKS is public. The worker fails closed while
-# either is empty or still a placeholder.
+# Access configuration, read by src/access.js. See README.md, "Access
+# applications, in this order" — the ordering is not cosmetic.
+# Both values are public to anyone holding a token, and the JWKS is public, so
+# they are vars and not secrets. The worker fails closed while either is empty
+# or still a placeholder.
 [vars]
-# Filled 2026-09-08: human app "beta/slides deck store" on the hostname, then
-# the path-scoped "beta/slides deck store harness" app on /api/harness/. Both
-# values are public to anyone holding a token; they are vars, not secrets.
 ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
 
 # The Pages project that holds the release channel, the templates, the skill
@@ -72,6 +68,14 @@ PAGES_ORIGIN = "beta-slides-site.pages.dev"
 #                      the whole of KTD9.
 STORE_HOST = "slides.betamobility.ai"
 OLD_HOST = "decks.betamobility.ai"
-REDIRECT_OLD_HOST = "off"
+REDIRECT_OLD_HOST = "on"
 NEW_ENABLED = "off"
-ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a"
+# Four applications' AUDs, all four of which the worker must accept while both
+# hostnames live: the human app and the service-token app on EACH host. The
+# old host's two are pruned when it is deleted, not before.
+#
+# NOT here, deliberately: the Bypass application's AUD
+# (c3f68dd2…, "beta/slides public paths"). A bypassed request carries no
+# assertion at all, so there is nothing for the worker to verify — listing it
+# would suggest otherwise.
+ACCESS_AUDS = "f5fe14af27d7aa8f32ac5c6d3128fb3d494de08b7d38d62c91e7f69749be24a2,a8a10a36f601ed863163dde8d70e0a31a9f8c51270d83b518238207102cab67a,8290c45f6aa41eb619b944e9113f374f8046070023b6f6b7c065770ef25b7175,547e529820867f3e06b129f20582647d9edcf12a7203a88235c5b7877ad0eb3e"

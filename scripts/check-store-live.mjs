@@ -43,6 +43,11 @@ const opt = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[
 const DEFAULT_HOST = 'https://slides.betamobility.ai'
 const EXCEPTIONS_FILE = join(here, 'check-store-live.gated.txt')
 
+// In the site repo but never deployed by Pages, so not a published path.
+// Verified against the live host: `/.nojekyll` is served, `/.wrangler/...` is
+// not — Pages excludes its own cache directory, not dotfiles in general.
+const NOT_DEPLOYED = ['.wrangler/', '.git/']
+
 /**
  * The published tree as URL paths. Directory index files become their
  * extensionless form as well, because that is what Pages serves and what a
@@ -51,11 +56,32 @@ const EXCEPTIONS_FILE = join(here, 'check-store-live.gated.txt')
 export function publishedPaths(files) {
   const out = new Set()
   for (const f of files) {
-    const p = '/' + f.split('\\').join('/')
+    const rel = f.split('\\').join('/')
+    if (NOT_DEPLOYED.some((d) => rel.startsWith(d))) continue
+    const p = '/' + rel
     out.add(p)
     if (p.endsWith('/index.html')) out.add(p.slice(0, -'index.html'.length) || '/')
   }
   return [...out].sort()
+}
+
+/**
+ * Is this redirect Pages tidying a URL, or Access asking us to log in?
+ *
+ * It matters because BOTH are 3xx and they mean opposite things. Pages `308`s
+ * every `.html` URL to its extensionless form, so a blanket "must answer 200"
+ * would fail on most of the published tree; and blanket redirect-following
+ * would march into the Access login page and report a cheerful 200 for a path
+ * that is gated. So: follow a redirect that stays on this host and is not an
+ * Access login, and treat every other redirect as a gate.
+ */
+export const isTidyingRedirect = (from, location) => {
+  if (!location) return false
+  let to
+  try { to = new URL(location, from) } catch { return false }
+  if (to.host !== new URL(from).host) return false             // off-host = Access
+  if (to.pathname.startsWith('/cdn-cgi/access/')) return false // on-host Access login
+  return true
 }
 
 /** Paths deliberately not public, one per line; `#` comments and blanks ignored. */
@@ -89,9 +115,16 @@ if (args.includes('--selftest')) {
   let checks = 0, failures = 0
   const ok = (cond, msg) => { checks++; if (!cond) { failures++; console.log(`  FAIL  ${msg}`) } else console.log(`  ok    ${msg}`) }
 
-  const paths = publishedPaths(['releases/slides/manifest.json', 'agents.md', 'decks/secret.html', 'index.html'])
+  const paths = publishedPaths(['releases/slides/manifest.json', 'agents.md', 'decks/secret.html', 'index.html', '.wrangler/cache/pages.json'])
   ok(paths.includes('/releases/slides/manifest.json'), 'a published file becomes a URL path')
   ok(paths.includes('/'), 'and an index.html also becomes its directory')
+  ok(!paths.some((p) => p.startsWith('/.wrangler/')), 'and what Pages never deploys is not a published path')
+
+  // Both kinds of 3xx, told apart. Pages tidies a URL; Access asks for a login.
+  ok(isTidyingRedirect('https://h/404.html', 'https://h/404'), 'a same-host redirect is Pages tidying a URL')
+  ok(isTidyingRedirect('https://h/404.html', '/404'), 'and a relative one is too')
+  ok(!isTidyingRedirect('https://h/d/x', 'https://team.cloudflareaccess.com/login'), 'an off-host redirect is Access, not tidying')
+  ok(!isTidyingRedirect('https://h/d/x', 'https://h/cdn-cgi/access/login/h'), 'and so is an on-host Access login path')
 
   const allPublic = async () => 200
   let out = await sweep(paths, new Set(), allPublic)
@@ -132,16 +165,24 @@ const paths = publishedPaths(walk(siteDir))
 console.log(`${paths.length} published paths, ${exceptions.size} listed as intentionally gated`)
 console.log(`against ${host}, anonymously\n`)
 
-// No cookie, no assertion, no redirect following: an Access login page is a
-// redirect, and following it would turn a gated path into a cheerful 200.
+// No cookie, no assertion. Redirects are followed only when they are Pages
+// tidying a URL — see above — and at most a few hops.
 const fetchOne = async (p) => {
-  try {
-    const r = await fetch(host + p, { redirect: 'manual', headers: { 'user-agent': 'beta-store-live-check' } })
-    return r.status
-  } catch (err) {
-    console.log(`  ERR   ${p}: ${err?.message || err}`)
-    return 0
+  let url = host + p
+  for (let hop = 0; hop < 4; hop++) {
+    let r
+    try {
+      r = await fetch(url, { redirect: 'manual', headers: { 'user-agent': 'beta-store-live-check' } })
+    } catch (err) {
+      console.log(`  ERR   ${p}: ${err?.message || err}`)
+      return 0
+    }
+    if (r.status < 300 || r.status >= 400) return r.status
+    const location = r.headers.get('location')
+    if (!isTidyingRedirect(url, location)) return r.status
+    url = new URL(location, url).href
   }
+  return 508 // a redirect loop on this host is not a reachable path either
 }
 
 const { results, checked, failures } = await sweep(paths, exceptions, fetchOne)

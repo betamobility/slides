@@ -202,6 +202,9 @@ export async function run(Miniflare) {
       // allowlisted prefix and are gated all the same (KTD0).
       ['GET', '/releases-secret'], ['GET', '/releases-secret/manifest.json'], ['GET', '/templates-private/x'],
       ['GET', '/agents.md.bak'], ['GET', '/skills'],
+      // Deliberately not public: an unknown path never reaches Pages, so its
+      // 404 page is never served anonymously and nothing fetches it by name.
+      ['GET', '/404.html'], ['GET', '/404'],
       // The allowlist covers reads. A write to an allowlisted path is not a
       // pass-through and still needs an assertion.
       ['POST', '/releases/slides/manifest.json', minimal],
@@ -243,7 +246,7 @@ export async function run(Miniflare) {
       '/agents.md', '/slides/agents.md',
       '/skills/SKILL.md', '/skills/beta-slides.zip',
       '/logo/favicon-32.png',
-      '/robots.txt', '/sitemap.xml', '/404.html', '/LICENSE',
+      '/robots.txt', '/sitemap.xml', '/LICENSE',
     ]
     for (const p of PUBLIC_PATHS) {
       const before = proxied.length
