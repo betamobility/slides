@@ -182,6 +182,9 @@ const mf = new Miniflare({
 type Logged = { method: string; path: string; status: number; service: boolean }
 let log: Logged[] = []
 /** How many times a person saves the deck just before the tool's next PUT lands. */
+// stripEtag: behave like the Cloudflare edge, which drops a strong etag from
+// any response it compresses (every deck read is HTML).
+let stripEtag = false
 let bumps = 0
 let bumpX = 300
 /** How many of the tool's next asset uploads get no answer at all. */
@@ -232,7 +235,7 @@ const proxy = createServer(async (req, res) => {
     log.push({ method, path, status: r.status, service })
     const out = Buffer.from(await r.arrayBuffer())
     const h: Record<string, string> = {}
-    r.headers.forEach((v: string, k: string) => { if (k !== 'content-length' && k !== 'transfer-encoding') h[k] = v })
+    r.headers.forEach((v: string, k: string) => { if (k !== 'content-length' && k !== 'transfer-encoding' && !(stripEtag && k === 'etag' && /text\/html/.test(r.headers.get('content-type') || ''))) h[k] = v })
     res.writeHead(r.status, h)
     res.end(out)
   } catch (err) {
@@ -592,6 +595,19 @@ try {
     eq(putsTo(id).map((l) => l.status).join(','), '412,412,412,412', 'exactly four attempts, all refused')
     eq(slideOf((await readDeck(id)).doc, 'map').runtime.src, undefined, 'the deck holds Robert\'s last save, not the splice')
     bumps = 0
+  }
+  console.log('\nthe edge strips etag from the deck read: the tool writes with x-bento-etag')
+  {
+    const id = await seed()
+    const dir = project({})
+    const edits = join(dir, 'edits.json')
+    writeFileSync(edits, JSON.stringify([{ slideId: 's1', elementId: 't-04', html: 'Edge fixed' }]))
+    stripEtag = true
+    log = []
+    const r = await runTool([id, '--edits', edits])
+    stripEtag = false
+    eq(r.code, 0, `exits 0 with only x-bento-etag${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).map((l) => l.status).join(','), '200', 'one conditional PUT, accepted')
   }
   console.log('\nfour 412s after the assets went up: the message says which assets stay uploaded')
   {

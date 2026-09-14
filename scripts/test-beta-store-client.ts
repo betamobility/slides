@@ -402,6 +402,7 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   let version = 0
   const mint = () => `"v${++version}"`
   let serveEtag = true
+  let edgeStrips = false
   let serveGen = true
   const GEN = 'x-bento-service-gen'
   // conflictBody: what a 412 says ('json' is the worker's shape). onConflict
@@ -411,7 +412,9 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   decks.set('abc123XYZ0', { bytes: 'original', etag: mint(), gen: 0 })
   const versionHeaders = (d: { etag: string; gen: number }): Record<string, string> => {
     const h: Record<string, string> = {}
-    if (serveEtag) h.etag = d.etag
+    // edgeStrips: what Cloudflare does to a compressed deck response, the
+    // plain etag gone and only the worker's x-bento-etag left.
+    if (serveEtag) h[edgeStrips ? 'x-bento-etag' : 'etag'] = d.etag
     if (serveEtag && serveGen) h[GEN] = String(d.gen)
     return h
   }
@@ -455,6 +458,17 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   ok(heads[0]?.init.redirect === 'manual' && heads[0]?.init.credentials === 'same-origin', "…with redirect: 'manual' and same-origin credentials")
   ok(puts.length === 1 && header(puts[0], 'if-match') === null, `no ETag → the PUT carries no If-Match (${header(puts[0], 'if-match')})`)
   ok(decks.get('abc123XYZ0')?.bytes === 'no-etag save', '…and succeeds')
+
+  // the edge strips etag and only x-bento-etag reaches the client (live host)
+  serveEtag = true
+  edgeStrips = true
+  mark = calls.length
+  store.installStoreHost()
+  await save.writeUpdatedFile('edge first')
+  await save.writeUpdatedFile('edge second')
+  puts = calls.slice(mark).filter((c) => c.init.method === 'PUT')
+  ok(puts.length === 2 && header(puts[0], 'if-match') !== null && header(puts[1], 'if-match') !== null && header(puts[0], 'if-match') !== header(puts[1], 'if-match'), `with only x-bento-etag, both saves are conditional and chained (${puts.map((c) => header(c, 'if-match')).join(', ')})`)
+  edgeStrips = false
 
   // with ETags: boot HEAD captures it, saves chain
   serveEtag = true
