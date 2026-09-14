@@ -20,10 +20,13 @@
 //   PUT    /api/decks/:id          replace in place → 200 + ETag; If-Match
 //                                  honoured when sent (412), never required;
 //                                  a 412 carries the current ETag and writer
+//                                  (every deck ETag travels with
+//                                  x-bento-service-gen, see GEN_HEADER)
 //   DELETE /api/decks/:id          owner only → 204, the deck's assets with it
 //   GET    /d/:id                  the stored bytes, streamed, unchanged, + ETag
 //   HEAD   /d/:id                  the same headers, no body (the editor's boot)
-//   GET    /d/:id/assets/:name     a scene asset, sandboxed
+//   GET    /d/:id/assets/:name     a scene asset, sandboxed, no-cache + ETag
+//                                  (If-None-Match → 304)
 //   POST   /api/harness/decks      create, for service-token callers
 //   GET    /api/harness/decks/:id  read by id + ETag, for service-token callers
 //   PUT    /api/harness/decks/:id  replace; If-Match REQUIRED (428), stale → 412
@@ -53,6 +56,18 @@ const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 // Encoded bytes per metadata value. Title, owner, writer and docId share the
 // 2048-byte object budget with the timestamps and kind; 512 each leaves room.
 const META_MAX = 512
+
+// The service generation (runtime slides plan, KTD12): how many times a
+// service token has written this deck, kept in customMetadata as `sg` and sent
+// with every deck ETag as this header. A 412 names only the LATEST writer, so
+// a Claude replace followed by a person's save reads as a person write; the
+// editor compares the generation it booted with against the 412's, and only a
+// match lets a live tab retry. Missing metadata (a deck stored before this) is 0.
+const GEN_HEADER = 'x-bento-service-gen'
+const genOf = (obj) => {
+  const n = Number.parseInt(obj?.customMetadata?.sg ?? '', 10)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
 
 // Hosts the shell reaches from a stored deck, for the report-only CSP (KTD9).
 // The relay is the fork's own (slides/src/main.ts). The release manifest used
@@ -281,6 +296,7 @@ async function storeBytes(req, env, ctx, who, bytes, evt) {
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
       owner: encMeta(who.id), writer: encMeta(who.id), created: now, updated: now,
+      sg: who.kind === 'service' ? '1' : '0',
     },
   })
   track(ctx, req, evt, 'ok')
@@ -383,12 +399,16 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
+  // A service write bumps the generation, a person's carries it forward. Read
+  // from the head above: with If-Match the put only lands on that same version.
+  const gen = genOf(existing) + (who.kind === 'service' ? 1 : 0)
   const stored = await putIfMatch(env, KEY(id), bytes, {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
       owner: prev.owner || encMeta(who.id), writer: encMeta(who.id),
       created: prev.created || new Date().toISOString(), updated: new Date().toISOString(),
+      sg: String(gen),
     },
   }, etag)
   if (!stored) {
@@ -404,11 +424,14 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
       error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
       writer: decMeta(current?.customMetadata?.writer).includes('@') ? 'person' : 'service',
     })
-    if (current) res.headers.set('etag', current.httpEtag)
+    if (current) {
+      res.headers.set('etag', current.httpEtag)
+      res.headers.set(GEN_HEADER, String(genOf(current)))
+    }
     return res
   }
   track(ctx, req, 'deck_save', 'ok')
-  return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [GEN_HEADER]: String(gen) } })
 }
 
 async function remove(env, who, id) {
@@ -475,21 +498,36 @@ async function putAsset(req, env, id, name) {
   return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })
 }
 
-async function serveAsset(env, id, name) {
+// `no-cache`, not a max-age: a harness re-uploads an asset under the same name
+// when it redraws a scene, and an hour of stale cache showed the old one. The
+// browser revalidates with If-None-Match instead, which costs a 304 and no body.
+async function serveAsset(req, env, id, name) {
   if (!ASSET_NAME_RE.test(name)) return empty(404)
-  const obj = await env.DECKS.get(ASSET_PREFIX(id) + name)
+  const key = ASSET_PREFIX(id) + name
+  const headers = (obj) => ({
+    'cache-control': 'private, no-cache',
+    etag: obj.httpEtag,
+    'x-content-type-options': 'nosniff',
+    // Opened directly, an asset is a document on the store's origin; the
+    // sandbox gives it an opaque one, so an SVG the strip missed still
+    // cannot reach the deck API with the person's cookie.
+    'content-security-policy': 'sandbox',
+  })
+  const inm = (req.headers.get('if-none-match') || '').trim()
+  if (inm) {
+    const head = await env.DECKS.head(key)
+    if (!head) return empty(404)
+    const tags = inm === '*' ? ['*'] : inm.split(',').map((t) => t.trim().replace(/^W\//, ''))
+    if (tags.includes('*') || tags.includes(head.httpEtag)) return new Response(null, { status: 304, headers: headers(head) })
+  }
+  const obj = await env.DECKS.get(key)
   if (!obj) return empty(404)
   return new Response(obj.body, {
     status: 200,
     headers: {
+      ...headers(obj),
       'content-type': obj.httpMetadata?.contentType || 'application/octet-stream',
       'content-length': String(obj.size),
-      'cache-control': 'private, max-age=3600',
-      'x-content-type-options': 'nosniff',
-      // Opened directly, an asset is a document on the store's origin; the
-      // sandbox gives it an opaque one, so an SVG the strip missed still
-      // cannot reach the deck API with the person's cookie.
-      'content-security-policy': 'sandbox',
     },
   })
 }
@@ -514,6 +552,7 @@ const deckHeaders = (obj) => ({
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
   etag: obj.httpEtag,
+  [GEN_HEADER]: String(genOf(obj)),
 })
 
 async function serve(env, ctx, req, id) {
@@ -619,7 +658,7 @@ export default {
     if (sm && m === 'GET') return serve(env, ctx, req, sm[1])
     if (sm && m === 'HEAD') return serveHead(env, sm[1])
     const sa = /^\/d\/([0-9A-Za-z]{10})\/assets\/([^/]+)$/.exec(path)
-    if (sa && m === 'GET') return serveAsset(env, sa[1], sa[2])
+    if (sa && m === 'GET') return serveAsset(req, env, sa[1], sa[2])
 
     return empty(404)
   },

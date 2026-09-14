@@ -58,6 +58,22 @@
 // wrote the version that won. When it was a person and this tab is connected
 // to its room, the tab adopts the 412's ETag and retries once; anything else
 // (a service, not connected, a body it cannot read, a second 412) latches.
+// "Who wrote the version that won" is only the LATEST writer, so Claude's
+// replace followed by a person's save would read as a person. The worker
+// counts service writes (x-bento-service-gen) beside every ETag; the retry
+// also needs the 412's generation to equal the one this tab last saw, and a
+// worker that sends none gets no retry.
+//
+// ONE PUT AT A TIME PER DECK. The autosave write-back and a ⌘S can overlap;
+// sent together they carry the same If-Match and the tab 412s against itself.
+// putDeck queues each PUT behind the previous one, so it goes out with the
+// ETag that one returned. A failed PUT settles its slot and the queue moves on.
+//
+// AFTER A CONFLICT. The latch leaves a marker for the docId in localStorage.
+// On the reload, the IndexedDB recovery snapshot is the tab's stale version,
+// and a whole-document Restore followed by a save with the fresh ETag would
+// overwrite the store change without a 412. `recoveryChoice` makes the editor
+// offer that snapshot as a new deck instead.
 //
 // Every request goes through kernel net.ts — scripts/test-offline.ts refuses
 // a `fetch(` anywhere else, and the offline switch must cover the store too.
@@ -66,6 +82,7 @@ import { appConfig } from '../../../kernel/src/app.ts'
 import { netFetch, offlineEnabled, OfflineError } from '../../../kernel/src/net.ts'
 import { adoptFileHandle, downloadFile } from '../../../kernel/src/save.ts'
 import { t } from '../../../kernel/src/i18n.ts'
+import { lsDel, lsGet, lsSet } from '../../../kernel/src/storage.ts'
 
 /** Rejection for every "the store did not accept this" that a sign-in fixes. */
 export class StoreSignedOutError extends Error {
@@ -78,15 +95,44 @@ export class StoreSignedOutError extends Error {
 /** A save refused because the deck was replaced in the store since this tab
  *  loaded or last saved it. Terminal for the tab: reload to continue. */
 export class StoreConflictError extends Error {
-  /** From the worker's 412: who wrote the current version, and its ETag. */
+  /** From the worker's 412: who wrote the current version, its ETag, and its
+   *  service generation (null when the worker sent none). */
   writer: 'person' | 'service' | null
   etag: string | null
-  constructor(info: { writer?: 'person' | 'service' | null; etag?: string | null } = {}) {
+  gen: number | null
+  constructor(info: { writer?: 'person' | 'service' | null; etag?: string | null; gen?: number | null } = {}) {
     super(t('This deck changed in the store. Reload to get the latest version before saving.'))
     this.name = 'StoreConflictError'
     this.writer = info.writer ?? null
     this.etag = info.etag ?? null
+    this.gen = info.gen ?? null
   }
+}
+
+// --- after a conflict ---------------------------------------------------------------
+
+const conflictKey = (docId: string) => `bento-store-conflict-${docId}`
+
+/** The store refused a save of this document; remembered across the reload. */
+export function markStoreConflict(docId: string): void {
+  if (docId) lsSet(conflictKey(docId), String(Date.now()))
+}
+export function hasStoreConflict(docId: string): boolean {
+  return !!docId && lsGet(conflictKey(docId)) !== null
+}
+export function clearStoreConflict(docId: string): void {
+  if (docId) lsDel(conflictKey(docId))
+}
+
+/**
+ * What the recovery banner may offer for a snapshot. `restore` replaces the
+ * open document (today's banner); `new-deck` keeps the snapshot only as a new
+ * deck, because on the store after a conflict the open document IS the store
+ * change, and restoring over it then saving with the fresh ETag would erase it.
+ */
+export function recoveryChoice(o: { mismatch: boolean; storeOrigin: boolean; conflicted: boolean }): 'none' | 'restore' | 'new-deck' {
+  if (!o.mismatch) return 'none'
+  return o.storeOrigin && o.conflicted ? 'new-deck' : 'restore'
 }
 
 /** The configured store origin, or null when this app has none. */
@@ -151,7 +197,7 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
       const w = (await res.json())?.writer
       if (w === 'person' || w === 'service') writer = w
     } catch {} // unreadable: no writer, so the caller latches
-    throw new StoreConflictError({ writer, etag: res.headers?.get('etag') ?? null })
+    throw new StoreConflictError({ writer, etag: res.headers?.get('etag') ?? null, gen: genOf(res) })
   }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
@@ -164,6 +210,11 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
 // in flight: a save made before it answers waits for it, or the first ⌘S
 // after opening would go out unconditional.
 const versions = new Map<string, string>()
+// The service generation that came with that version; absent when the worker
+// sent none, which rules the live retry out.
+const gens = new Map<string, number>()
+// The tail of each deck's PUT queue. Always a settled-never-rejecting promise.
+const queues = new Map<string, Promise<void>>()
 let versionCheck: Promise<void> | null = null
 let conflicted = false
 let liveCheck: () => boolean = () => false
@@ -181,16 +232,40 @@ export function setLiveCheck(fn: () => boolean): void {
  */
 function checkVersion(id: string): Promise<void> {
   versions.delete(id)
+  gens.delete(id)
   return netFetch(`${storeHost()}/d/${encodeURIComponent(id)}`, { method: 'HEAD', credentials: 'same-origin', redirect: 'manual' })
-    .then((res) => {
-      const etag = res.status === 200 ? res.headers.get('etag') : null
-      if (etag) versions.set(id, etag)
-    })
+    .then((res) => { if (res.status === 200) adoptVersion(id, res) })
     .catch(() => {})
 }
 
-/** Replace the deck stored under `id`. The worker answers 200 with no body. */
-export async function putDeck(id: string, html: string): Promise<void> {
+/** The x-bento-service-gen a response carries, or null. */
+function genOf(res: Response): number | null {
+  const raw = res.headers?.get('x-bento-service-gen')
+  if (raw == null || !/^\d+$/.test(raw.trim())) return null
+  return Number(raw)
+}
+
+/** Keep the ETag and generation a response names, forgetting what it lacks. */
+function adoptVersion(id: string, res: Response): void {
+  const etag = res.headers?.get('etag')
+  if (etag) versions.set(id, etag)
+  else versions.delete(id)
+  const gen = etag ? genOf(res) : null
+  if (gen !== null) gens.set(id, gen)
+  else gens.delete(id)
+}
+
+/** Replace the deck stored under `id`. The worker answers 200 with no body.
+ *  Queued per id: each PUT starts after the previous one has settled. */
+export function putDeck(id: string, html: string): Promise<void> {
+  const run = (queues.get(id) ?? Promise.resolve()).then(() => putDeckNow(id, html))
+  const tail = run.then(() => {}, () => {})
+  queues.set(id, tail)
+  void tail.then(() => { if (queues.get(id) === tail) queues.delete(id) })
+  return run
+}
+
+async function putDeckNow(id: string, html: string): Promise<void> {
   if (versionCheck) await versionCheck
   if (conflicted) throw new StoreConflictError()
   const send = (etag: string | undefined) => storeRequest(`/api/decks/${encodeURIComponent(id)}`, {
@@ -204,17 +279,19 @@ export async function putDeck(id: string, html: string): Promise<void> {
       // A live-connected tab already holds a person's edits through sync, so
       // its bytes are a superset of that save and may replace it. Claude's
       // store replace never travels through sync: overwriting it would lose
-      // it, so a service writer always latches. One retry, no loop.
+      // it, so a service writer always latches. One retry, no loop. A person
+      // as the LATEST writer does not mean no service wrote since this tab's
+      // version, so the generation must not have moved either.
       if (!(err instanceof StoreConflictError) || err.writer !== 'person' || !err.etag || !liveCheck()) throw err
+      const held = gens.get(id)
+      if (held === undefined || err.gen === null || err.gen !== held) throw err
       res = await send(err.etag)
     }
   } catch (err) {
     if (err instanceof StoreConflictError) conflicted = true
     throw err
   }
-  const next = res.headers?.get('etag')
-  if (next) versions.set(id, next)
-  else versions.delete(id)
+  adoptVersion(id, res)
 }
 
 /** Store a NEW deck; the worker answers 201 {id, url}. */

@@ -27,7 +27,11 @@ pre-1.0.
   you are asked to reload. Your unsaved edits stay in the tab. A colleague
   editing the same deck with you live is not a conflict: your copy already
   has their changes, so saving carries on. If you were not connected when
-  they saved, you are asked to reload too.
+  they saved, you are asked to reload too. The same goes when Claude changed
+  the deck and a colleague saved after that. After the reload, the app offers
+  your unsaved edits as a new deck instead of restoring them over the newer
+  version, so neither version is lost. Two saves from your own tab at once no
+  longer trip over each other.
   Decks saved from an older release keep saving the old way until they are
   re-saved from this one.
 - **Claude updates stored decks without moving your layout.** The beta-slides

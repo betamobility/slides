@@ -19,7 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
-import { handoffToStore, isStoreOrigin, saveToDisk, setLiveCheck, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, recoveryChoice, saveToDisk, setLiveCheck, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -2272,10 +2272,19 @@ export class Editor {
   /** BETA FORK (runtime slides U10): the deck was replaced in the store. Said
    *  once, persistently enough to read; the deck stays dirty in this tab. */
   private storeConflict = false
-  private noteStoreConflict(err: StoreConflictError) {
-    if (this.storeConflict) return
+  private noteStoreConflict(err: StoreConflictError, always = false) {
+    // Remembered past the reload, so the recovery banner offers this tab's
+    // edits as a new deck rather than a Restore over the store's change.
+    markStoreConflict(this.store.doc.docId)
+    if (this.storeConflict && !always) return
     this.storeConflict = true
-    this.toast(err.message, 12000)
+    this.toast(this.storeConflictMessage(err), 12000)
+  }
+
+  /** The conflict message, plus where the edits go after the reload. Not for
+   *  an encrypted deck: it is never snapshotted, so nothing would be offered. */
+  private storeConflictMessage(err: StoreConflictError): string {
+    return isEncryptionActive() ? err.message : `${err.message} ${t('After the reload, you can keep your unsaved edits as a new deck.')}`
   }
 
   /** Keep the dirty dot's tooltip honest about the backstop — the file is still
@@ -2290,11 +2299,19 @@ export class Editor {
   private async checkRecovery() {
     const doc = this.store.doc
     const snap = await getRecovery(doc.docId)
-    if (!snap) return
-    let recovered: import('../model').BentoDoc
-    try { recovered = JSON.parse(snap.json) } catch { return }
-    if (docContentKey(recovered) === docContentKey(doc)) return // the file already has these edits
-    this.showRecoveryBanner(snap, recovered)
+    let recovered: import('../model').BentoDoc | null = null
+    if (snap) { try { recovered = JSON.parse(snap.json) } catch { /* unreadable: nothing to offer */ } }
+    // the file may already have these edits
+    const mismatch = !!recovered && docContentKey(recovered) !== docContentKey(doc)
+    // BETA FORK (runtime slides, KTD12): after a save the store refused, the
+    // open deck IS the store's newer version and the snapshot is this browser's
+    // older one. A Restore then a save (with the fresh ETag) would erase the
+    // store change without a 412, so the snapshot may only become a new deck.
+    const conflicted = hasStoreConflict(doc.docId)
+    const choice = recoveryChoice({ mismatch, storeOrigin: isStoreOrigin(), conflicted })
+    if (choice === 'none') { if (conflicted) clearStoreConflict(doc.docId); return }
+    if (choice === 'new-deck') this.showConflictRecoveryBanner(snap!, recovered!)
+    else this.showRecoveryBanner(snap!, recovered!)
   }
 
   /**
@@ -2498,6 +2515,48 @@ export class Editor {
     document.body.appendChild(bar)
   }
 
+  /**
+   * BETA FORK: the recovery banner after a store conflict. No Restore; the
+   * snapshot goes to the store as a NEW deck (new docId, fresh collab, per
+   * AGENTS.md) and this tab navigates to it. Built without touching
+   * `this.store.doc`: replacing the open document would schedule an autosave
+   * that PUTs the snapshot over the store's version with the fresh ETag.
+   */
+  private showConflictRecoveryBanner(snap: Snapshot, recovered: import('../model').BentoDoc) {
+    document.querySelector('.ed-recover')?.remove()
+    const docId = this.store.doc.docId
+    const bar = div('ed-recover')
+    const when = new Date(snap.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })
+    const msg = document.createElement('span')
+    msg.textContent = t('This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.', { when })
+    const keep = document.createElement('button')
+    keep.className = 'ed-btn ed-btn-primary'
+    keep.textContent = t('Save my version as a new deck')
+    keep.addEventListener('click', async () => {
+      keep.disabled = true
+      try {
+        const clone = JSON.parse(JSON.stringify(recovered)) as import('../model').BentoDoc
+        clone.docId = newDocId()
+        clone.collab = await mintCollab()
+        const { url } = await postDeck(await serializeAuto(clone))
+        void clearRecovery(docId)
+        clearStoreConflict(docId)
+        bar.remove()
+        location.assign(url)
+      } catch (err) {
+        console.error(err)
+        keep.disabled = false
+        this.toast(err instanceof StoreSignedOutError ? err.message : t('Save failed — see console'), 6000)
+      }
+    })
+    const dismiss = document.createElement('button')
+    dismiss.className = 'ed-btn'
+    dismiss.textContent = t('Discard')
+    dismiss.addEventListener('click', () => { void clearRecovery(docId); clearStoreConflict(docId); bar.remove() })
+    bar.append(msg, keep, dismiss)
+    document.body.appendChild(bar)
+  }
+
   /** Browse and restore the locally-kept auto-save timeline for this deck. */
   private async openVersionHistory() {
     const versions = await listVersions(this.store.doc.docId)
@@ -2685,7 +2744,7 @@ export class Editor {
       console.error(err)
       // BETA FORK (v1.1 U8): an expired Access session is a sign-in, not a bug.
       // a manual save always answers, even after autosave already said it once
-      if (err instanceof StoreConflictError) { this.storeConflict = true; this.toast(err.message, 12000); return }
+      if (err instanceof StoreConflictError) { this.noteStoreConflict(err, true); return }
       this.toast(err instanceof StoreSignedOutError ? err.message : t('Save failed — see console'), err instanceof StoreSignedOutError ? 6000 : undefined)
     }
   }

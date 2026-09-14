@@ -47,7 +47,24 @@ version and the tab is connected to its sync room, it already holds that
 person's edits, so it retries once against the new ETag. A service writer, a
 tab that is not connected, an unreadable 412 or a second 412 all stop saving
 until reload, since Claude's replace never travels through sync and
-overwriting it would lose it. A human autosave changes
+overwriting it would lose it. The 412 names only the latest writer, so a
+Claude replace followed by a person's save looks like a person's write. The
+worker therefore counts service writes: `sg` in customMetadata, set to 1 when
+a service token creates a deck, raised by one on every service-token replace,
+carried forward unchanged by a person's write, and sent as
+`x-bento-service-gen` with every deck ETag (a PUT's 200 and 412 included; a
+deck without the field reports 0). The editor keeps the generation beside the
+ETag, and retries only when the 412's generation equals the one it last
+received. A worker that sends no generation gets no retry. One tab's own
+saves are queued per deck, so an autosave and a manual save never race each
+other into a 412.
+When a save latches, the editor also remembers the conflict for that docId in
+localStorage. After the reload the recovery snapshot is the tab's older
+version, and a whole-document Restore followed by a save with the fresh ETag
+would overwrite the store change with no 412 at all. So on the store, with
+that marker, the recovery banner offers "Save my version as a new deck" (new
+docId, fresh collab, posted as a new store object) and Discard, never
+Restore. Both clear the marker. A human autosave changes
 the ETag too, so an agent editing beside an open deck re-reads often; that
 was accepted over inventing a content-only version.
 
