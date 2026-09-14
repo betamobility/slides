@@ -8,7 +8,10 @@ description: >-
   slides.betamobility.ai, or starts from a Beta template), from source
   material, or by improving an existing .bento.html. Applies the Beta design
   system through the deck's own theme, layouts and palette slots, refreshes
-  data at edit time with an as-of date, and exports editable PowerPoint. Full
+  data at edit time with an as-of date, and exports editable PowerPoint. Covers
+  the three kinds of slide: native slides people edit in bento, code slides
+  (syntax-highlighted, morphing between steps) and live HTML scenes (runtime
+  slides) spliced into decks in the store. Full
   schema + recipes at https://slides.betamobility.ai/agents.md.
 ---
 
@@ -33,6 +36,31 @@ can join that session and write to it. **Tell the user before you continue**;
 only they can decide. The remedies are upstream's: a read-only copy, *Share →
 Stop sharing* on a duplicate, or *Share → Rotate keys* if it already went
 somewhere. This rule is inherited unchanged.
+
+## Pick the kind of slide first
+
+Every slide in a Beta deck is one of three kinds. Decide per slide, before
+you write anything, because each is authored, stored and updated differently.
+
+| The slide needs | Kind | People can edit it in bento | You write |
+|---|---|---|---|
+| Text, charts, tables, images, diagrams, morphs, animated SVG | **Native slide** | Everything: move, resize, retype, restyle | Elements in `slide.elements` |
+| Source code shown to an audience, or a code walkthrough | **Code slide** (a native slide with a `code` element) | Everything, the code included | A `code` element; one slide per step for a walkthrough |
+| A live page: a map to pan, a running demo, script-driven animation, a scene with its own step logic | **Live scene** (runtime slide) | Reorder, notes and the scene's declared properties; not the scene itself | A scene folder, spliced in with `splice.mjs` |
+
+Default to native. A code slide is a native slide, so everything under
+Native slides applies to it too. Reach for a live scene only when the browser
+itself is the point; the test is under Runtime slides below.
+
+Whichever kind, where the deck lives decides how you write it:
+
+- **A file on disk** (not in the store): edit the `#bento-doc` JSON directly.
+  Add, remove and reorder slides and elements freely.
+- **A new deck for the store**: build it locally, then create it with the
+  `curl` recipe (no live scenes) or `splice.mjs --create` (any live scene).
+- **A deck already in the store**: only `splice.mjs`, under the ownership
+  rule. You change content by element id and replace or add live scenes; you
+  never add, move or reorder native slides or elements.
 
 ## Starting from nothing
 
@@ -83,6 +111,96 @@ editing an existing deck, never regenerate `docId`.
 6. **Live content goes in an `embed` element** only when the brief needs a
    live surface, and always with a static `view` (SVG) so it renders offline
    and prints. The guide's "Beta build" section has the shape.
+
+## Native slides
+
+A native slide is ordinary bento elements (`text`, `shape`, `image`,
+`chart`, `table`, `svg`, `media`, `code`) placed on the slide. It is the
+only kind a person can fully edit in the bento UI, so it is the default.
+
+1. **Instantiate from a Beta layout.** Copy the layout from `doc.layouts`
+   (keep its element ids, so the chrome morphs between slides), give the
+   slide a new id, and fill `html` on the placeholder elements. Delete a
+   placeholder you do not use rather than leaving it empty.
+2. **Add elements on the grid.** 96 px margins, content between x = 96 and
+   x = 1184, a two-column split at 528 + 32 + 528. Measure text with
+   `window.bento.measure()` before you size a box (agents.md).
+3. **Every element carries its palette slots and role.** A text element in
+   the Beta system looks like this:
+
+   ```json
+   { "id": "kpi-share", "type": "text", "x": 96, "y": 208, "w": 528, "h": 120,
+     "rotation": 0, "opacity": 1, "html": "38 %", "fontSize": 96,
+     "fontFamily": "'Playfair Display', Georgia, serif", "fontWeight": 700,
+     "color": "#4A7C59", "align": "left", "valign": "top", "lineHeight": 1.1,
+     "role": "title", "themeRefs": { "color": "accent1" } }
+   ```
+
+4. **Ids are yours to choose and keep.** Use readable, deterministic ids
+   (`kpi-share`, `map-legend`), unique within the slide. They are how
+   `edits.json` finds an element later, how morphs pair and how comments
+   anchor. An element that should travel between two slides keeps the same
+   id on both, and the second slide sets `"transition": "morph"`.
+5. **Animated diagrams stay native.** An `svg` element with `@keyframes` in
+   its `<style>` animates in present mode and stays movable in the editor
+   (agents.md, "Motion without a runtime slide").
+
+In a stored deck, a person may since have moved, resized or restyled what you
+wrote. Read the deck first, take ids from that copy, and change only content
+through `edits.json` (the key per type is listed under Runtime slides). If the
+brief needs a native slide that is not in a stored deck yet, you cannot add
+it: ask the person to add a slide from the right layout in the editor, then
+fill it by id. Never rebuild the deck to get round this.
+
+## Code slides
+
+Code goes in a `code` element, never in a text element or a screenshot. It
+keeps the source as plain text, highlights it, stays editable in the editor
+(double-click it), and between two slides it **morphs token by token**: lines
+that moved travel to their new place and new tokens fade in.
+
+```json
+{ "id": "code-main", "type": "code", "x": 96, "y": 176, "w": 1088, "h": 440,
+  "rotation": 0, "opacity": 1,
+  "content": "export function fare(km: number) {\n  return 32 + km * 4.5\n}",
+  "grammarName": "ts",
+  "fontSize": 28, "fontFamily": "'DM Mono', 'Courier New', monospace",
+  "color": "#1A1A1A", "align": "left", "valign": "top", "lineHeight": 1.45,
+  "role": "body", "themeRefs": { "color": "tx1" } }
+```
+
+- **`content`** is the raw source: real newlines (`\n` in JSON), spaces for
+  indentation, no HTML and no escaping beyond JSON's own. Every `<` becomes
+  `\u003c` when the block is written back, as for any string in the document.
+- **`grammarName`** picks the highlighter: `ts`, `js`, `py`, `sql`, `sh`,
+  `json`, `yaml`, `go`, `rust`, `java`, `csharp`, `kotlin`, `swift`, `html`,
+  `css`, `dockerfile`, `hcl`, `r`, `diff`, `md` and about sixty more (the
+  editor's Language menu lists them all). Names are these exact ids: shell is
+  `sh`, not `bash`, and an unknown name silently falls back to `js`. Use `diff` to show a change with added
+  and removed lines coloured.
+- **Colours.** The syntax colours are fixed by the renderer and are not
+  palette slots. Only `color`, the colour of plain tokens, is yours: `tx1` on
+  a light slide, `bg1` on a dark one. For a panel behind the code, put a
+  `shape` rect with `fill` on `bg2` (and its `themeRefs`) under the element.
+- **Type.** DM Mono at 24 to 32 px, `lineHeight` about 1.45. Lines do not
+  wrap and anything past the box is clipped. At 28 px a 1088 px box holds
+  about 60 characters per line, and a box holds `h / (fontSize × lineHeight)`
+  lines: about 10 in the 440 px box above. Cut the code to fit rather than
+  shrinking the type below 22 px.
+- **A walkthrough is a sequence of slides.** Duplicate the slide, change
+  `content`, keep the element's `id` the same (or give each copy the same
+  `morphId`), and set `"transition": "morph"` on every slide after the first.
+  Change a little per step: one function added, one line moved. Put the
+  explanation in a title or a side column, not in code comments.
+- **In a stored deck** change the source with `edits.json` and the key
+  `content`: `[{ "slideId": "s4", "elementId": "code-main", "content": "…" }]`.
+  The language, font and box stay as the person left them. For a new step in
+  a stored walkthrough, ask the person to duplicate the slide in the editor,
+  then change its `content` by id.
+- **PowerPoint** gets the code as monospace text without syntax colours; the
+  export report names each one (`code-colour`). Say so with the report.
+- Code that has to **run** in front of the audience is a live scene, not a
+  code element.
 
 ## Workflow
 
@@ -380,8 +498,8 @@ upload then fails, the error carries the deck id, and you finish with
   allows framing.
 - **`edits.json`** changes the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
-  key per type is `html` (text), `src` (image, media), `option` (chart) and
-  `rows` (table). Anything else is refused.
+  key per type is `html` (text), `content` (code), `src` (image, media),
+  `option` (chart) and `rows` (table). Anything else is refused.
 - **`--dry-run`** reads the deck and prints the plan without writing. Run it
   first.
 - An encrypted deck is refused; the tool does not decrypt. A deck that is in
@@ -396,8 +514,8 @@ so to the user rather than falling back to a hand-written replace.
 ### The ownership rule (hard rule)
 
 **Claude owns content, the UI owns geometry.** You replace runtime slides
-wholesale and change the text, images, chart data and table cells of native
-elements by id. You never change an element's position, size or rotation,
+wholesale and change the text, code, images, chart data and table cells of
+native elements by id. You never change an element's position, size or rotation,
 never add, remove or reorder slides or elements (the one exception is a new
 runtime slide placed with `insertAfter`), and never touch slide notes,
 backgrounds or transitions in a stored deck. People move things in the
@@ -442,4 +560,9 @@ run the command again. Never work around it.
 - [ ] Every text element carries a `role`; slides come from Beta layouts?
 - [ ] `meta.author` set; tokens, not literals, in title slides and footers?
 - [ ] Every fetched figure has a `Data as of` kicker on its slide?
+- [ ] Each slide is the right kind: native by default, source code in a
+      `code` element with a real `grammarName`, a live scene only where the
+      browser is the point?
+- [ ] A code walkthrough keeps one element id across its steps, with
+      `morph` on every step after the first, and no line clipped at the box?
 - [ ] PPTX exported and its degrade report reported to the user?

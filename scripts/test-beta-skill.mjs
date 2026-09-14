@@ -182,5 +182,26 @@ for (const t of ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'appl
 }
 ok(!/<image href="data:image\/png/.test(guide), 'the Embed section no longer recommends a raster screenshot as the view')
 
+console.log('\nthree kinds of slide')
+ok(/^## Pick the kind of slide first$/m.test(skill), 'the skill opens with a chooser between the three kinds of slide')
+ok(/^## Native slides$/m.test(skill) && /^## Code slides$/m.test(skill), 'the skill carries "Native slides" and "Code slides" sections')
+ok(/^### Code slides$/m.test(guide), 'docs/agents.md carries a "Code slides" subsection')
+// The edits key for code is the one splice.mjs enforces, in both documents.
+const splice = read('plugins/beta-slides/scripts/splice.mjs')
+ok(/code: 'content'/.test(splice), "splice.mjs lets edits.json change a code element's content")
+for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+  ok(/`content` \(code\)|`content` on code|html \| content \| src/.test(text), `${name} names content as the edits key for code`)
+  // Every language id the doc offers is one the tokenizer knows. Derived from
+  // the source, never restated: an id that is not there silently renders as js.
+  const tokenize = read('kernel/src/tokenize.ts')
+  const langs = new Set([...tokenize.matchAll(/^  ([a-z]+): \{/gm)].map((m) => m[1]).concat(['diff', 'md']))
+  // The bullet that offers the ids: from `grammarName` to the next bullet.
+  const para = /`grammarName`[^]*?\n- /.exec(text.slice(text.indexOf('Code slides')))?.[0] ?? ''
+  // `bash` is named only as the id NOT to use.
+  const offered = [...para.matchAll(/`([a-z]+)`/g)].map((m) => m[1]).filter((w) => w !== 'bash')
+  const unknown = offered.filter((w) => !langs.has(w))
+  ok(offered.length >= 15 && unknown.length === 0, `every grammarName ${name} offers is a tokenizer language (${offered.length} named${unknown.length ? ', unknown: ' + unknown.join(', ') : ''})`)
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)
