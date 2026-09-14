@@ -11,6 +11,7 @@ import { resolveAsset } from '../render'
 import { measureElement } from '../measure'
 import { PALETTE_SLOTS, paletteOf, refAt, setColor } from '../palette'
 import { isMacOS } from '../screens'
+import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
 import { CHART_PRESETS } from '../charts'
 import { FONT_CHOICES, firstFamily, injectFonts } from '../fonts'
 import { ICONS } from '../icons'
@@ -246,6 +247,14 @@ export class PropsPanel {
 
   private buildSlidePanel() {
     const slide = this.store.slide
+    // Beta build (runtime slides U5, KTD9): a live scene has no background,
+    // transition or layout of its own to edit; its declared values and the
+    // speaker notes are the whole panel.
+    if (isRuntimeSlide(slide)) {
+      this.buildRuntimeProps(slide)
+      this.buildNotes(slide)
+      return
+    }
     this.section(t('Slide'))
     // deck-wide page size: presets + custom. Elements keep their absolute
     // positions — a size change reframes the canvas, it never rescales art.
@@ -437,6 +446,10 @@ export class PropsPanel {
     })
     this.host.appendChild(saveLy)
 
+    this.buildNotes(slide)
+  }
+
+  private buildNotes(slide: Slide) {
     this.section(t('Speaker notes'))
     const notes = document.createElement('textarea')
     notes.className = 'ed-notes'
@@ -1765,6 +1778,66 @@ export class PropsPanel {
           if (v) m.poster = v; else delete m.poster
         }, true))
       this.row('Poster', poster)
+    }
+  }
+
+  /**
+   * Beta build (runtime slides U5): the values a scene declares. Each row
+   * writes `runtime.values[key]`, undoable like any panel edit; the scene gets
+   * them when presented. Labels are the scene author's words, so they do not
+   * go through row()'s t(). The scene's code is not editable here: Claude
+   * replaces a runtime slide wholesale, which also resets these values (R14).
+   */
+  private buildRuntimeProps(slide: Slide) {
+    const rt = slide.runtime!
+    this.section(t('Live scene'))
+    const source = document.createElement('p')
+    source.className = 'ed-hint'
+    if (rt.url) source.textContent = t('Hosted page: {url}', { url: rt.url })
+    else if (rt.src) {
+      const raw = resolveAsset(this.store.doc, rt.src)
+      const bytes = raw.startsWith('data:') ? Math.round(((raw.length - raw.indexOf(',') - 1) * 3) / 4) : new TextEncoder().encode(raw).length
+      const kb = Math.max(1, Math.round(bytes / 1024))
+      source.textContent = t('Inline scene · {size}', { size: kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb + ' KB' })
+    } else source.textContent = t('No scene yet — this slide shows its still.')
+    this.host.appendChild(source)
+
+    if (!rt.props.length) {
+      const none = document.createElement('p')
+      none.className = 'ed-hint'
+      none.textContent = t('No adjustable values')
+      this.host.appendChild(none)
+      return
+    }
+    // Look the record up again at write time: an undo replaces the slide object.
+    const setValue = (key: string, v: string | number, final: boolean) =>
+      this.edit(() => {
+        const live = this.store.slide.runtime
+        if (!live) return
+        live.values = { ...(live.values ?? {}), [key]: v }
+      }, final)
+    for (const prop of rt.props) {
+      const current = rt.values?.[prop.key] ?? prop.default
+      let input: HTMLElement
+      if (prop.kind === 'number') {
+        input = this.number(typeof current === 'number' ? current : Number(current) || 0, 1, (v, fin) => setValue(prop.key, v, fin))
+      } else if (prop.kind === 'color') {
+        input = this.color(String(current), (v, fin) => setValue(prop.key, v, fin))
+      } else {
+        const text = document.createElement('input')
+        text.type = 'text'
+        text.value = String(current)
+        text.addEventListener('input', () => setValue(prop.key, text.value, false))
+        text.addEventListener('change', () => setValue(prop.key, text.value, true))
+        input = text
+      }
+      input.dataset.runtimeProp = prop.key
+      const row = document.createElement('label')
+      row.className = 'ed-row'
+      const span = document.createElement('span')
+      span.textContent = prop.label
+      row.append(span, input)
+      this.host.appendChild(row)
     }
   }
 

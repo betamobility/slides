@@ -479,6 +479,13 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
 
 .bento-el { position: absolute; contain: layout style; }
 
+/* Beta build: a runtime slide's live scene, laid over its still in present
+   mode only (runtime-present.ts). Transparent until the scene paints. */
+.bento-runtime-frame {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border: 0; display: block; background: transparent;
+}
+
 /* Formulas are left on the browser's own `math` family ON PURPOSE — naming a
    maths font here fixes nothing and has been reverted three times. The
    radical's hook falling short of its overbar is Chromium drawing the overbar

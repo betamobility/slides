@@ -14,6 +14,107 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-09-14 — BETA FORK: runtime slides, conditional writes, and one tool for Claude's updates
+
+**Decision.** A Beta deck can carry runtime slides: one live HTML scene that
+fills a slide, authored by Claude as files and put into a stored deck by a
+splice tool that never touches what people arranged. Status: settled with
+Johan on 2026-09-14; store, format, present and splice tool are built, the
+shell release and worker deploy are the maintainer's. Plan:
+`docs/plans/2026-09-14-001-feat-runtime-slides-plan.md`. Upstream is not
+affected: `kernel/src/` is untouched and the additions are Beta files and one
+guard block per surface.
+
+**The still is an element (KTD1).** The runtime fields live in one optional
+`slide.runtime` object, and the still is an ordinary full-bleed `image`
+element in `slide.elements`. An older shell paints only `elements`, so it
+shows the still with no code; thumbnails, print, export and the first-page
+preview need nothing new. An empty element list beside a runtime record
+would have rendered blank in every shell already on disk.
+
+**Both write paths are conditional (KTD5, KTD12).** The store's harness `GET`
+returns the R2 `ETag`, and the harness `PUT` requires `If-Match`: 428 without
+it, 412 when the deck changed since that read. The people route honours
+`If-Match` when sent and never requires it, because shells already on disk
+save without it and must keep working; those shells overwrite unconditionally
+until they self-update. The editor on the store origin learns the ETag with
+`HEAD /d/:id` at boot and sends it on every save, so a person's save is
+refused when Claude replaced the deck in between. The 412 names who wrote the
+version that won (`writer: person | service`) and carries its ETag, because
+store decks are co-edited: two tabs in one sync room both autosave, and the
+second one meets a 412 in the ordinary course. When a person wrote the newer
+version and the tab is connected to its sync room, it already holds that
+person's edits, so it retries once against the new ETag. A service writer, a
+tab that is not connected, an unreadable 412 or a second 412 all stop saving
+until reload, since Claude's replace never travels through sync and
+overwriting it would lose it. The 412 names only the latest writer, so a
+Claude replace followed by a person's save looks like a person's write. The
+worker therefore counts service writes: `sg` in customMetadata, set to 1 when
+a service token creates a deck, raised by one on every service-token replace,
+carried forward unchanged by a person's write, and sent as
+`x-bento-service-gen` with every deck ETag (a PUT's 200 and 412 included; a
+deck without the field reports 0). The editor keeps the generation beside the
+ETag, and retries only when the 412's generation equals the one it last
+received. A worker that sends no generation gets no retry. One tab's own
+saves are queued per deck, so an autosave and a manual save never race each
+other into a 412.
+When a save latches, the editor also remembers the conflict for that docId in
+localStorage. After the reload the recovery snapshot is the tab's older
+version, and a whole-document Restore followed by a save with the fresh ETag
+would overwrite the store change with no 412 at all. So on the store, with
+that marker, the recovery banner offers "Save my version as a new deck" (new
+docId, fresh collab, posted as a new store object) and Discard, never
+Restore. Both clear the marker. A human autosave changes
+the ETag too, so an agent editing beside an open deck re-reads often; that
+was accepted over inventing a content-only version.
+
+**The service token reads by id.** Until now the token could create and
+replace but not read. It may now read a deck whose id it already knows; it
+still cannot list, and ids are ten random characters, so a leaked token
+cannot enumerate decks. The consequence is stated plainly: a read returns the
+whole file, including `doc.collab.ownerPriv`, so a token that can read a deck
+has owner access to that deck's live session. This extends the 2026-09-08
+consequence that store access is owner access, from signed-in colleagues to
+the service token, on Johan's explicit decision.
+
+**Heavy assets are store-origin, fetched by the shell (KTD6).** Files over
+the inline budget go to `PUT /api/harness/decks/:id/assets/:name` (service
+token, 16 MB, six content types, SVG stripped of script) and are served at
+`GET /d/:id/assets/:name` with `nosniff` and `content-security-policy:
+sandbox`. The shell fetches them on slide entry with the viewer's Access
+cookie and posts Blobs into the frame, so the sandboxed scene never makes a
+credentialed request. A deck opened from disk, Drive or a download runs its
+scenes without them.
+
+**The ownership rule lives in the splice tool (KTD8).** Claude owns content,
+the UI owns geometry. The tool diffs the document it would write against the
+one it read and refuses any change to an element's `x`, `y`, `w`, `h` or
+`rotation`, to slide order, or to anything other than the one content key per
+element type; it refuses missing, duplicated or native-slide ids and
+encrypted decks, and never writes partially. After a 412 it re-derives
+against a fresh read at most three more times, then says the owner probably
+has the deck open. The store does not enforce the rule: it cannot read a
+deck's intent, and the skill documents the tool as the only way to change an
+existing deck, with the bare replace recipe removed.
+
+**The tool is plugin-local (KTD11).** `plugins/beta-slides/scripts/splice.mjs`
+uses Node built-ins only and imports nothing outside `plugins/beta-slides/`,
+because the marketplace installs that directory and nothing else.
+`scripts/build-beta-templates.mjs` imports the shared block reader from the
+plugin, not the other way round.
+
+**Cowork has its own service token (KTD13).** Same two environment
+variables, a second token in the store's Access application, revocable
+without touching local Claude Code runs. The worker needs no change. Minting
+the token is Johan's step; that Cowork's shell has Node was not verified when
+this entry was written.
+
+Pointers: `slides/src/runtime.ts`, `slides/src/runtime-present.ts`,
+`server/deck-store/src/worker.js`, `plugins/beta-slides/scripts/splice.mjs`,
+`docs/agents.md` "Beta build → Runtime slides", the beta-slides SKILL.md.
+
+Claude-Session: https://claude.ai/code/session_01KhNJ6no7FeLu15siczqD3C
+
 ## 2026-09-10 — BETA FORK: one host serves the deck store and the release channel
 
 **Decision.** The deck store moves onto `slides.betamobility.ai`, the host that

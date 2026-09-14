@@ -18,6 +18,7 @@ import type { BentoDoc, Slide, SlideElement, TextElement } from '../model'
 import { uid } from '../model'
 import { firstFamily } from '../fonts'
 import { LIMITS, sanitizeAssets, sanitizeElement, sanitizeFonts, sanitizeSlide } from '../untrusted'
+import { checkRuntime, remapRuntimeRefs, runtimeAssetKeys } from '../runtime'
 
 export interface ClipPayload {
   __bento: 'clip'
@@ -79,6 +80,8 @@ export function serializeSlides(slides: Slide[], doc: BentoDoc): string {
     assets: collectAssets(els, fonts, doc),
     fonts,
   }
+  // Beta build: a runtime slide's scene source is referenced by no element
+  for (const k of slides.flatMap(runtimeAssetKeys)) if (doc.assets?.[k] != null) payload.assets![k] = doc.assets[k]
   return JSON.stringify(payload)
 }
 
@@ -127,6 +130,8 @@ export function parseClip(text: string): ClipPayload | null {
   } else {
     if (!Array.isArray(p.slides) || p.slides.length > LIMITS.slides) return null
     payload.slides = p.slides.map(sanitizeSlide).filter((s): s is Slide => s !== null)
+    // Beta build: only here are the source's bytes in hand to hold to budget
+    for (const s of payload.slides) if (s.runtime) s.runtime = checkRuntime(s.runtime, payload.assets)
     if (!payload.slides.length) return null
   }
   return payload
@@ -191,6 +196,7 @@ export function insertSlides(payload: ClipPayload, doc: BentoDoc, at: number): S
     copy.id = uid('slide')
     if (copy.stateOf) delete copy.stateOf // a pasted state becomes a normal slide
     rewriteRefs(copy.elements, remap)
+    remapRuntimeRefs(copy, remap)
     return copy
   })
   doc.slides.splice(at, 0, ...slides)

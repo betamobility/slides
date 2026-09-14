@@ -43,6 +43,38 @@
 // rejects with StoreSignedOutError, so the kernel's failure path fires (the
 // editor toasts, autosave keeps the deck dirty) instead of a false "Saved".
 //
+// CHANGED IN THE STORE (plan 2026-09-14-001, U10, KTD12). Claude can replace a
+// deck in the store while someone has it open, so a save must not silently
+// overwrite that. The host learns the version it is showing from HEAD /d/<id>
+// at boot, sends it as If-Match on every PUT, and adopts the ETag each 200
+// returns. A 412 rejects with StoreConflictError, and from then on this tab
+// sends no PUT at all: the edits stay dirty in the tab, "Save as new deck" and
+// the disk save still work, and a reload shows the replacement. A worker that
+// sends no ETag gets the unconditional save it always had.
+//
+// EXCEPT A PERSON'S SAVE IN A LIVE ROOM. Store decks are co-edited: two tabs
+// on one /d/<id> converge through the sync relay and both autosave, so the
+// second tab's save meets a 412 in the ordinary course. The 412 says who
+// wrote the version that won. When it was a person and this tab is connected
+// to its room, the tab adopts the 412's ETag and retries once; anything else
+// (a service, not connected, a body it cannot read, a second 412) latches.
+// "Who wrote the version that won" is only the LATEST writer, so Claude's
+// replace followed by a person's save would read as a person. The worker
+// counts service writes (x-bento-service-gen) beside every ETag; the retry
+// also needs the 412's generation to equal the one this tab last saw, and a
+// worker that sends none gets no retry.
+//
+// ONE PUT AT A TIME PER DECK. The autosave write-back and a ⌘S can overlap;
+// sent together they carry the same If-Match and the tab 412s against itself.
+// putDeck queues each PUT behind the previous one, so it goes out with the
+// ETag that one returned. A failed PUT settles its slot and the queue moves on.
+//
+// AFTER A CONFLICT. The latch leaves a marker for the docId in localStorage.
+// On the reload, the IndexedDB recovery snapshot is the tab's stale version,
+// and a whole-document Restore followed by a save with the fresh ETag would
+// overwrite the store change without a 412. `recoveryChoice` makes the editor
+// offer that snapshot as a new deck instead.
+//
 // Every request goes through kernel net.ts — scripts/test-offline.ts refuses
 // a `fetch(` anywhere else, and the offline switch must cover the store too.
 
@@ -50,6 +82,7 @@ import { appConfig } from '../../../kernel/src/app.ts'
 import { netFetch, offlineEnabled, OfflineError } from '../../../kernel/src/net.ts'
 import { adoptFileHandle, downloadFile } from '../../../kernel/src/save.ts'
 import { t } from '../../../kernel/src/i18n.ts'
+import { lsDel, lsGet, lsSet } from '../../../kernel/src/storage.ts'
 
 /** Rejection for every "the store did not accept this" that a sign-in fixes. */
 export class StoreSignedOutError extends Error {
@@ -57,6 +90,49 @@ export class StoreSignedOutError extends Error {
     super(message ?? t('Signed out of Beta — sign in again at {host}, then save again', { host: storeHostName() }))
     this.name = 'StoreSignedOutError'
   }
+}
+
+/** A save refused because the deck was replaced in the store since this tab
+ *  loaded or last saved it. Terminal for the tab: reload to continue. */
+export class StoreConflictError extends Error {
+  /** From the worker's 412: who wrote the current version, its ETag, and its
+   *  service generation (null when the worker sent none). */
+  writer: 'person' | 'service' | null
+  etag: string | null
+  gen: number | null
+  constructor(info: { writer?: 'person' | 'service' | null; etag?: string | null; gen?: number | null } = {}) {
+    super(t('This deck changed in the store. Reload to get the latest version before saving.'))
+    this.name = 'StoreConflictError'
+    this.writer = info.writer ?? null
+    this.etag = info.etag ?? null
+    this.gen = info.gen ?? null
+  }
+}
+
+// --- after a conflict ---------------------------------------------------------------
+
+const conflictKey = (docId: string) => `bento-store-conflict-${docId}`
+
+/** The store refused a save of this document; remembered across the reload. */
+export function markStoreConflict(docId: string): void {
+  if (docId) lsSet(conflictKey(docId), String(Date.now()))
+}
+export function hasStoreConflict(docId: string): boolean {
+  return !!docId && lsGet(conflictKey(docId)) !== null
+}
+export function clearStoreConflict(docId: string): void {
+  if (docId) lsDel(conflictKey(docId))
+}
+
+/**
+ * What the recovery banner may offer for a snapshot. `restore` replaces the
+ * open document (today's banner); `new-deck` keeps the snapshot only as a new
+ * deck, because on the store after a conflict the open document IS the store
+ * change, and restoring over it then saving with the fresh ETag would erase it.
+ */
+export function recoveryChoice(o: { mismatch: boolean; storeOrigin: boolean; conflicted: boolean }): 'none' | 'restore' | 'new-deck' {
+  if (!o.mismatch) return 'none'
+  return o.storeOrigin && o.conflicted ? 'new-deck' : 'restore'
 }
 
 /** The configured store origin, or null when this app has none. */
@@ -115,6 +191,14 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
     throw new StoreSignedOutError() // a followed cross-origin redirect, or no network
   }
   if (signedOut(res)) throw new StoreSignedOutError()
+  if (res.status === 412) {
+    let writer: 'person' | 'service' | null = null
+    try {
+      const w = (await res.json())?.writer
+      if (w === 'person' || w === 'service') writer = w
+    } catch {} // unreadable: no writer, so the caller latches
+    throw new StoreConflictError({ writer, etag: res.headers?.get('etag') ?? null, gen: genOf(res) })
+  }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
     throw new Error(t('The store refused the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
@@ -122,9 +206,92 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
   return res
 }
 
-/** Replace the deck stored under `id`. The worker answers 200 with no body. */
-export async function putDeck(id: string, html: string): Promise<void> {
-  await storeRequest(`/api/decks/${encodeURIComponent(id)}`, { method: 'PUT', body: html, headers })
+// The version this tab last saw, per id. `versionCheck` is the boot HEAD still
+// in flight: a save made before it answers waits for it, or the first ⌘S
+// after opening would go out unconditional.
+const versions = new Map<string, string>()
+// The service generation that came with that version; absent when the worker
+// sent none, which rules the live retry out.
+const gens = new Map<string, number>()
+// The tail of each deck's PUT queue. Always a settled-never-rejecting promise.
+const queues = new Map<string, Promise<void>>()
+let versionCheck: Promise<void> | null = null
+let conflicted = false
+let liveCheck: () => boolean = () => false
+
+/** The editor says whether this tab is connected to its sync room right now. */
+export function setLiveCheck(fn: () => boolean): void {
+  liveCheck = fn
+}
+
+/**
+ * Learn the ETag of the deck this page shows. Never rejects: an unreachable
+ * store, a signed-out session or a worker without ETags all leave no version,
+ * and saves stay unconditional. Not through storeRequest, because the answer
+ * is the deck's own headers, and its text/html would read as a login page.
+ */
+function checkVersion(id: string): Promise<void> {
+  versions.delete(id)
+  gens.delete(id)
+  return netFetch(`${storeHost()}/d/${encodeURIComponent(id)}`, { method: 'HEAD', credentials: 'same-origin', redirect: 'manual' })
+    .then((res) => { if (res.status === 200) adoptVersion(id, res) })
+    .catch(() => {})
+}
+
+/** The x-bento-service-gen a response carries, or null. */
+function genOf(res: Response): number | null {
+  const raw = res.headers?.get('x-bento-service-gen')
+  if (raw == null || !/^\d+$/.test(raw.trim())) return null
+  return Number(raw)
+}
+
+/** Keep the ETag and generation a response names, forgetting what it lacks. */
+function adoptVersion(id: string, res: Response): void {
+  const etag = res.headers?.get('etag')
+  if (etag) versions.set(id, etag)
+  else versions.delete(id)
+  const gen = etag ? genOf(res) : null
+  if (gen !== null) gens.set(id, gen)
+  else gens.delete(id)
+}
+
+/** Replace the deck stored under `id`. The worker answers 200 with no body.
+ *  Queued per id: each PUT starts after the previous one has settled. */
+export function putDeck(id: string, html: string): Promise<void> {
+  const run = (queues.get(id) ?? Promise.resolve()).then(() => putDeckNow(id, html))
+  const tail = run.then(() => {}, () => {})
+  queues.set(id, tail)
+  void tail.then(() => { if (queues.get(id) === tail) queues.delete(id) })
+  return run
+}
+
+async function putDeckNow(id: string, html: string): Promise<void> {
+  if (versionCheck) await versionCheck
+  if (conflicted) throw new StoreConflictError()
+  const send = (etag: string | undefined) => storeRequest(`/api/decks/${encodeURIComponent(id)}`, {
+    method: 'PUT', body: html, headers: etag ? { ...headers, 'if-match': etag } : headers,
+  })
+  let res: Response
+  try {
+    try {
+      res = await send(versions.get(id))
+    } catch (err) {
+      // A live-connected tab already holds a person's edits through sync, so
+      // its bytes are a superset of that save and may replace it. Claude's
+      // store replace never travels through sync: overwriting it would lose
+      // it, so a service writer always latches. One retry, no loop. A person
+      // as the LATEST writer does not mean no service wrote since this tab's
+      // version, so the generation must not have moved either.
+      if (!(err instanceof StoreConflictError) || err.writer !== 'person' || !err.etag || !liveCheck()) throw err
+      const held = gens.get(id)
+      if (held === undefined || err.gen === null || err.gen !== held) throw err
+      res = await send(err.etag)
+    }
+  } catch (err) {
+    if (err instanceof StoreConflictError) conflicted = true
+    throw err
+  }
+  adoptVersion(id, res)
 }
 
 /** Store a NEW deck; the worker answers 201 {id, url}. */
@@ -305,6 +472,8 @@ export function installStoreHost(): boolean {
     throw new DOMException('No file picker available', 'AbortError')
   }
   adoptFileHandle(storeHandle(id))
+  conflicted = false // a boot is a fresh tab; only the rig boots twice
+  versionCheck = checkVersion(id)
   return true
 }
 

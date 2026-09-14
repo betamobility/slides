@@ -169,6 +169,86 @@ const allText = list.map(read).join('\n')
 ok(!/evil\.example|alert\(1\)|<script/i.test(allText), 'a script-carrying svg asset is refused; nothing of it is in the zip')
 ok(list.some((p) => /^ppt\/media\/.*\.svg$/.test(rel(p))), 'clean svg artwork still travels as an svg picture under node')
 
+// ---- 2e. runtime slides export as a picture of their still -------------------
+// A runtime slide (slide.runtime, runtime-slides plan KTD1/KTD9) exports as ONE
+// full-bleed picture of its still and one degrade note. The stray text element
+// proves the element loop is skipped; the still's small box proves the picture
+// is placed full-bleed rather than at the image element's own frame.
+console.log('\nruntime slides')
+const PNG_STILL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const svgStill = (body: string) => 'data:image/svg+xml;base64,' +
+  Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9">${body}</svg>`, 'utf8').toString('base64')
+const runtimeSlide = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, background: '#F5F3EF', transition: 'none', notes: `Notes for ${id}.`,
+  runtime: { still: `asset:still-${id}`, steps: 0, props: [] },
+  elements: [
+    { id: 'still', type: 'image', x: 100, y: 100, w: 320, h: 180, rotation: 0, opacity: 1, src: `asset:still-${id}`, fit: 'contain', radius: 0 },
+    { id: 'stray', type: 'text', x: 96, y: 600, w: 600, h: 60, rotation: 0, opacity: 1, html: 'STRAY-RUNTIME-TEXT', fontSize: 24, fontFamily: 'Inter', fontWeight: 400, color: '#1A1A1A', align: 'left', valign: 'top', lineHeight: 1.2 },
+  ],
+  ...extra,
+})
+const runtimeDoc = (slidesIn: unknown[], assets: Record<string, string>) => {
+  const d = JSON.parse(JSON.stringify(fixture)) as BentoDoc
+  delete d.collab
+  d.slides = slidesIn as BentoDoc['slides']
+  d.assets = assets
+  return d
+}
+async function exportRuntime(d: BentoDoc, name: string) {
+  const m = await mapDeck(d)
+  const out = join(work, `${name}.pptx`)
+  writeFileSync(out, Buffer.from(await m.pptx.write({ outputType: 'nodebuffer' }) as Uint8Array))
+  const dir = join(work, name)
+  execFileSync('unzip', ['-q', '-o', out, '-d', dir])
+  const files = execFileSync('find', [dir, '-type', 'f'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+  const r = (p: string) => p.slice(dir.length + 1)
+  const num = (p: string) => parseInt(r(p).replace(/\D/g, ''), 10)
+  const slidesOut = files.filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(r(p))).sort((a, b) => num(a) - num(b)).map(read)
+  return {
+    // the fixture's deck-wide notes (fonts) are not this section's business
+    report: m.report.filter((e) => e.slideId !== '*').map(key).sort(),
+    slides: slidesOut,
+    pics: slidesOut.map((x) => (x.match(/<p:pic>/g) ?? []).length),
+    media: files.map(r).filter((p) => p.startsWith('ppt/media/')),
+    text: files.map(read).join('\n'),
+  }
+}
+// the picture's extent in EMU, within the mapper's 4-decimal inch rounding
+const fullBleed = (xml: string | undefined) => {
+  const m = /<p:pic>[\s\S]*?<a:off x="0" y="0"\/>\s*<a:ext cx="(\d+)" cy="(\d+)"\/>/.exec(xml ?? '')
+  const near = (got: string, px: number) => Math.abs(+got - (px / 96) * 914400) < 100
+  return !!m && near(m[1], fixture.size?.width || 1280) && near(m[2], fixture.size?.height || 720)
+}
+
+{
+  const rt = await exportRuntime(runtimeDoc([runtimeSlide('s-rt')], { 'still-s-rt': PNG_STILL }), 'rt-png')
+  ok(rt.slides.length === 1, `one runtime slide exports one slide (${rt.slides.length})`)
+  ok(rt.pics[0] === 1, `the runtime slide carries exactly one picture (${rt.pics[0]})`)
+  ok(!/STRAY-RUNTIME-TEXT/.test(rt.slides[0] ?? ''), 'elements beside the still are not mapped')
+  ok(fullBleed(rt.slides[0]), 'the still is placed full-bleed')
+  ok(!fullBleed(s2) && !fullBleed(s3), 'a picture at its own box is not read as full-bleed (negative control)')
+  ok(rt.report.join() === 's-rt/*/runtime', `exactly one degrade note, s-rt/*/runtime (${rt.report.join(', ')})`)
+  ok(rt.media.some((p) => /\.png$/.test(p)), 'a PNG still travels as a PNG picture')
+  ok(/Notes for s-rt\./.test(rt.text), 'the runtime slide keeps its speaker notes')
+}
+{
+  const clean = await exportRuntime(runtimeDoc([runtimeSlide('s-svg')], { 'still-s-svg': svgStill('<rect width="16" height="9" fill="#4A7C59"/>') }), 'rt-svg')
+  ok(clean.pics[0] === 1 && clean.media.some((p) => /\.svg$/.test(p)), 'a clean SVG still exports as one svg picture')
+  ok(clean.report.join() === 's-svg/*/runtime', `the SVG still carries the one runtime note (${clean.report.join(', ')})`)
+
+  const evil = '<scr' + 'ipt>alert(1)</scr' + 'ipt>'
+  const hostile = await exportRuntime(runtimeDoc([runtimeSlide('s-evil')], { 'still-s-evil': svgStill(`${evil}<rect width="16" height="9"/>`) }), 'rt-evil')
+  ok(hostile.slides.length === 1 && hostile.pics[0] === 1, 'an SVG still carrying a script still exports one picture')
+  ok(!/<script|alert\(1\)/i.test(hostile.text), 'nothing of the script reaches the zip')
+  ok(!hostile.media.some((p) => /\.svg$/.test(p)), 'the refused SVG is replaced by a raster placeholder')
+}
+{
+  const hid = await exportRuntime(runtimeDoc([runtimeSlide('s-vis'), runtimeSlide('s-hid', { hidden: true })], { 'still-s-vis': PNG_STILL, 'still-s-hid': PNG_STILL }), 'rt-hidden')
+  const isHidden = (x: string | undefined) => /<p:sld[^>]*\sshow="0"/.test(x ?? '')
+  ok(hid.slides.length === 2 && !isHidden(hid.slides[0]) && isHidden(hid.slides[1]), 'a hidden runtime slide exports hidden, a visible one visible')
+  ok(hid.report.join() === 's-hid/*/runtime,s-vis/*/runtime', `each runtime slide carries its own note (${hid.report.join(', ')})`)
+}
+
 // ---- 3. secrets -------------------------------------------------------------
 console.log('\nsecrets')
 // mapDeck is handed a copy with collab deleted by the editor; the rig proves

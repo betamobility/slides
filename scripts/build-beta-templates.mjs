@@ -16,6 +16,9 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { betaTemplates } from './lib/beta-layouts.mjs'
+// The splice lives in the plugin now (runtime-slides plan, KTD11), because
+// the splice tool that ships there needs it and may import nothing outside.
+import { spliceDoc } from '../plugins/beta-slides/scripts/lib/bento-doc.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
@@ -29,15 +32,6 @@ if (!existsSync(shellPath)) {
 }
 const shell = readFileSync(shellPath, 'utf8')
 const fragment = JSON.parse(readFileSync(join(root, 'beta/theme.json'), 'utf8'))
-
-export function spliceDoc(shellText, doc) {
-  const blockRe = /<script type="application\/bento\+json" id="bento-doc">[\s\S]*?<\/script>/
-  const json = JSON.stringify(doc).replace(/</g, '\\u003c')
-  if (json.includes('</script')) throw new Error('a literal </script> survived escaping')
-  const out = shellText.replace(blockRe, () => `<script type="application/bento+json" id="bento-doc">\n${json}\n</scr` + 'ipt>')
-  if (!out.includes(json)) throw new Error('splice failed')
-  return out
-}
 
 mkdirSync(outDir, { recursive: true })
 for (const [name, doc] of Object.entries(betaTemplates(fragment))) {

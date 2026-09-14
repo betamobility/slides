@@ -9,6 +9,7 @@ import { morphKey, paginates, isWebUrl } from './model'
 import { chartSnapshotSvg } from './charts'
 import temml from 'temml'
 import { renderCodeInto } from './code'
+import { runtimePaint } from './runtime.ts'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -1350,7 +1351,8 @@ export function renderSlide(slide: Slide, doc: BentoDoc, opts: RenderOpts = {}):
   surface.style.height = `${doc.size.height}px`
   surface.style.background = slide.background
   const fields = opts.fields ?? fieldContext(doc, slide)
-  for (const el of slide.elements) surface.appendChild(renderElement(el, doc, { ...opts, fields }))
+  // Beta build: a runtime slide paints its still only (runtime.ts)
+  for (const el of runtimePaint(slide, doc) ?? slide.elements) surface.appendChild(renderElement(el, doc, { ...opts, fields }))
   return surface
 }
 

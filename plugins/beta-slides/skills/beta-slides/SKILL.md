@@ -111,27 +111,328 @@ editing an existing deck, never regenerate `docId`.
    (they are in 1Password, Development; never put them in a file):
 
    ```bash
-   # create → 201 {"id":"<id>","url":"https://slides.betamobility.ai/d/<id>"}
+   # create a deck with no runtime slides → 201 {"id":"<id>","url":"https://slides.betamobility.ai/d/<id>"}
    curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
              -H 'content-type: text/html; charset=utf-8' \
              --data-binary "@<Topic>.bento.html" \
              https://slides.betamobility.ai/api/harness/decks
-
-   # replace an existing deck in place → 200
-   curl -fsS -X PUT -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-             -H 'content-type: text/html; charset=utf-8' \
-             --data-binary "@<Topic>.bento.html" \
-             https://slides.betamobility.ai/api/harness/decks/<id>
    ```
 
-   Give the user the `url` from the reply. The token may only create and
-   replace on these two routes — it cannot list or read decks, so a leaked
+   A deck with runtime slides is created with `splice.mjs --create` instead
+   (see Runtime slides below). **A deck that is already in the store is
+   changed only with `splice.mjs`.** There is no hand-written replace: the
+   tool reads the deck, keeps what people arranged, and writes back only if
+   nobody saved in between.
+
+   Give the user the `url` from the reply. The token may create, read a deck
+   whose id it already has, and replace it; it cannot list decks, so a leaked
    token cannot enumerate anyone's work, and there is no harness way to
-   discover an id you were not given. Anyone signed in at
+   discover an id you were not given. A read hands over the whole file,
+   including the deck's live-session owner keys, so treat a downloaded deck
+   like the token itself. Anyone signed in at
    `https://slides.betamobility.ai/` sees the deck in the list and can edit
    it; the link is the invitation.
+
+## Runtime slides
+
+A runtime slide is one live HTML scene that fills a whole slide. In present
+mode the scene runs in a sandboxed frame; everywhere else (editor,
+thumbnails, print, PDF, PowerPoint, an older shell) the slide is its still,
+a picture you draw. The guide's "Beta build → Runtime slides" section has the
+record shape and the full protocol.
+
+### Use one only when the browser is the point
+
+**Try an `svg` element with `@keyframes` first.** Its `<style>` animations
+run in present mode and restart every time the slide is entered, the slide
+stays editable in the UI, and most animated diagrams need nothing more (see
+"Motion without a runtime slide" in the guide). Text, charts, tables, step
+reveals and morphs are native features; never make a runtime slide for them.
+
+Use a runtime slide for what the file's own elements cannot do: a map people
+pan and zoom, a live demo, bespoke animation driven by script, anything where
+the browser runtime is the thing being shown.
+
+### The project folder
+
+Scenes are files you write and preview in a browser, then splice into the
+deck. One folder per deck:
+
+```
+<project>/
+  deck.json                      --create only: { "title": "…", "slides": [ … ] }
+  edits.json                     optional: content changes to native elements
+  assets/<name>                  heavy files shared by several scenes
+  scenes/<slideId>/index.html    the scene
+  scenes/<slideId>/still.svg     or still.png, exactly one
+  scenes/<slideId>/scene.json    { "steps": 3, "props": [ … ], "assets": [ … ], "url": "https://…", "insertAfter": "s2" }
+  scenes/<slideId>/assets/<name> heavy files this scene lists
+```
+
+The folder name under `scenes/` is the slide id. In `scene.json` every key is
+optional: `steps` (a whole number, default 0), `props` (a list of
+`{ "key", "label", "kind": "text" | "number" | "color", "default" }`),
+`assets` (file names, looked up in the scene's `assets/` and then the
+project's `assets/`) and `url` (https only: the frame loads that page instead
+of `index.html`, which must still exist) and `insertAfter` (update only: add
+this scene as a new slide, see below). Keys pressed inside a hosted `url`
+page do not drive the show; the presenter clicks outside the frame to get the
+arrows back, and offline the still shows.
+
+Assets are stored per deck, not per scene: two scenes may list the same asset
+name only when the files hold the same bytes. The same name with different
+bytes stops the run before any request, so give one of the files another
+name.
+
+### A scene
+
+The scene waits for `bento:init` before it trusts any state, installs its
+message listener before it sends `bento:ready`, and leaves slide navigation
+to the shell. Start from this:
+
+```html
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #F5F3EF; color: #1A1A1A; font: 28px/1.4 Inter, system-ui, sans-serif; }
+  main { padding: 96px; }
+  .step { opacity: 0.15; transition: opacity 0.4s; }
+  .step.on { opacity: 1; }
+  .reduce .step { transition: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <p class="step">First point</p>
+  <p class="step">Second point</p>
+  <p class="step">Third point</p>
+</main>
+<script>
+  // Defaults match scene.json, so the file previews on its own in a browser.
+  const state = { step: 0, props: { title: 'Title' }, assets: {} }
+
+  function render() {
+    document.getElementById('title').textContent = state.props.title
+    document.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('on', i <= state.step))
+    // state.assets[name] is an object URL, or missing: always draw something without it.
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      state.step = m.step // the last step when the presenter arrives going backwards
+      Object.assign(state.props, m.props)
+      document.body.classList.toggle('reduce', m.reduceMotion)
+    } else if (m.type === 'bento:step') {
+      state.step = m.index
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+    } else if (m.type === 'bento:motion') {
+      document.body.classList.toggle('reduce', m.reduce)
+    } else if (m.type === 'bento:assets') {
+      for (const [name, blob] of Object.entries(m.assets)) state.assets[name] = URL.createObjectURL(blob)
+    } else {
+      return
+    }
+    render()
+  })
+
+  // Keys pressed inside the frame never reach the shell. Forward the ones the
+  // scene does not use; the shell steps or changes slide and takes focus back.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented || ev.target.closest?.('input, textarea, select')) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  render()
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>
+```
+
+Rules the template already follows:
+
+- **Steps belong to the shell.** It counts them from `scene.json`, walks
+  them with the arrows before leaving the slide, and tells the scene with
+  `bento:step { index }` (from 0). A scene that also moves a step on its own
+  arrow handling double-steps. Steps only count once the scene has sent
+  `bento:ready`; before that, and in a frame that failed to load, the arrows
+  change slide.
+- **Nothing reaches a scene before `bento:ready`.** `bento:init { step,
+  steps, props, reduceMotion }` comes first, then `bento:assets`.
+- **Honour reduced motion** (`reduceMotion` in init, `bento:motion {
+  reduce }` later).
+- **A scene is self-contained.** Its CSS, script and small data are inline;
+  it makes no request for its assets itself.
+
+### The still
+
+The still is a placeholder picture of the scene, drawn by you: a hand-drawn
+SVG (the outline of the map, the first frame of the demo, a title) or a small
+PNG. It is not a screenshot of a map or a live page. It is what thumbnails,
+print, PDF, PowerPoint and older shells show, and what present mode shows
+when the frame fails to load.
+
+Keep it small. The hard cap is 200 KB. When the runtime slide is slide one,
+keep the still under about 45 KB: every save writes a first-page thumbnail
+into the file under a 64 KB budget, the still travels as base64 (a third
+larger), and above that budget the thumbnail drops the picture for a tinted
+box.
+
+### Budgets and assets
+
+- `index.html`: 256 KB at most, inlined into the deck.
+- The still: 200 KB at most, always inlined.
+- Anything heavier (a 7 MB map, a GeoJSON, a CSV) goes in `assets/` and is
+  listed in `scene.json`: 16 MB per file, at most 64 per scene, types
+  png, jpg, webp, svg, json and csv. Names are letters, digits, `.`, `_`
+  and `-`. The tool uploads them to the store's asset route; an SVG asset has
+  scripts, `foreignObject` and event handlers stripped on upload.
+- **Referenced assets play only when the deck is opened from the store by a
+  signed-in person.** The shell fetches them from
+  `https://slides.betamobility.ai/d/<id>/assets/<name>` and hands the bytes to
+  the scene. A copy on disk, in Drive or downloaded runs the scene without
+  them, so the scene must still draw something. Assets belong to one deck id:
+  a "Duplicate as new deck" copy has none until the tool runs against it.
+
+The tool refuses anything over budget and writes nothing.
+
+### Creating and updating a deck with splice.mjs
+
+The tool is `scripts/splice.mjs` in the beta-slides plugin, next to its
+`skills/` folder (in a checkout of betamobility/slides:
+`plugins/beta-slides/scripts/splice.mjs`). It needs Node 18 or newer and
+nothing else. It reads `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`
+from the environment (1Password, Development; never put them in a file) and,
+optionally, `SLIDES_STORE_URL` (default `https://slides.betamobility.ai`).
+
+```bash
+# a new deck: the published blank template, deck.json's slides, then the scenes
+node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
+
+# an existing deck: replace or insert runtime slides, apply edits.json
+node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
+
+# an existing deck, content fixes only (a typo, a figure): no project folder
+node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
+
+# an existing deck, renamed: nothing else changes
+node splice.mjs <deckId> --title "<title>" [--dry-run]
+```
+
+`<deckId>` is the ten characters at the end of `/d/<id>`. Every command
+prints what it did and the deck's link. Exit code 0 is success, 1 is a
+refusal or a store error (the message says which; a refusal comes before the
+deck write, and in update mode the deck itself was not changed), 2 is a usage
+error.
+
+Every request to the store times out: 30 seconds for reading or writing a
+deck and for the blank template, 120 seconds for each asset upload. A timeout
+stops the run with a message naming the request. Assets go up before the deck
+is written, so if the run fails after that, the message lists the assets that
+were uploaded and says the deck itself was not changed. With `--create`, the
+new deck's link is printed as soon as the store creates it; if an asset
+upload then fails, the error carries the deck id, and you finish with
+`splice.mjs <deckId> <projectDir>` rather than creating a second deck.
+
+- **`--create`**: `deck.json` holds full bento slides, each with an `id`. A
+  slide whose id matches a scene folder is where that runtime slide goes;
+  other scenes are added after the native slides. The deck gets a fresh
+  `docId` and the Beta theme, fonts and layouts from the blank template.
+- **Update**: a folder under `scenes/` whose name is a runtime slide in the
+  deck replaces that slide. An id two slides share, or the id of a native
+  slide, stops the run; the tool never turns a native slide into a runtime
+  slide. A folder whose name is not in the deck stops the run too, unless its
+  `scene.json` sets `insertAfter`. A runtime slide that holds elements other
+  than its still (something pasted onto it, say) stops the run naming those
+  element ids, because the replace would delete them; ask the person to move
+  or delete them in the editor.
+- **Adding a runtime slide to an existing deck**: pick a new slide id that no
+  slide in the deck uses, name the folder after it, and set `"insertAfter"` in
+  its `scene.json` to the id of the slide it follows, or `"end"` to append.
+  The anchor must be a slide in the deck as it is now (not another new
+  scene); the new slide goes after it and after any states of it, and takes
+  its background. Once inserted, the next run replaces it like any other
+  runtime slide and `insertAfter` is ignored.
+- **Edits only**: with no scene to change, run
+  `splice.mjs <deckId> --edits edits.json`. A run with neither scene folders
+  nor edits nor `--title` is refused.
+- **`--title "<title>"`** (update only) renames the deck: it changes the
+  document title and nothing else at document level. It works alone, or
+  beside scenes and edits. With `--create`, the title comes from `deck.json`.
+- **The url check**: when a `scene.json` sets `url`, the tool fetches that
+  page once before it touches the store (following one redirect) and stops
+  if the page refuses to be framed by `https://slides.betamobility.ai`: an
+  `X-Frame-Options` header (DENY or SAMEORIGIN), or a
+  `Content-Security-Policy` whose `frame-ancestors` does not allow that
+  origin. Such a page would show only its still in the deck. A page the tool
+  cannot reach (an internal one, say) prints a warning and the run goes on.
+  `--skip-url-check` skips the check; use it only when you know the page
+  allows framing.
+- **`edits.json`** changes the content of native elements by id:
+  `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
+  key per type is `html` (text), `src` (image, media), `option` (chart) and
+  `rows` (table). Anything else is refused.
+- **`--dry-run`** reads the deck and prints the plan without writing. Run it
+  first.
+- An encrypted deck is refused; the tool does not decrypt. A deck that is in
+  a live session while the tool writes is unsupported: collaborators are not
+  told the store copy changed.
+
+**Cowork** runs the same commands with its own service token, set in the same
+two variables, so it can be revoked without touching local Claude Code runs.
+If `node` is not available in Cowork's shell, the tool cannot run there; say
+so to the user rather than falling back to a hand-written replace.
+
+### The ownership rule (hard rule)
+
+**Claude owns content, the UI owns geometry.** You replace runtime slides
+wholesale and change the text, images, chart data and table cells of native
+elements by id. You never change an element's position, size or rotation,
+never add, remove or reorder slides or elements (the one exception is a new
+runtime slide placed with `insertAfter`), and never touch slide notes,
+backgrounds or transitions in a stored deck. People move things in the
+editor, and their layout always survives your update. The tool enforces this:
+it compares what it would write with what it read and refuses any change
+outside the rule.
+
+A replace resets the values a presenter set for a scene's properties to your
+defaults. The tool's plan output (with `--dry-run` and on a real run) has a
+line `<slideId>: presenter values dropped by the replace: key="value", …` for
+each replaced slide that had them. Pass that line on to the user.
+
+**Never regenerate a deck from a script once people have edited it.** A
+fresh `--create` is a new deck; it does not update the old one.
+
+**Read before you write.** Before you plan a change, read the deck as it is
+now, not a copy from earlier in the session:
+
+```bash
+curl -fsS -o current.bento.html \
+     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+     https://slides.betamobility.ai/api/harness/decks/<id>
+```
+
+Take slide and element ids from that file, then change it with `splice.mjs`.
+
+### When the tool reports a 412
+
+A 412 means someone saved the deck after the tool read it. The tool reads
+again and redoes its changes against the fresh copy, up to three times. If
+every attempt loses, it stops with "the owner probably has the deck open":
+autosave changes the deck every few seconds while someone edits. Nothing was
+written. Tell the user, ask the person to close the deck or stop editing, and
+run the command again. Never work around it.
 
 ## Self-audit (Beta additions to upstream's list)
 
