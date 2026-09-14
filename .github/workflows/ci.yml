@@ -298,6 +298,16 @@ jobs:
         # at run time.
         run: node scripts/test-beta-store.ts
 
+      - name: Beta splice tool rig
+        # Runtime slides U7: plugins/beta-slides/scripts/splice.mjs run as a
+        # child process against the deck store under Miniflare, behind a proxy
+        # standing in for Access. Scenes replace runtime slides, edits change
+        # native content only, every refusal writes nothing, 412s retry three
+        # times, --create round-trips, and the tool runs from a copy of the
+        # plugin directory alone. After `npm ci` (miniflare) and after the
+        # templates build (--create reads blank.bento.html).
+        run: node scripts/test-beta-splice.ts
+
       - name: Beta deck store client rig
         # U8: slides/src/beta/store.ts against a fake browser. The store-backed
         # handle PUTs the kernel's bytes to /api/decks/<id> with a manual
