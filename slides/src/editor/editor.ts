@@ -19,7 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
-import { handoffToStore, isStoreOrigin, saveToDisk, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { handoffToStore, isStoreOrigin, saveToDisk, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -39,6 +39,7 @@ import { ICONS } from '../icons'
 import { t, isRtl } from '../i18n' // BETA FORK (v1.1 U3): the locale picker is gone, only t/isRtl remain
 import { markFileSaved } from '../packs' // BETA FORK (v1.1 U3): pack management UI removed; the save path still marks packs saved
 import { injectFonts } from '../fonts'
+import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
 import { appConfig } from '../../../kernel/src/app.ts'
 import { disconnectOnline, joinFromDoc, mintCollab, mintInvite, onlineTransport, rotateKeys, sharingOn, startSharing, stopSharing } from '../sync/online'
 import { lsGet, lsJson, lsSet } from '../../../kernel/src/storage.ts'
@@ -115,6 +116,10 @@ export class Editor {
     store.on('doc', () => this.syncLinkedCharts())
     store.on('doc', () => this.syncConnectors())
     store.on('doc', () => this.syncThemeRefs())
+    // Beta build (runtime slides U5): a live scene holds no other elements
+    store.on('current', () => this.syncRuntimeChrome())
+    store.on('doc', () => this.syncRuntimeChrome())
+    this.syncRuntimeChrome()
     document.addEventListener('bento:apply-layout', ((ev: CustomEvent) => {
       this.openLayoutPicker(ev.detail.anchor as HTMLElement, { kind: 'apply' })
     }) as EventListener)
@@ -491,9 +496,23 @@ export class Editor {
     this.canvas = new SlideCanvas(canvasWrap, this.store)
     this.canvas.onCommentModeChange = (on) => commentB.classList.toggle('ed-btn-armed', on)
     this.canvas.onSlideNav = (dir) => this.store.goToLinear(dir)
+    this.canvas.onRuntimeRefused = () => this.refuseOnRuntimeSlide()
     this.panel = new PropsPanel(this.props, this.store)
 
     if (this.store.doc.collab?.role === 'reader') this.enterReaderMode()
+  }
+
+  /** Beta build (runtime slides U5): hide the insert tools while the current
+   *  slide is a live scene. Inline display, because .ed-group sets its own. */
+  private syncRuntimeChrome() {
+    const p = this.phoneChrome
+    if (!p) return
+    const hide = isRuntimeSlide(this.store.slide)
+    for (const g of [p.insert, p.insertD]) g.style.display = hide ? 'none' : ''
+  }
+
+  private refuseOnRuntimeSlide() {
+    this.toast(t('Live scene slides cannot hold other elements'))
   }
 
   /** Live viewer: block user edits (store.readOnly), hide editing chrome, and
@@ -2025,6 +2044,7 @@ export class Editor {
       if (!dt) return
       // 1) an image from the OS clipboard (screenshot, copied picture…)
       const imgItem = [...dt.items].find((it) => it.kind === 'file' && it.type.startsWith('image/'))
+      if (imgItem && isRuntimeSlide(this.store.slide)) { ev.preventDefault(); this.refuseOnRuntimeSlide(); return }
       if (imgItem) {
         const file = imgItem.getAsFile()
         if (file) { ev.preventDefault(); this.pasteImageFile(file); return }
@@ -2044,6 +2064,11 @@ export class Editor {
   private pasteFromText(text: string): boolean {
     // 2) Bento elements / slides copied from this or another deck
     const clip = parseClip(text)
+    // Beta build (runtime slides U5): slides paste beside a live scene; nothing pastes onto one
+    if (clip?.kind !== 'slides' && text?.trim() && isRuntimeSlide(this.store.slide)) {
+      this.refuseOnRuntimeSlide()
+      return true
+    }
     if (clip?.kind === 'elements') {
       let added: SlideElement[] = []
       this.store.commit(() => { added = insertElements(clip, this.store.doc, this.store.slide) })
@@ -2210,7 +2235,9 @@ export class Editor {
       if (Date.now() - this.lastVersionAt > 120_000) { this.lastVersionAt = Date.now(); await addVersion(doc) }
     }
     // Silent file write-back once we hold a writable handle (Chrome/Edge).
-    if (hasFileHandle()) {
+    // BETA FORK (runtime slides U10, KTD12): not after the store refused a
+    // save because the deck changed there; store.ts sends nothing more anyway.
+    if (hasFileHandle() && !this.storeConflict) {
       try {
         this.session?.stampInto(doc)
         await writeUpdatedFile(await serializeAuto(doc))
@@ -2218,7 +2245,10 @@ export class Editor {
         markFileSaved() // the packs went out with those bytes too
         this.flashSaved()
         return
-      } catch { /* keep dirty; the IndexedDB snapshot is the backstop */ }
+      } catch (err) {
+        // keep dirty; the IndexedDB snapshot is the backstop
+        if (err instanceof StoreConflictError) this.noteStoreConflict(err)
+      }
     }
     // No handle (Safari/Firefox/iOS) or the write failed: the file on disk is
     // STALE and the deck stays dirty — saying "Saved" here would be a lie. But
@@ -2234,6 +2264,15 @@ export class Editor {
       this.flashSaved(t('Backed up in this browser'))
       this.refreshDirtyHint()
     }
+  }
+
+  /** BETA FORK (runtime slides U10): the deck was replaced in the store. Said
+   *  once, persistently enough to read; the deck stays dirty in this tab. */
+  private storeConflict = false
+  private noteStoreConflict(err: StoreConflictError) {
+    if (this.storeConflict) return
+    this.storeConflict = true
+    this.toast(err.message, 12000)
   }
 
   /** Keep the dirty dot's tooltip honest about the backstop — the file is still
@@ -2642,6 +2681,8 @@ export class Editor {
     } catch (err) {
       console.error(err)
       // BETA FORK (v1.1 U8): an expired Access session is a sign-in, not a bug.
+      // a manual save always answers, even after autosave already said it once
+      if (err instanceof StoreConflictError) { this.storeConflict = true; this.toast(err.message, 12000); return }
       this.toast(err instanceof StoreSignedOutError ? err.message : t('Save failed — see console'), err instanceof StoreSignedOutError ? 6000 : undefined)
     }
   }

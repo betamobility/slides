@@ -740,4 +740,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} açıldı — ⌘S bir kopya kaydedecek",
   "⌘S asks where to save, then rewrites that file in place": "⌘S nereye kaydedileceğini sorar, sonra o dosyanın üzerine doğrudan yazar",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} kaydedilmiş bir sunu değil, Bento'nun boş bir kopyası. Yeni bir sunuya başlamak için onu tek başına açın.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Bu sunu depoda değişti. Kaydetmeden önce en son sürümü almak için yeniden yükleyin.",
+  "Live scene": "Canlı sahne",
+  "Hosted page: {url}": "Barındırılan sayfa: {url}",
+  "Inline scene · {size}": "Gömülü sahne · {size}",
+  "No scene yet — this slide shows its still.": "Henüz sahne yok — bu slayt durağan görüntüsünü gösteriyor.",
+  "No adjustable values": "Ayarlanabilir değer yok",
+  "Live scene slides cannot hold other elements": "Canlı sahne slaytları başka öğe içeremez",
 }

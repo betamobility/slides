@@ -743,4 +743,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "เปิด {name} แล้ว — ⌘S จะบันทึกสำเนา",
   "⌘S asks where to save, then rewrites that file in place": "⌘S จะถามที่บันทึก แล้วเขียนทับไฟล์นั้นในที่เดิม",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} เป็นสำเนาเปล่าของ Bento ไม่ใช่งานนำเสนอที่บันทึกไว้ เปิดแยกต่างหากเพื่อเริ่มงานใหม่",
+  "This deck changed in the store. Reload to get the latest version before saving.": "งานนำเสนอนี้มีการเปลี่ยนแปลงในที่เก็บ โหลดใหม่เพื่อรับเวอร์ชันล่าสุดก่อนบันทึก",
+  "Live scene": "ฉากสด",
+  "Hosted page: {url}": "หน้าที่โฮสต์: {url}",
+  "Inline scene · {size}": "ฉากแบบฝัง · {size}",
+  "No scene yet — this slide shows its still.": "ยังไม่มีฉาก — สไลด์นี้แสดงภาพนิ่งของตัวเอง",
+  "No adjustable values": "ไม่มีค่าที่ปรับได้",
+  "Live scene slides cannot hold other elements": "สไลด์ฉากสดไม่สามารถมีองค์ประกอบอื่นได้",
 }

@@ -743,4 +743,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} åpnet — ⌘S lagrer en kopi",
   "⌘S asks where to save, then rewrites that file in place": "⌘S spør hvor den skal lagres og skriver deretter over den filen direkte",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} er en tom kopi av Bento, ikke en lagret presentasjon. Åpne den alene for å begynne en.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Denne presentasjonen er endret i lageret. Last inn på nytt for å få den nyeste versjonen før du lagrer.",
+  "Live scene": "Live-scene",
+  "Hosted page: {url}": "Nettside: {url}",
+  "Inline scene · {size}": "Innebygd scene · {size}",
+  "No scene yet — this slide shows its still.": "Ingen scene ennå. Dette lysbildet viser stillbildet sitt.",
+  "No adjustable values": "Ingen justerbare verdier",
+  "Live scene slides cannot hold other elements": "Lysbilder med live-scene kan ikke inneholde andre elementer",
 }

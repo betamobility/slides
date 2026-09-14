@@ -808,4 +808,11 @@ export const it: Catalog = {
   "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Impossibile aprire la scheda dell’archivio — consenti i pop-up per questo file e riprova.",
   "The store tab gave no answer — timed out": "La scheda dell’archivio non ha risposto — tempo scaduto",
   "The store tab was closed before the deck was saved": "La scheda dell’archivio è stata chiusa prima che la presentazione fosse salvata",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Questa presentazione è cambiata nell’archivio. Ricarica per ottenere l’ultima versione prima di salvare.",
+  "Live scene": "Scena dal vivo",
+  "Hosted page: {url}": "Pagina ospitata: {url}",
+  "Inline scene · {size}": "Scena incorporata · {size}",
+  "No scene yet — this slide shows its still.": "Ancora nessuna scena — questa diapositiva mostra la sua immagine fissa.",
+  "No adjustable values": "Nessun valore regolabile",
+  "Live scene slides cannot hold other elements": "Le diapositive con scena dal vivo non possono contenere altri elementi",
 }

@@ -759,4 +759,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} کھل گیا — ‏⌘S ایک نقل محفوظ کرے گا",
   "⌘S asks where to save, then rewrites that file in place": "‏⌘S پوچھتا ہے کہاں محفوظ کرنا ہے، پھر اسی فائل کو اسی جگہ دوبارہ لکھتا ہے",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} محفوظ شدہ پیشکش نہیں بلکہ Bento کی خالی نقل ہے۔ نئی شروع کرنے کے لیے اسے الگ کھولیں۔",
+  "This deck changed in the store. Reload to get the latest version before saving.": "یہ پریزنٹیشن اسٹور میں تبدیل ہو گئی ہے۔ محفوظ کرنے سے پہلے تازہ ترین ورژن حاصل کرنے کے لیے دوبارہ لوڈ کریں۔",
+  "Live scene": "لائیو منظر",
+  "Hosted page: {url}": "میزبانی شدہ صفحہ: {url}",
+  "Inline scene · {size}": "ان لائن منظر · {size}",
+  "No scene yet — this slide shows its still.": "ابھی کوئی منظر نہیں — یہ سلائیڈ اپنی ساکن تصویر دکھاتی ہے۔",
+  "No adjustable values": "کوئی قابلِ ترتیب قدر نہیں",
+  "Live scene slides cannot hold other elements": "لائیو منظر والی سلائیڈز میں دوسرے عناصر نہیں ہو سکتے",
 }

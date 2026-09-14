@@ -746,4 +746,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} avattu — ⌘S tallentaa kopion",
   "⌘S asks where to save, then rewrites that file in place": "⌘S kysyy tallennuspaikan ja korvaa sitten kyseisen tiedoston suoraan",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} on tyhjä kopio Bentosta, ei tallennettu esitys. Avaa se yksinään aloittaaksesi.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Tämä esitys on muuttunut tallennuspalvelussa. Lataa sivu uudelleen saadaksesi uusimman version ennen tallentamista.",
+  "Live scene": "Live-kohtaus",
+  "Hosted page: {url}": "Isännöity sivu: {url}",
+  "Inline scene · {size}": "Upotettu kohtaus · {size}",
+  "No scene yet — this slide shows its still.": "Ei vielä kohtausta — tämä dia näyttää pysäytyskuvansa.",
+  "No adjustable values": "Ei säädettäviä arvoja",
+  "Live scene slides cannot hold other elements": "Live-kohtauksen dioihin ei voi lisätä muita elementtejä",
 }

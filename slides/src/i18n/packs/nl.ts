@@ -737,4 +737,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} geopend — ⌘S bewaart een kopie",
   "⌘S asks where to save, then rewrites that file in place": "⌘S vraagt waar op te slaan en overschrijft dat bestand daarna rechtstreeks",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} is een lege kopie van Bento, geen opgeslagen presentatie. Open het apart om er een te beginnen.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Deze presentatie is gewijzigd in de opslag. Laad opnieuw om de nieuwste versie te krijgen voordat je opslaat.",
+  "Live scene": "Livescène",
+  "Hosted page: {url}": "Gehoste pagina: {url}",
+  "Inline scene · {size}": "Ingesloten scène · {size}",
+  "No scene yet — this slide shows its still.": "Nog geen scène — deze dia toont zijn stilstaande beeld.",
+  "No adjustable values": "Geen instelbare waarden",
+  "Live scene slides cannot hold other elements": "Dia’s met een livescène kunnen geen andere elementen bevatten",
 }

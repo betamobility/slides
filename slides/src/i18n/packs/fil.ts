@@ -758,4 +758,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "Binuksan ang {name} — magse-save ng kopya ang ⌘S",
   "⌘S asks where to save, then rewrites that file in place": "Tatanungin ng ⌘S kung saan ise-save, pagkatapos ay muling isusulat ang file na iyon sa mismong lugar nito",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "Ang {name} ay walang lamang kopya ng Bento, hindi isang naka-save na deck. Buksan ito nang hiwalay upang magsimula.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Nabago ang presentasyong ito sa store. I-reload para kunin ang pinakabagong bersyon bago mag-save.",
+  "Live scene": "Live na eksena",
+  "Hosted page: {url}": "Naka-host na pahina: {url}",
+  "Inline scene · {size}": "Inline na eksena · {size}",
+  "No scene yet — this slide shows its still.": "Walang eksena pa — ipinapakita ng slide na ito ang still nito.",
+  "No adjustable values": "Walang mga value na naaayos",
+  "Live scene slides cannot hold other elements": "Ang mga slide ng live na eksena ay hindi maaaring maglaman ng iba pang elemento",
 }

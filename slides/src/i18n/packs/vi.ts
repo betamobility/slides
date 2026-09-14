@@ -739,4 +739,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "Đã mở {name} — ⌘S sẽ lưu một bản sao",
   "⌘S asks where to save, then rewrites that file in place": "⌘S hỏi nơi lưu, rồi ghi đè tệp đó tại chỗ",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} là một bản sao trống của Bento, không phải bản trình chiếu đã lưu. Hãy mở riêng để bắt đầu.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Bản trình bày này đã thay đổi trong kho lưu trữ. Hãy tải lại để lấy phiên bản mới nhất trước khi lưu.",
+  "Live scene": "Cảnh trực tiếp",
+  "Hosted page: {url}": "Trang được lưu trữ: {url}",
+  "Inline scene · {size}": "Cảnh nhúng · {size}",
+  "No scene yet — this slide shows its still.": "Chưa có cảnh — trang chiếu này hiển thị ảnh tĩnh của nó.",
+  "No adjustable values": "Không có giá trị nào để điều chỉnh",
+  "Live scene slides cannot hold other elements": "Trang chiếu có cảnh trực tiếp không thể chứa phần tử khác",
 }

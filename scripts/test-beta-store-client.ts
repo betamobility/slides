@@ -22,6 +22,14 @@
 //      non-JSON body there (the Access login page) is signed-out; `bento-
 //      backup` becomes a download; anything else falls through to the
 //      browser's own picker.
+//   4. THE VERSION (plan 2026-09-14-001, U10, KTD12). At boot the host sends
+//      HEAD /d/<id> and keeps the ETag; every PUT sends it as If-Match and
+//      adopts the ETag the 200 returns. A 412 (someone replaced the deck in
+//      the store) rejects with StoreConflictError, and from then on no PUT
+//      leaves the tab until it reloads. No ETag (an older worker) → the save
+//      is unconditional, as before. §6 runs a small etag-aware store behind
+//      the fake fetch, so "the replacement is still stored" (AE11) is read
+//      back from the store rather than inferred from the request log.
 //   3. THE HANDOFF. On file:// the deck opens <storeHost>/new, accepts a
 //      `ready` only from that origin AND that tab, posts the document to
 //      storeHost only (never "*"), resolves the url from a `saved` message
@@ -113,14 +121,15 @@ g.location = { origin: STORE, href: `${STORE}/d/abc123XYZ0`, pathname: '/d/abc12
 // fetch: records every call; the response is whatever the test queued
 type Call = { url: string; init: RequestInit; body: string }
 const calls: Call[] = []
-let nextResponse: (() => Promise<Response>) | null = null
+let nextResponse: ((call: Call) => Promise<Response>) | null = null
 g.fetch = async (input: any, init: RequestInit = {}) => {
   const body = typeof init.body === 'string' ? init.body : init.body instanceof Blob ? await (init.body as Blob).text() : String(init.body ?? '')
-  calls.push({ url: String(input), init, body })
+  const call = { url: String(input), init, body }
+  calls.push(call)
   if (!nextResponse) throw new TypeError('no response queued')
-  return nextResponse()
+  return nextResponse(call)
 }
-const respond = (fn: () => Promise<Response>) => { nextResponse = fn }
+const respond = (fn: (call: Call) => Promise<Response>) => { nextResponse = fn }
 const last = () => calls[calls.length - 1]
 
 // document + URL: the kernel's downloadFile needs an anchor it can click
@@ -361,5 +370,101 @@ console.log('\n§5 handoffToStore(): the /new tab protocol')
   g.location = saved
 }
 
-console.log(`\n§2–5: ${checks - failures}/${checks} checks passed`)
+// ---- the version ----------------------------------------------------------------
+// LAST, deliberately: a conflict latches for the rest of the process (as it
+// does for the rest of a tab's life), so no PUT assertion may follow it.
+console.log('\n§6 conditional save: HEAD, If-Match, 412')
+{
+  const header = (c: Call, name: string): string | null => {
+    const h: any = c.init.headers
+    if (!h) return null
+    if (typeof h.get === 'function') return h.get(name)
+    const k = Object.keys(h).find((x) => x.toLowerCase() === name)
+    return k ? String(h[k]) : null
+  }
+  // A store that behaves like server/deck-store for the two routes the editor
+  // uses: HEAD /d/:id (the deck's headers, text/html included, which must NOT
+  // read as a login page) and PUT /api/decks/:id with If-Match honoured.
+  const decks = new Map<string, { bytes: string; etag: string }>()
+  let version = 0
+  const mint = () => `"v${++version}"`
+  let serveEtag = true
+  decks.set('abc123XYZ0', { bytes: 'original', etag: mint() })
+  const fakeStore = async (c: Call): Promise<Response> => {
+    const u = new URL(c.url)
+    const head = /^\/d\/([A-Za-z0-9]+)$/.exec(u.pathname)
+    if (head && c.init.method === 'HEAD') {
+      const d = decks.get(head[1])
+      if (!d) return new Response(null, { status: 404 })
+      const h: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' }
+      if (serveEtag) h.etag = d.etag
+      return new Response(null, { status: 200, headers: h })
+    }
+    const put = /^\/api\/decks\/([A-Za-z0-9]+)$/.exec(u.pathname)
+    if (put && c.init.method === 'PUT') {
+      const d = decks.get(put[1])
+      if (!d) return new Response(null, { status: 404 })
+      const match = header(c, 'if-match')
+      if (match && match !== d.etag) {
+        return new Response(JSON.stringify({ error: 'changed' }), { status: 412, headers: { 'content-type': 'application/json' } })
+      }
+      const next = { bytes: c.body, etag: mint() }
+      decks.set(put[1], next)
+      return new Response(null, { status: 200, headers: serveEtag ? { etag: next.etag } : {} })
+    }
+    return new Response(null, { status: 404 })
+  }
+  respond(fakeStore)
+
+  // no ETag from the worker: unconditional, as before U10
+  serveEtag = false
+  let mark = calls.length
+  ok(store.installStoreHost() === true, 'installStoreHost() again (a fresh boot)')
+  await save.writeUpdatedFile('no-etag save')
+  const heads = calls.slice(mark).filter((c) => c.init.method === 'HEAD')
+  let puts = calls.slice(mark).filter((c) => c.init.method === 'PUT')
+  ok(heads.length === 1 && heads[0].url === `${STORE}/d/abc123XYZ0`, `boot sends HEAD ${STORE}/d/<id> (${heads.map((c) => c.url).join(', ')})`)
+  ok(heads[0]?.init.redirect === 'manual' && heads[0]?.init.credentials === 'same-origin', "…with redirect: 'manual' and same-origin credentials")
+  ok(puts.length === 1 && header(puts[0], 'if-match') === null, `no ETag → the PUT carries no If-Match (${header(puts[0], 'if-match')})`)
+  ok(decks.get('abc123XYZ0')?.bytes === 'no-etag save', '…and succeeds')
+
+  // with ETags: boot HEAD captures it, saves chain
+  serveEtag = true
+  const bootEtag = decks.get('abc123XYZ0')!.etag
+  mark = calls.length
+  store.installStoreHost()
+  await save.writeUpdatedFile('first')
+  puts = calls.slice(mark).filter((c) => c.init.method === 'PUT')
+  ok(puts.length === 1 && header(puts[0], 'if-match') === bootEtag, `the first save sends the boot HEAD's ETag as If-Match (${header(puts[0], 'if-match')} vs ${bootEtag})`)
+  const afterFirst = decks.get('abc123XYZ0')!.etag
+  mark = calls.length
+  await save.writeUpdatedFile('second')
+  puts = calls.slice(mark).filter((c) => c.init.method === 'PUT')
+  ok(puts.length === 1 && header(puts[0], 'if-match') === afterFirst, `the second save sends the ETag the first 200 returned (${header(puts[0], 'if-match')} vs ${afterFirst})`)
+  ok(decks.get('abc123XYZ0')?.bytes === 'second', 'two saves in a row both land')
+
+  // a harness replace behind the editor's back (AE11)
+  decks.set('abc123XYZ0', { bytes: 'claude replaced this', etag: mint() })
+  const e = await rejects(() => save.writeUpdatedFile('stale edit'))
+  ok(e instanceof store.StoreConflictError, `the next save rejects with StoreConflictError (${e?.name}: ${e?.message})`)
+  ok(/changed in the store/i.test(String(e?.message)) && /reload/i.test(String(e?.message)), `…whose message says the deck changed and to reload: "${e?.message}"`)
+  ok(!(e instanceof store.StoreSignedOutError), '…and is not mistaken for signed-out')
+  ok(decks.get('abc123XYZ0')?.bytes === 'claude replaced this', 'the replacement is still what the store holds (AE11)')
+
+  // latched: nothing more goes out until reload
+  mark = calls.length
+  const e2 = await rejects(() => save.writeUpdatedFile('autosave after the conflict'))
+  const e3 = await rejects(() => writeThrough(store.storeHandle('abc123XYZ0'), 'a manual save after the conflict'))
+  ok(e2 instanceof store.StoreConflictError && e3 instanceof store.StoreConflictError, 'later saves reject with StoreConflictError too')
+  ok(calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 0, `…without issuing a PUT (${calls.length - mark} requests)`)
+  ok(decks.get('abc123XYZ0')?.bytes === 'claude replaced this', '…so the replacement stays stored')
+
+  // a new deck is still possible: the way out that keeps the person's edits
+  respond(async () => new Response(JSON.stringify({ id: 'escape1234', url: `${STORE}/d/escape1234` }), { status: 201, headers: { 'content-type': 'application/json' } }))
+  g.location.assign = () => {}
+  const posted = await rejects(() => writeThrough(store.newDeckHandle('x.bento.html'), 'the edits, as a new deck'))
+  ok(posted === null && last().init.method === 'POST', 'after a conflict, "Save as new deck" still POSTs')
+}
+
+console.log(`\n§2–6: ${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

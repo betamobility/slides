@@ -808,4 +808,11 @@ export const ja: Catalog = {
   "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "ストアのタブを開けませんでした — このファイルのポップアップを許可してから、もう一度お試しください。",
   "The store tab gave no answer — timed out": "ストアのタブから応答がありません — タイムアウトしました",
   "The store tab was closed before the deck was saved": "デッキが保存される前にストアのタブが閉じられました",
+  "This deck changed in the store. Reload to get the latest version before saving.": "このプレゼンテーションはストアで変更されています。保存する前に再読み込みして最新版を取得してください。",
+  "Live scene": "ライブシーン",
+  "Hosted page: {url}": "ホストされたページ: {url}",
+  "Inline scene · {size}": "インラインシーン · {size}",
+  "No scene yet — this slide shows its still.": "シーンはまだありません — このスライドには静止画が表示されます。",
+  "No adjustable values": "調整できる値はありません",
+  "Live scene slides cannot hold other elements": "ライブシーンのスライドには他の要素を追加できません",
 }

@@ -806,4 +806,11 @@ export const pt: Catalog = {
   "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Não foi possível abrir a aba do repositório — permita pop-ups para este arquivo e tente de novo.",
   "The store tab gave no answer — timed out": "A aba do repositório não respondeu — tempo esgotado",
   "The store tab was closed before the deck was saved": "A aba do repositório foi fechada antes de a apresentação ser salva",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Esta apresentação mudou no repositório. Recarregue para obter a versão mais recente antes de salvar.",
+  "Live scene": "Cena ao vivo",
+  "Hosted page: {url}": "Página hospedada: {url}",
+  "Inline scene · {size}": "Cena incorporada · {size}",
+  "No scene yet — this slide shows its still.": "Ainda não há cena — este slide mostra sua imagem estática.",
+  "No adjustable values": "Nenhum valor ajustável",
+  "Live scene slides cannot hold other elements": "Slides de cena ao vivo não podem conter outros elementos",
 }

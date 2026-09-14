@@ -43,6 +43,15 @@
 // rejects with StoreSignedOutError, so the kernel's failure path fires (the
 // editor toasts, autosave keeps the deck dirty) instead of a false "Saved".
 //
+// CHANGED IN THE STORE (plan 2026-09-14-001, U10, KTD12). Claude can replace a
+// deck in the store while someone has it open, so a save must not silently
+// overwrite that. The host learns the version it is showing from HEAD /d/<id>
+// at boot, sends it as If-Match on every PUT, and adopts the ETag each 200
+// returns. A 412 rejects with StoreConflictError, and from then on this tab
+// sends no PUT at all: the edits stay dirty in the tab, "Save as new deck" and
+// the disk save still work, and a reload shows the replacement. A worker that
+// sends no ETag gets the unconditional save it always had.
+//
 // Every request goes through kernel net.ts — scripts/test-offline.ts refuses
 // a `fetch(` anywhere else, and the offline switch must cover the store too.
 
@@ -56,6 +65,15 @@ export class StoreSignedOutError extends Error {
   constructor(message?: string) {
     super(message ?? t('Signed out of Beta — sign in again at {host}, then save again', { host: storeHostName() }))
     this.name = 'StoreSignedOutError'
+  }
+}
+
+/** A save refused because the deck was replaced in the store since this tab
+ *  loaded or last saved it. Terminal for the tab: reload to continue. */
+export class StoreConflictError extends Error {
+  constructor() {
+    super(t('This deck changed in the store. Reload to get the latest version before saving.'))
+    this.name = 'StoreConflictError'
   }
 }
 
@@ -115,6 +133,7 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
     throw new StoreSignedOutError() // a followed cross-origin redirect, or no network
   }
   if (signedOut(res)) throw new StoreSignedOutError()
+  if (res.status === 412) throw new StoreConflictError()
   if (!res.ok) {
     const why = await res.text().catch(() => '')
     throw new Error(t('The store refused the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
@@ -122,9 +141,46 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
   return res
 }
 
+// The version this tab last saw, per id. `versionCheck` is the boot HEAD still
+// in flight: a save made before it answers waits for it, or the first ⌘S
+// after opening would go out unconditional.
+const versions = new Map<string, string>()
+let versionCheck: Promise<void> | null = null
+let conflicted = false
+
+/**
+ * Learn the ETag of the deck this page shows. Never rejects: an unreachable
+ * store, a signed-out session or a worker without ETags all leave no version,
+ * and saves stay unconditional. Not through storeRequest, because the answer
+ * is the deck's own headers, and its text/html would read as a login page.
+ */
+function checkVersion(id: string): Promise<void> {
+  versions.delete(id)
+  return netFetch(`${storeHost()}/d/${encodeURIComponent(id)}`, { method: 'HEAD', credentials: 'same-origin', redirect: 'manual' })
+    .then((res) => {
+      const etag = res.status === 200 ? res.headers.get('etag') : null
+      if (etag) versions.set(id, etag)
+    })
+    .catch(() => {})
+}
+
 /** Replace the deck stored under `id`. The worker answers 200 with no body. */
 export async function putDeck(id: string, html: string): Promise<void> {
-  await storeRequest(`/api/decks/${encodeURIComponent(id)}`, { method: 'PUT', body: html, headers })
+  if (versionCheck) await versionCheck
+  if (conflicted) throw new StoreConflictError()
+  const etag = versions.get(id)
+  let res: Response
+  try {
+    res = await storeRequest(`/api/decks/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: html, headers: etag ? { ...headers, 'if-match': etag } : headers,
+    })
+  } catch (err) {
+    if (err instanceof StoreConflictError) conflicted = true
+    throw err
+  }
+  const next = res.headers?.get('etag')
+  if (next) versions.set(id, next)
+  else versions.delete(id)
 }
 
 /** Store a NEW deck; the worker answers 201 {id, url}. */
@@ -305,6 +361,7 @@ export function installStoreHost(): boolean {
     throw new DOMException('No file picker available', 'AbortError')
   }
   adoptFileHandle(storeHandle(id))
+  versionCheck = checkVersion(id)
   return true
 }
 

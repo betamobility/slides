@@ -742,4 +742,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} dibuka — ⌘S akan menyimpan salinan",
   "⌘S asks where to save, then rewrites that file in place": "⌘S bertanya di mana hendak menyimpan, kemudian menulis ganti fail itu di tempatnya",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} ialah salinan kosong Bento, bukan pembentangan tersimpan. Buka ia berasingan untuk memulakan.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Persembahan ini telah berubah di stor. Muat semula untuk mendapatkan versi terkini sebelum menyimpan.",
+  "Live scene": "Adegan langsung",
+  "Hosted page: {url}": "Halaman dihoskan: {url}",
+  "Inline scene · {size}": "Adegan sebaris · {size}",
+  "No scene yet — this slide shows its still.": "Belum ada adegan — slaid ini memaparkan imej pegunnya.",
+  "No adjustable values": "Tiada nilai boleh laras",
+  "Live scene slides cannot hold other elements": "Slaid adegan langsung tidak boleh mengandungi elemen lain",
 }

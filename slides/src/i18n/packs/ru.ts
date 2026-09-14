@@ -741,4 +741,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "Открыт {name} — ⌘S сохранит копию",
   "⌘S asks where to save, then rewrites that file in place": "⌘S спросит, куда сохранить, а затем перезапишет этот файл на месте",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} — пустая копия Bento, а не сохранённая презентация. Откройте её отдельно, чтобы начать.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Эта презентация изменилась в хранилище. Перезагрузите страницу, чтобы получить последнюю версию перед сохранением.",
+  "Live scene": "Живая сцена",
+  "Hosted page: {url}": "Размещённая страница: {url}",
+  "Inline scene · {size}": "Встроенная сцена · {size}",
+  "No scene yet — this slide shows its still.": "Сцены пока нет — этот слайд показывает свой статичный кадр.",
+  "No adjustable values": "Нет настраиваемых значений",
+  "Live scene slides cannot hold other elements": "Слайды с живой сценой не могут содержать другие элементы",
 }

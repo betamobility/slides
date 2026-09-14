@@ -10,6 +10,7 @@ import type { Store } from '../store'
 import { t } from '../i18n'
 import { defaultShape, internAsset, readableInk, uid, type ShapeElement, type SlideElement, type TableElement } from '../model'
 import { renderSlide, sanitizeHtml } from '../render'
+import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
 import { autoformatAtCaret, clearAutoformat, markdownToHtml, undoAutoformat } from './markdown'
 import { execFormat, hideFormatBar, syncFormatBar } from './richtext'
 import { PathEditor } from './patheditor'
@@ -579,6 +580,8 @@ export class SlideCanvas {
 
   /** notified when the comment tool arms/disarms (topbar button state) */
   onCommentModeChange: ((on: boolean) => void) | null = null
+  /** Beta build (runtime slides U5): an insert aimed at a live scene slide. */
+  onRuntimeRefused: (() => void) | null = null
   onSlideNav: ((dir: 1 | -1) => void) | null = null
   private wheelNavAccum = 0
   private wheelNavCooldown = 0
@@ -802,6 +805,10 @@ export class SlideCanvas {
     if (this.pathEditor?.active) this.pathEditor.cancel() // doc changed under us
     const slide = this.store.slide
     const next = renderSlide(slide, this.store.doc)
+    // Beta build (runtime slides U5): a live scene's still is not an element
+    // to select or move. Without an id every hit test (click, marquee,
+    // Alt-click, context menu) finds nothing to select.
+    if (isRuntimeSlide(slide)) for (const n of next.querySelectorAll<HTMLElement>('[data-el-id]')) delete n.dataset.elId
     // hover-reveal slides: preview one set at a time; hidden sets are
     // display:none so they don't block selection
     const sets = [...new Set(slide.elements.map((e) => e.showOnHover).filter(Boolean))] as string[]
@@ -1809,6 +1816,7 @@ export class SlideCanvas {
 
   /** Insert an element, select it, and (for text) drop straight into editing. */
   insert(el: SlideElement, startEditing = false) {
+    if (isRuntimeSlide(this.store.slide)) { this.onRuntimeRefused?.(); return }
     // inserting while previewing a non-default hover set joins that set —
     // "I'm editing the italy panel" means new content belongs to it
     const slide = this.store.slide

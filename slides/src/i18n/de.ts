@@ -808,4 +808,11 @@ export const de: Catalog = {
   "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Der Speicher-Tab ließ sich nicht öffnen — erlauben Sie Pop-ups für diese Datei und versuchen Sie es erneut.",
   "The store tab gave no answer — timed out": "Der Speicher-Tab hat nicht geantwortet — Zeitüberschreitung",
   "The store tab was closed before the deck was saved": "Der Speicher-Tab wurde geschlossen, bevor die Präsentation gespeichert war",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Diese Präsentation wurde im Speicher geändert. Laden Sie neu, um die neueste Version zu erhalten, bevor Sie speichern.",
+  "Live scene": "Live-Szene",
+  "Hosted page: {url}": "Gehostete Seite: {url}",
+  "Inline scene · {size}": "Eingebettete Szene · {size}",
+  "No scene yet — this slide shows its still.": "Noch keine Szene — diese Folie zeigt ihr Standbild.",
+  "No adjustable values": "Keine einstellbaren Werte",
+  "Live scene slides cannot hold other elements": "Folien mit Live-Szene können keine weiteren Elemente enthalten",
 }

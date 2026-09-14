@@ -808,4 +808,11 @@ export const fr: Catalog = {
   "Couldn’t open the store tab — allow pop-ups for this file, then try again.": "Impossible d’ouvrir l’onglet du dépôt — autorisez les fenêtres surgissantes pour ce fichier, puis réessayez.",
   "The store tab gave no answer — timed out": "L’onglet du dépôt n’a pas répondu — délai dépassé",
   "The store tab was closed before the deck was saved": "L’onglet du dépôt a été fermé avant l’enregistrement de la présentation",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Cette présentation a changé dans le stockage. Rechargez pour obtenir la dernière version avant d’enregistrer.",
+  "Live scene": "Scène en direct",
+  "Hosted page: {url}": "Page hébergée : {url}",
+  "Inline scene · {size}": "Scène intégrée · {size}",
+  "No scene yet — this slide shows its still.": "Pas encore de scène — cette diapositive affiche son image fixe.",
+  "No adjustable values": "Aucune valeur réglable",
+  "Live scene slides cannot hold other elements": "Les diapositives de scène en direct ne peuvent pas contenir d’autres éléments",
 }

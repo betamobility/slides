@@ -760,4 +760,11 @@ export const strings: Catalog = {
   "⌘S asks where to save, then rewrites that file in place": "⌘S nirä saklamalydygyny soraýar, soňra şol faýlyň üstüne göni ýazýar",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} saklanan prezentasiýa däl-de, Bento-nyň boş nusgasy. Täzesine başlamak üçin ony aýratyn açyň.",
   "Your work auto-saves; restore earlier versions from Save → Version history.": "Işiňiz awtomatik saklanýar; öňki wersiýalary «Barada» → «Wersiýa taryhy» arkaly dikeldiň.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "Bu prezentasiýa ammarda üýtgedildi. Ýatda saklamazdan öň iň soňky wersiýany almak üçin täzeden ýükläň.",
+  "Live scene": "Göni sahna",
+  "Hosted page: {url}": "Ýerleşdirilen sahypa: {url}",
+  "Inline scene · {size}": "Içine salnan sahna · {size}",
+  "No scene yet — this slide shows its still.": "Entek sahna ýok — bu slaýd öz hereketsiz suratyny görkezýär.",
+  "No adjustable values": "Sazlap bolýan bahalar ýok",
+  "Live scene slides cannot hold other elements": "Göni sahna slaýdlarynda başga elementler bolup bilmez",
 }

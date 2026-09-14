@@ -733,4 +733,11 @@ export const strings: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} 열림 — ⌘S는 사본을 저장합니다",
   "⌘S asks where to save, then rewrites that file in place": "⌘S는 저장 위치를 물은 다음 그 파일을 제자리에서 덮어씁니다",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name}은(는) 저장된 덱이 아니라 Bento의 빈 사본입니다. 새로 시작하려면 따로 여세요.",
+  "This deck changed in the store. Reload to get the latest version before saving.": "이 프레젠테이션이 저장소에서 변경되었습니다. 저장하기 전에 새로고침하여 최신 버전을 받으세요.",
+  "Live scene": "라이브 장면",
+  "Hosted page: {url}": "호스팅된 페이지: {url}",
+  "Inline scene · {size}": "인라인 장면 · {size}",
+  "No scene yet — this slide shows its still.": "아직 장면이 없습니다 — 이 슬라이드는 정지 이미지를 표시합니다.",
+  "No adjustable values": "조정할 수 있는 값이 없습니다",
+  "Live scene slides cannot hold other elements": "라이브 장면 슬라이드에는 다른 요소를 넣을 수 없습니다",
 }
