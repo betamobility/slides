@@ -430,6 +430,37 @@ export interface Slide {
   hover?: { type: 'focus-group' | 'reveal'; dim?: number; default?: string }
   /** review comment threads (editor-only; see Comment) */
   comments?: Comment[]
+  /**
+   * Beta build: this slide is a RUNTIME slide, one live HTML scene that fills
+   * it (see RuntimeSlide and slides/src/runtime.ts). Its still is also an
+   * ordinary full-bleed `image` element in `elements`, which is what an older
+   * shell, thumbnails, print and export paint.
+   */
+  runtime?: RuntimeSlide
+}
+
+/** One property a scene declares; the editor and presenter may set it. */
+export interface RuntimeProp {
+  key: string
+  label: string
+  kind: 'text' | 'number' | 'color'
+  default: string | number
+}
+
+/**
+ * Beta build: the runtime record. `src` and `still` are "asset:<key>" refs
+ * into doc.assets; `url` (https only) is the hosted-page override. `still` is
+ * optional because a placeholder the deck author marks for the splice tool is
+ * `{ steps: 0, props: [] }` plus its still element and nothing else.
+ * `values` are what a presenter set; a replace of the record resets them.
+ */
+export interface RuntimeSlide {
+  src?: string
+  url?: string
+  still?: string
+  steps: number
+  props: RuntimeProp[]
+  values?: Record<string, string | number>
 }
 
 export interface BentoDoc {
@@ -897,6 +928,13 @@ export function internAsset(doc: BentoDoc, src: string): string {
 /** Soft ceiling for embedding media as a data URI (bytes). Above this the
  *  editor warns — a big embed makes the .bento.html slow to open and save. */
 export const MEDIA_EMBED_BUDGET = 8 * 1024 * 1024 // 8 MB
+
+/** Beta build, runtime slides: inline scene source (the `runtime.src` asset),
+ *  the still, and each heavy asset a scene fetches from the deck store. The
+ *  splice tool enforces all three; paste refuses a source above the first. */
+export const RUNTIME_SRC_BUDGET = 256 * 1024 // 256 KB
+export const RUNTIME_STILL_BUDGET = 200 * 1024 // 200 KB
+export const RUNTIME_ASSET_BUDGET = 16 * 1024 * 1024 // 16 MB
 
 /**
  * Hard ceiling for the static first-page preview every save writes into the

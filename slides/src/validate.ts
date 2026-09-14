@@ -26,6 +26,7 @@ import type { BentoDoc, Slide, SlideElement, TextElement } from './model.ts'
 import { MODEL_KEYS } from './modelkeys.generated.ts'
 import { isRemoteUrl } from '../../kernel/src/net.ts'
 import { measureElements } from './measure.ts'
+import { isRuntimeSlide } from './runtime.ts'
 import { eachRef, paletteOf, parseThemeRef, resolveRef, _readPath } from './palette.ts'
 
 export type Severity = 'error' | 'warning' | 'info'
@@ -238,6 +239,21 @@ export function validateDoc(doc: BentoDoc, opts: ValidateOpts = {}): ValidateRes
       if (!(MODEL_KEYS.slide as readonly string[]).includes(k)) {
         add({ code: 'unknown-key', severity: 'warning', slide: sid, path: k,
           message: `Slide key "${k}" is not part of the format — it is ignored.` })
+      }
+    }
+    // Beta build, runtime slides: the still element is what older shells,
+    // thumbnails, print and export paint. Advice only; the deck still opens.
+    if (isRuntimeSlide(slide)) {
+      if (!slide.elements.some((el) => el.type === 'image')) {
+        add({ code: 'runtime-no-still', severity: 'warning', slide: sid, path: 'elements',
+          message: 'Runtime slide has no image element. Older shells, thumbnails, print and export paint nothing for it. Add the still as a full-bleed image element.' })
+      }
+      for (const key of ['still', 'src'] as const) {
+        const ref = slide.runtime![key]
+        if (typeof ref === 'string' && ref.startsWith('asset:') && !assets[ref.slice(6)]) {
+          add({ code: 'runtime-dangling-ref', severity: 'warning', slide: sid, path: `runtime.${key}`,
+            message: `runtime.${key} references asset "${ref.slice(6)}", which is not in doc.assets. Present mode falls back to the still.` })
+        }
       }
     }
     if (slide.hidden && !slide.stateOf && !linkTargets.has(sid)) {

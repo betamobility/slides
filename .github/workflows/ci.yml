@@ -283,6 +283,12 @@ jobs:
             --outfile="$RUNNER_TEMP/test-beta-embed.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-embed.mjs"
 
+      - name: Beta runtime slide rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-beta-runtime.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-beta-runtime.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-runtime.mjs"
+
       - name: Beta deck store rig
         # U7: server/deck-store under Miniflare (a devDependency of slides/,
         # so after `npm ci`): every route is 401 without a verified Access

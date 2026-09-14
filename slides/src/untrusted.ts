@@ -43,6 +43,7 @@ import type { Slide, SlideElement } from './model'
 import { isWebUrl } from './model'
 import { parseThemeRef } from './palette.ts'
 import { MODEL_KEYS } from './modelkeys.generated'
+import { checkRuntime } from './runtime.ts'
 
 /** Reject. JSON has no `undefined`, so it can never collide with a real value. */
 const DROP = undefined
@@ -521,6 +522,8 @@ const SLIDE_CHECKS: Record<string, Check> = {
   elements: (v) => (Array.isArray(v) && v.length <= LIMITS.elements
     ? v.map(sanitizeElement).filter((el): el is SlideElement => el !== null)
     : DROP),
+  // Beta build: the runtime slide record; its shape lives with its helpers
+  runtime: (v) => checkRuntime(v),
 }
 
 /**
