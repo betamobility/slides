@@ -224,5 +224,22 @@ for (const f of ['reveal/shim.js', 'reveal/harness.html']) {
 const stillNames = /\['still\.png', 'still\.svg'\]/.test(splice)
 ok(stillNames && /`still\.png` or\s+`still\.svg`, nothing else/.test(skill), 'the port recipe names the only still files splice.mjs reads')
 
+console.log('\nthe Beta toolkit copy')
+{
+  // The toolkit (betamobility/skills) installs skill folders only: the built
+  // folder must carry the splice tool, and the tool must run from there.
+  const { build } = await import('./build-beta-toolkit-skill.mjs')
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const out = build(join(mkdtempSync(join(tmpdir(), 'toolkit-skill-')), 'beta-slides'))
+  for (const f of ['SKILL.md', 'reveal/shim.js', 'reveal/harness.html', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs', 'SOURCE.md']) {
+    ok(existsSync(join(out, f)), `the toolkit skill folder carries ${f}`)
+  }
+  const run = spawnSync(process.execPath, [join(out, 'scripts/splice.mjs')], { encoding: 'utf8' })
+  ok(run.status === 2 && /usage/.test(run.stderr + run.stdout), `splice.mjs runs from the toolkit skill folder (usage, exit ${run.status})`)
+  ok(/inside this skill's own folder/.test(skill), "the skill looks for splice.mjs in its own folder first")
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

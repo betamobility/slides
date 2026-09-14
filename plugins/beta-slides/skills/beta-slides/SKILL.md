@@ -529,9 +529,11 @@ The tool refuses anything over budget and writes nothing.
 
 ### Creating and updating a deck with splice.mjs
 
-The tool is `scripts/splice.mjs` in the beta-slides plugin, next to its
-`skills/` folder (in a checkout of betamobility/slides:
-`plugins/beta-slides/scripts/splice.mjs`). It needs Node 18 or newer and
+The tool is `splice.mjs`. Look for it in this order: `scripts/splice.mjs`
+inside this skill's own folder (the Beta toolkit installs it there); then
+`scripts/splice.mjs` next to the plugin's `skills/` folder (the standalone
+beta-slides plugin); then `plugins/beta-slides/scripts/splice.mjs` in a
+checkout of betamobility/slides. It needs Node 18 or newer and
 nothing else. It reads `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`
 from the environment (1Password, Development; never put them in a file) and,
 optionally, `SLIDES_STORE_URL` (default `https://slides.betamobility.ai`).
