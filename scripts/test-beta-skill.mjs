@@ -182,5 +182,64 @@ for (const t of ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'appl
 }
 ok(!/<image href="data:image\/png/.test(guide), 'the Embed section no longer recommends a raster screenshot as the view')
 
+console.log('\nthree kinds of slide')
+ok(/^## Pick the kind of slide first$/m.test(skill), 'the skill opens with a chooser between the three kinds of slide')
+ok(/^## Native slides$/m.test(skill) && /^## Code slides$/m.test(skill), 'the skill carries "Native slides" and "Code slides" sections')
+// The splice tool does not accept a code element's content; the skill must not
+// promise it does (CONTENT_KEY in splice.mjs is the authority).
+const splice = read('plugins/beta-slides/scripts/splice.mjs')
+const codeKey = /CONTENT_KEY = \{[^}]*\bcode:/.test(splice)
+ok(codeKey || !/`content` \(code\)|html \| content \| src/.test(skill), `the skill names content as an edits key only if splice.mjs accepts it (splice accepts it: ${codeKey})`)
+{
+  // Every language id the skill offers is one the tokenizer knows. Derived
+  // from the source, never restated: an unknown id silently renders as js.
+  const tokenize = read('kernel/src/tokenize.ts')
+  const langs = new Set([...tokenize.matchAll(/^  ([a-z]+): \{/gm)].map((m) => m[1]).concat(['diff', 'md']))
+  // The bullet that offers the ids: from `grammarName` to the next bullet.
+  const para = /`grammarName`[^]*?\n- /.exec(skill.slice(skill.indexOf('## Code slides')))?.[0] ?? ''
+  // `bash` is named only as the id NOT to use.
+  const offered = [...para.matchAll(/`([a-z]+)`/g)].map((m) => m[1]).filter((w) => w !== 'bash')
+  const unknown = offered.filter((w) => !langs.has(w))
+  ok(offered.length >= 15 && unknown.length === 0, `every grammarName the skill offers is a tokenizer language (${offered.length} named${unknown.length ? ', unknown: ' + unknown.join(', ') : ''})`)
+}
+
+console.log('\nporting a reveal.js deck')
+ok(/^### Porting a reveal\.js deck/m.test(skill), 'the skill carries "Porting a reveal.js deck"')
+const skillDir = 'plugins/beta-slides/skills/beta-slides'
+for (const f of ['reveal/shim.js', 'reveal/harness.html', 'reveal/reset.css', 'reveal/reveal.css']) {
+  ok(existsSync(join(root, skillDir, f)) && skill.includes(f.replace('reveal/reset.css', 'reveal/reset.css')), `${f} ships in the skill folder${/\.js$|harness/.test(f) ? ' and the skill names it' : ''}`)
+}
+ok(/MIT licensed/.test(read(`${skillDir}/reveal/reveal.css`)), "the vendored reveal.css keeps reveal.js's licence header")
+for (const f of ['reveal/shim.js', 'reveal/harness.html']) {
+  const named = new Set([...read(`${skillDir}/${f}`).matchAll(/bento:[a-z]+/g)].map((m) => m[0]))
+  const unknown = [...named].filter((t) => !codeTypes.has(t))
+  ok(named.size >= 4 && unknown.length === 0, `every bento:* message ${f} speaks is one runtime-present.ts speaks (${named.size}${unknown.length ? ', unknown: ' + unknown.join(', ') : ''})`)
+}
+{
+  // steps = fragment groups + 1 is what moveStep/enterStep walk: 0 <= index < steps.
+  const present = read('slides/src/runtime-present.ts')
+  ok(/to >= 0 && to < steps/.test(present) && /steps - 1/.test(present), 'the shell walks steps 0..steps-1, so N fragment groups need steps = N + 1')
+  ok(/number of fragment groups plus one/.test(skill), 'the skill says steps = fragment groups + 1')
+}
+const stillNames = /\['still\.png', 'still\.svg'\]/.test(splice)
+ok(stillNames && /`still\.png` or\s+`still\.svg`, nothing else/.test(skill), 'the port recipe names the only still files splice.mjs reads')
+
+console.log('\nthe Beta toolkit copy')
+{
+  // The toolkit (betamobility/skills) installs skill folders only: the built
+  // folder must carry the splice tool, and the tool must run from there.
+  const { build } = await import('./build-beta-toolkit-skill.mjs')
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const out = build(join(mkdtempSync(join(tmpdir(), 'toolkit-skill-')), 'beta-slides'))
+  for (const f of ['SKILL.md', 'reveal/shim.js', 'reveal/harness.html', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs', 'SOURCE.md']) {
+    ok(existsSync(join(out, f)), `the toolkit skill folder carries ${f}`)
+  }
+  const run = spawnSync(process.execPath, [join(out, 'scripts/splice.mjs')], { encoding: 'utf8' })
+  ok(run.status === 2 && /usage/.test(run.stderr + run.stdout), `splice.mjs runs from the toolkit skill folder (usage, exit ${run.status})`)
+  ok(/inside this skill's own folder/.test(skill), "the skill looks for splice.mjs in its own folder first")
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)
