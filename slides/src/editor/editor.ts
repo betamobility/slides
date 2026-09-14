@@ -19,7 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
-import { handoffToStore, isStoreOrigin, saveToDisk, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { handoffToStore, isStoreOrigin, saveToDisk, setLiveCheck, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -129,6 +129,9 @@ export class Editor {
   /** wire the live-collaboration session (avatars, remote selections, relay) */
   connectSync(session: import('../sync/session').SyncSession) {
     this.session = session
+    // BETA FORK (runtime slides U10): a store save that meets a person's newer
+    // version may retry only while this tab is live in the room that carried it.
+    setLiveCheck(() => onlineTransport()?.status === 'open')
     let known = new Map(session.peers().map((p) => [p.actor, p.name]))
     session.onPeers(() => {
       this.renderAvatars()

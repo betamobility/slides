@@ -34,7 +34,7 @@ Anything not on that list is gated, so a path nobody thought about costs a login
 | `GET /new/blank` | person (the index's New deck) | clone the blank template, mint a `docId`, store it, `302` to `/d/<id>`. `404` when `NEW_ENABLED` is off |
 | `GET /api/decks` | person | `{decks:[{id,url,title,kind,owner,writer,created,updated,size,docId?}]}` |
 | `POST /api/decks` | person | body = the `.bento.html`; `201 {id,url}`. `?new=1` only changes the analytics event |
-| `PUT /api/decks/:id` | person | replace in place; keeps `owner` and `created`, records `writer`. `200` carries the new `ETag`. `If-Match` is honoured when sent (`412` if the deck changed) and never required, because shells already on disk save without it |
+| `PUT /api/decks/:id` | person | replace in place; keeps `owner` and `created`, records `writer`. `200` carries the new `ETag`. `If-Match` is honoured when sent (`412` if the deck changed) and never required, because shells already on disk save without it. A `412` from either PUT route carries the current `ETag` and a JSON body whose `writer` is `person` or `service`, naming who wrote the current version; the editor retries against it only for a person's save while live in the deck's sync room |
 | `DELETE /api/decks/:id` | owner | `204`, and the deck's assets go with it; `403` for anyone else |
 | `GET /d/:id` | person | the stored bytes, `text/html; charset=utf-8`, `private, no-store`, `nosniff`, report-only CSP, `ETag` |
 | `HEAD /d/:id` | person | the same headers with no body; how the editor learns the version it is showing. Not tracked |

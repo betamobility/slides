@@ -18,7 +18,8 @@
 //   GET    /api/decks              list (metadata only)
 //   POST   /api/decks              create → 201 {id, url}
 //   PUT    /api/decks/:id          replace in place → 200 + ETag; If-Match
-//                                  honoured when sent (412), never required
+//                                  honoured when sent (412), never required;
+//                                  a 412 carries the current ETag and writer
 //   DELETE /api/decks/:id          owner only → 204, the deck's assets with it
 //   GET    /d/:id                  the stored bytes, streamed, unchanged, + ETag
 //   HEAD   /d/:id                  the same headers, no body (the editor's boot)
@@ -392,7 +393,19 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
   }, etag)
   if (!stored) {
     track(ctx, req, 'deck_save', 'conflict')
-    return json(412, { error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.' })
+    // Who wrote the version that won, and which version it is. The editor
+    // uses both: a tab live-synced with its room already holds a person's
+    // edits and may retry against this ETag; a service's replace never
+    // travels through sync, so the editor stops. `writer` is the Access
+    // identity, and verifyAccess only ever gives a person an email, so an
+    // `@` is the person test (a service token's id is `<hex>.access`).
+    const current = await env.DECKS.head(KEY(id))
+    const res = json(412, {
+      error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
+      writer: decMeta(current?.customMetadata?.writer).includes('@') ? 'person' : 'service',
+    })
+    if (current) res.headers.set('etag', current.httpEtag)
+    return res
   }
   track(ctx, req, 'deck_save', 'ok')
   return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })

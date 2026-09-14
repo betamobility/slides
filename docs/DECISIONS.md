@@ -39,7 +39,15 @@ it, 412 when the deck changed since that read. The people route honours
 save without it and must keep working; those shells overwrite unconditionally
 until they self-update. The editor on the store origin learns the ETag with
 `HEAD /d/:id` at boot and sends it on every save, so a person's save is
-refused when Claude replaced the deck in between. A human autosave changes
+refused when Claude replaced the deck in between. The 412 names who wrote the
+version that won (`writer: person | service`) and carries its ETag, because
+store decks are co-edited: two tabs in one sync room both autosave, and the
+second one meets a 412 in the ordinary course. When a person wrote the newer
+version and the tab is connected to its sync room, it already holds that
+person's edits, so it retries once against the new ETag. A service writer, a
+tab that is not connected, an unreadable 412 or a second 412 all stop saving
+until reload, since Claude's replace never travels through sync and
+overwriting it would lose it. A human autosave changes
 the ETag too, so an agent editing beside an open deck re-reads often; that
 was accepted over inventing a content-only version.
 

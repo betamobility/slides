@@ -52,6 +52,13 @@
 // the disk save still work, and a reload shows the replacement. A worker that
 // sends no ETag gets the unconditional save it always had.
 //
+// EXCEPT A PERSON'S SAVE IN A LIVE ROOM. Store decks are co-edited: two tabs
+// on one /d/<id> converge through the sync relay and both autosave, so the
+// second tab's save meets a 412 in the ordinary course. The 412 says who
+// wrote the version that won. When it was a person and this tab is connected
+// to its room, the tab adopts the 412's ETag and retries once; anything else
+// (a service, not connected, a body it cannot read, a second 412) latches.
+//
 // Every request goes through kernel net.ts — scripts/test-offline.ts refuses
 // a `fetch(` anywhere else, and the offline switch must cover the store too.
 
@@ -71,9 +78,14 @@ export class StoreSignedOutError extends Error {
 /** A save refused because the deck was replaced in the store since this tab
  *  loaded or last saved it. Terminal for the tab: reload to continue. */
 export class StoreConflictError extends Error {
-  constructor() {
+  /** From the worker's 412: who wrote the current version, and its ETag. */
+  writer: 'person' | 'service' | null
+  etag: string | null
+  constructor(info: { writer?: 'person' | 'service' | null; etag?: string | null } = {}) {
     super(t('This deck changed in the store. Reload to get the latest version before saving.'))
     this.name = 'StoreConflictError'
+    this.writer = info.writer ?? null
+    this.etag = info.etag ?? null
   }
 }
 
@@ -133,7 +145,14 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
     throw new StoreSignedOutError() // a followed cross-origin redirect, or no network
   }
   if (signedOut(res)) throw new StoreSignedOutError()
-  if (res.status === 412) throw new StoreConflictError()
+  if (res.status === 412) {
+    let writer: 'person' | 'service' | null = null
+    try {
+      const w = (await res.json())?.writer
+      if (w === 'person' || w === 'service') writer = w
+    } catch {} // unreadable: no writer, so the caller latches
+    throw new StoreConflictError({ writer, etag: res.headers?.get('etag') ?? null })
+  }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
     throw new Error(t('The store refused the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
@@ -147,6 +166,12 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
 const versions = new Map<string, string>()
 let versionCheck: Promise<void> | null = null
 let conflicted = false
+let liveCheck: () => boolean = () => false
+
+/** The editor says whether this tab is connected to its sync room right now. */
+export function setLiveCheck(fn: () => boolean): void {
+  liveCheck = fn
+}
 
 /**
  * Learn the ETag of the deck this page shows. Never rejects: an unreachable
@@ -168,12 +193,21 @@ function checkVersion(id: string): Promise<void> {
 export async function putDeck(id: string, html: string): Promise<void> {
   if (versionCheck) await versionCheck
   if (conflicted) throw new StoreConflictError()
-  const etag = versions.get(id)
+  const send = (etag: string | undefined) => storeRequest(`/api/decks/${encodeURIComponent(id)}`, {
+    method: 'PUT', body: html, headers: etag ? { ...headers, 'if-match': etag } : headers,
+  })
   let res: Response
   try {
-    res = await storeRequest(`/api/decks/${encodeURIComponent(id)}`, {
-      method: 'PUT', body: html, headers: etag ? { ...headers, 'if-match': etag } : headers,
-    })
+    try {
+      res = await send(versions.get(id))
+    } catch (err) {
+      // A live-connected tab already holds a person's edits through sync, so
+      // its bytes are a superset of that save and may replace it. Claude's
+      // store replace never travels through sync: overwriting it would lose
+      // it, so a service writer always latches. One retry, no loop.
+      if (!(err instanceof StoreConflictError) || err.writer !== 'person' || !err.etag || !liveCheck()) throw err
+      res = await send(err.etag)
+    }
   } catch (err) {
     if (err instanceof StoreConflictError) conflicted = true
     throw err
@@ -361,6 +395,7 @@ export function installStoreHost(): boolean {
     throw new DOMException('No file picker available', 'AbortError')
   }
   adoptFileHandle(storeHandle(id))
+  conflicted = false // a boot is a fresh tab; only the rig boots twice
   versionCheck = checkVersion(id)
   return true
 }

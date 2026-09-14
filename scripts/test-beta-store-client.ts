@@ -27,7 +27,10 @@
 //      adopts the ETag the 200 returns. A 412 (someone replaced the deck in
 //      the store) rejects with StoreConflictError, and from then on no PUT
 //      leaves the tab until it reloads. No ETag (an older worker) → the save
-//      is unconditional, as before. §6 runs a small etag-aware store behind
+//      is unconditional, as before. The one exception: when the 412 says a
+//      PERSON wrote the current version and this tab is live-connected to its
+//      sync room, the tab already holds those edits, so it adopts the 412's
+//      ETag and retries once. §6 runs a small etag-aware store behind
 //      the fake fetch, so "the replacement is still stored" (AE11) is read
 //      back from the store rather than inferred from the request log.
 //   3. THE HANDOFF. On file:// the deck opens <storeHost>/new, accepts a
@@ -66,6 +69,7 @@ if (import.meta.url.endsWith('.ts')) {
   ok(/Save to Beta…/.test(editor), 'editor.ts offers "Save to Beta…"')
   ok(/handoffToStore\(/.test(editor), 'editor.ts routes it through handoffToStore()')
   ok(/isStoreOrigin\(\)/.test(editor), 'editor.ts branches on isStoreOrigin()')
+  ok(/setLiveCheck\(\(\) => onlineTransport\(\)\?\.status === 'open'\)/.test(editor), 'editor.ts tells the store whether this tab is live in its sync room')
   const main = readFileSync(join(root, 'slides/src/main.ts'), 'utf8')
   ok(/installStoreHost\(\)/.test(main), 'main.ts installs the store host at boot')
   const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8')
@@ -371,8 +375,9 @@ console.log('\n§5 handoffToStore(): the /new tab protocol')
 }
 
 // ---- the version ----------------------------------------------------------------
-// LAST, deliberately: a conflict latches for the rest of the process (as it
-// does for the rest of a tab's life), so no PUT assertion may follow it.
+// LAST, deliberately: a conflict latches for the rest of the tab's life. In
+// this process installStoreHost() stands in for a reload, so each case below
+// boots again before it saves.
 console.log('\n§6 conditional save: HEAD, If-Match, 412')
 {
   const header = (c: Call, name: string): string | null => {
@@ -385,10 +390,14 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   // A store that behaves like server/deck-store for the two routes the editor
   // uses: HEAD /d/:id (the deck's headers, text/html included, which must NOT
   // read as a login page) and PUT /api/decks/:id with If-Match honoured.
-  const decks = new Map<string, { bytes: string; etag: string }>()
+  const decks = new Map<string, { bytes: string; etag: string; writer?: 'person' | 'service' }>()
   let version = 0
   const mint = () => `"v${++version}"`
   let serveEtag = true
+  // conflictBody: what a 412 says ('json' is the worker's shape). onConflict
+  // runs after a 412 is answered, to change the deck again before a retry.
+  let conflictBody: 'json' | 'garbage' = 'json'
+  let onConflict: (() => void) | null = null
   decks.set('abc123XYZ0', { bytes: 'original', etag: mint() })
   const fakeStore = async (c: Call): Promise<Response> => {
     const u = new URL(c.url)
@@ -406,9 +415,12 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
       if (!d) return new Response(null, { status: 404 })
       const match = header(c, 'if-match')
       if (match && match !== d.etag) {
-        return new Response(JSON.stringify({ error: 'changed' }), { status: 412, headers: { 'content-type': 'application/json' } })
+        const body = conflictBody === 'json' ? JSON.stringify({ error: 'changed', writer: d.writer ?? 'person' }) : '<oops'
+        const res = new Response(body, { status: 412, headers: { 'content-type': 'application/json', etag: d.etag } })
+        onConflict?.()
+        return res
       }
-      const next = { bytes: c.body, etag: mint() }
+      const next = { bytes: c.body, etag: mint(), writer: 'person' as const }
       decks.set(put[1], next)
       return new Response(null, { status: 200, headers: serveEtag ? { etag: next.etag } : {} })
     }
@@ -444,7 +456,7 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   ok(decks.get('abc123XYZ0')?.bytes === 'second', 'two saves in a row both land')
 
   // a harness replace behind the editor's back (AE11)
-  decks.set('abc123XYZ0', { bytes: 'claude replaced this', etag: mint() })
+  decks.set('abc123XYZ0', { bytes: 'claude replaced this', etag: mint(), writer: 'service' })
   const e = await rejects(() => save.writeUpdatedFile('stale edit'))
   ok(e instanceof store.StoreConflictError, `the next save rejects with StoreConflictError (${e?.name}: ${e?.message})`)
   ok(/changed in the store/i.test(String(e?.message)) && /reload/i.test(String(e?.message)), `…whose message says the deck changed and to reload: "${e?.message}"`)
@@ -464,6 +476,69 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   g.location.assign = () => {}
   const posted = await rejects(() => writeThrough(store.newDeckHandle('x.bento.html'), 'the edits, as a new deck'))
   ok(posted === null && last().init.method === 'POST', 'after a conflict, "Save as new deck" still POSTs')
+  respond(fakeStore)
+
+  // Live collaboration: two tabs on the same deck, joined in one sync room,
+  // each autosaving. The other tab's save is a person's, and this tab holds
+  // its edits already, so it retries against the version the 412 names.
+  const boot = async (live: boolean) => {
+    store.installStoreHost()
+    store.setLiveCheck(() => live)
+    await save.writeUpdatedFile('boot save')
+  }
+  const otherTab = (bytes: string, writer: 'person' | 'service') => decks.set('abc123XYZ0', { bytes, etag: mint(), writer })
+
+  await boot(true)
+  otherTab('the other tab saved', 'person')
+  const personEtag = decks.get('abc123XYZ0')!.etag
+  mark = calls.length
+  let ec = await rejects(() => save.writeUpdatedFile('this tab, with the other tab synced in'))
+  puts = calls.slice(mark).filter((c) => c.init.method === 'PUT')
+  ok(ec === null, `person-written 412 + live-connected → the save resolves (${ec?.name})`)
+  ok(puts.length === 2 && header(puts[1], 'if-match') === personEtag, `…after one retry carrying the 412's ETag (${puts.map((c) => header(c, 'if-match')).join(' → ')} vs ${personEtag})`)
+  ok(decks.get('abc123XYZ0')?.bytes === 'this tab, with the other tab synced in', '…and the stored bytes are this tab\'s')
+  mark = calls.length
+  ec = await rejects(() => save.writeUpdatedFile('the next autosave'))
+  ok(ec === null && calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 1, 'no latch: the next save goes out once and lands')
+  ok(decks.get('abc123XYZ0')?.bytes === 'the next autosave', '…with the bytes it sent')
+
+  await boot(false)
+  otherTab('a person saved, this tab is not live', 'person')
+  ec = await rejects(() => save.writeUpdatedFile('offline tab'))
+  ok(ec instanceof store.StoreConflictError, `person-written 412 + not live → StoreConflictError (${ec?.name})`)
+  mark = calls.length
+  await rejects(() => save.writeUpdatedFile('after'))
+  ok(calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 0 && decks.get('abc123XYZ0')?.bytes === 'a person saved, this tab is not live', '…and latches: no PUT, the person\'s save stays')
+
+  await boot(true)
+  otherTab('claude replaced this while we were live', 'service')
+  mark = calls.length
+  ec = await rejects(() => save.writeUpdatedFile('live tab over claude'))
+  ok(ec instanceof store.StoreConflictError, `service-written 412 + live → StoreConflictError (${ec?.name})`)
+  ok(calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 1, '…without a retry')
+  await rejects(() => save.writeUpdatedFile('after'))
+  ok(decks.get('abc123XYZ0')?.bytes === 'claude replaced this while we were live', '…and latches, so Claude\'s replace stays stored (AE11)')
+
+  await boot(true)
+  otherTab('a person saved', 'person')
+  onConflict = () => { onConflict = null; otherTab('and saved again before the retry', 'person') }
+  mark = calls.length
+  ec = await rejects(() => save.writeUpdatedFile('retry loses too'))
+  ok(ec instanceof store.StoreConflictError && calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 2, `a retry that also 412s → StoreConflictError after exactly two PUTs (${ec?.name})`)
+  mark = calls.length
+  await rejects(() => save.writeUpdatedFile('after'))
+  ok(calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 0 && decks.get('abc123XYZ0')?.bytes === 'and saved again before the retry', '…and latches')
+
+  await boot(true)
+  otherTab('a person saved', 'person')
+  conflictBody = 'garbage'
+  mark = calls.length
+  ec = await rejects(() => save.writeUpdatedFile('unreadable 412'))
+  ok(ec instanceof store.StoreConflictError && calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 1, `an unparsable 412 body → StoreConflictError, no retry (${ec?.name})`)
+  mark = calls.length
+  await rejects(() => save.writeUpdatedFile('after'))
+  ok(calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 0 && decks.get('abc123XYZ0')?.bytes === 'a person saved', '…and latches')
+  conflictBody = 'json'
 }
 
 console.log(`\n§2–6: ${checks - failures}/${checks} checks passed`)

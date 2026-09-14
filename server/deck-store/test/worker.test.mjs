@@ -584,6 +584,12 @@ export async function run(Miniflare) {
     r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
     ok(Buffer.compare(await bodyOf(r), Buffer.from(versionC)) === 0, 'the stored bytes changed')
     eq(r.headers.get('etag'), etagC, 'and the read carries the ETag the PUT answered')
+    // The 412 says who wrote the version that won, and which version that is:
+    // a live-synced editor may overwrite a person's save, never Claude's.
+    r = await call('PUT', `/api/decks/${readId}`, { as: 'alice', body: deck(slidesDoc('Stale after Claude')), headers: { 'if-match': etagB } })
+    eq(r.status, 412, 'a person PUT stale against a harness save is 412')
+    eq((await r.json()).writer, 'service', 'and the 412 body says the current version was written by a service')
+    eq(r.headers.get('etag'), etagC, 'and carries the current ETag')
 
     // The people route: If-Match honoured, never required (shells on disk).
     const versionD = deck(slidesDoc('Harness read, version D from an old shell'))
@@ -593,6 +599,8 @@ export async function run(Miniflare) {
     ok(!!etagD && etagD !== etagC, 'and answers the new ETag')
     r = await call('PUT', `/api/decks/${readId}`, { as: 'alice', body: deck(slidesDoc('Stale editor')), headers: { 'if-match': etagC } })
     eq(r.status, 412, 'a person PUT with a stale If-Match is 412 (AE11 at the store)')
+    eq(r.headers.get('etag'), etagD, 'the person 412 carries the current ETag')
+    eq((await r.json()).writer, 'person', 'and says the current version was written by a person')
     r = await call('GET', `/d/${readId}`, { as: 'alice' })
     ok(Buffer.compare(await bodyOf(r), Buffer.from(versionD)) === 0, 'the refused person PUT left the stored bytes untouched')
     eq(r.headers.get('etag'), etagD, 'GET /d/:id carries the ETag')

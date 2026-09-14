@@ -22,9 +22,12 @@ pre-1.0.
   files such as a detailed map load only when the deck is opened from
   `slides.betamobility.ai` while signed in; a downloaded copy shows the
   scene without them. Needs this release to present.
-- **Saving no longer overwrites a newer version of the deck.** If Claude or a
-  colleague changed a deck in the store after you opened it, your save is
-  refused and you are asked to reload. Your unsaved edits stay in the tab.
+- **Saving no longer overwrites a newer version of the deck.** If Claude
+  changed a deck in the store after you opened it, your save is refused and
+  you are asked to reload. Your unsaved edits stay in the tab. A colleague
+  editing the same deck with you live is not a conflict: your copy already
+  has their changes, so saving carries on. If you were not connected when
+  they saved, you are asked to reload too.
   Decks saved from an older release keep saving the old way until they are
   re-saved from this one.
 - **Claude updates stored decks without moving your layout.** The beta-slides
