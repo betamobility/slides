@@ -127,6 +127,14 @@ function robertsDoc() {
   }
 }
 
+/** Robert's deck as it is today: native slides only, no runtime slide. */
+function plainDoc() {
+  const d: any = robertsDoc()
+  d.slides = d.slides.filter((s: { runtime?: unknown }) => !s.runtime)
+  delete d.assets
+  return d
+}
+
 /** A project folder: scenes/<id>/{index.html, still.png|svg, scene.json, assets/}. */
 function project(scenes: Record<string, { html?: string | Buffer; still?: Buffer | string; stillExt?: string; manifest?: unknown; assets?: Record<string, Buffer | string> }>, deckJson?: unknown) {
   const dir = mkdtempSync(join(tmpdir(), 'splice-project-'))
@@ -387,6 +395,90 @@ try {
     eq(log.length, 0, 'missing credentials: no request made')
   }
 
+  // ------------------------------------------------------- edits only
+  console.log('\nedits only: a typo fixed on a deck with no runtime slides (AE1, R13)')
+  {
+    const id = await seed(plainDoc())
+    const before = await readDeck(id)
+    const dir = mkdtempSync(join(tmpdir(), 'splice-edits-'))
+    temps.push(dir)
+    const edits = join(dir, 'edits.json')
+    writeFileSync(edits, JSON.stringify([{ slideId: 's1', elementId: 't-04', html: 'Mobility' }]))
+    log = []
+    const r = await runTool([id, '--edits', edits])
+    eq(r.code, 0, `<deckId> --edits exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).length, 1, 'one conditional PUT reached the store')
+    const after = await readDeck(id)
+    ok(after.etag !== before.etag, 'the ETag changed')
+    const t04 = slideOf(after.doc, 's1').elements[0]
+    eq(t04.html, 'Mobility', 't-04 html changed')
+    eq(t04.x, 120, 't-04 x stays as read (AE1)')
+    const expect = structuredClone(before.doc)
+    expect.slides[0].elements[0].html = 'Mobility'
+    ok(same(after.doc, expect), 'nothing else in the document changed')
+
+    writeFileSync(edits, JSON.stringify([{ slideId: 's1', elementId: 't-04', html: 'Mobility again' }]))
+    const r2 = await runTool([id, dir, '--edits', edits])
+    eq(r2.code, 0, `<deckId> <projectDir> --edits with no scenes/ exits 0${r2.code ? `: ${r2.err}` : ''}`)
+    eq(slideOf((await readDeck(id)).doc, 's1').elements[0].html, 'Mobility again', 'and the edit landed')
+
+    const empty = mkdtempSync(join(tmpdir(), 'splice-empty-'))
+    temps.push(empty)
+    await refuses('neither scenes nor edits', id, [id, empty], /nothing to do/i)
+  }
+
+  // ----------------------------------------------------------- insertAfter
+  console.log('\ninsertAfter: a new runtime slide in an existing deck (R17, AE8, AE10)')
+  {
+    const id = await seed()
+    const before = await readDeck(id)
+    const dir = project({ live: { manifest: { steps: 1, props: [], insertAfter: 's1' } } })
+    log = []
+    const r = await runTool([id, dir])
+    eq(r.code, 0, `insertAfter an existing id exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).length, 1, 'one conditional PUT reached the store')
+    const after = await readDeck(id)
+    eq(after.doc.slides.map((s: { id: string }) => s.id).join(','), 's1,live,map,demo,numbers', 'the new slide sits right after s1')
+    for (const sid of ['s1', 'map', 'demo', 'numbers']) ok(same(slideOf(after.doc, sid), slideOf(before.doc, sid)), `${sid} is byte-identical`)
+    const live = slideOf(after.doc, 'live')
+    ok(live.runtime && live.runtime.steps === 1 && live.elements.length === 1 && live.elements[0].src === live.runtime.still, 'live is a runtime slide carrying its still')
+    eq(live.background, '#F5F3EF', 'the new slide takes its neighbour\'s background')
+    if (rt) ok(same(rt.checkRuntime(live.runtime, after.doc.assets), live.runtime), 'the record survives checkRuntime unchanged')
+    const again = await runTool([id, dir])
+    eq(again.code, 0, 're-running replaces the inserted slide instead of inserting again')
+    eq((await readDeck(id)).doc.slides.length, 5, 'still five slides')
+  }
+  {
+    const id = await seed()
+    const r = await runTool([id, project({ tail: { manifest: { steps: 0, props: [], insertAfter: 'end' } } })])
+    eq(r.code, 0, `insertAfter "end" exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq((await readDeck(id)).doc.slides.map((s: { id: string }) => s.id).join(','), 's1,map,demo,numbers,tail', 'the new slide is appended')
+    await refuses('insertAfter an unknown id', id, [id, project({ other: { manifest: { steps: 0, props: [], insertAfter: 'ghost' } } })], /ghost/)
+    await refuses('a folder named for a native slide with insertAfter set (AE10)', id, [id, project({ s1: { manifest: { steps: 0, props: [], insertAfter: 'map' } } })], /s1/)
+    await refuses('insertAfter that is not a string', id, [id, project({ odd: { manifest: { steps: 0, props: [], insertAfter: 3 } } })], /odd/)
+  }
+  {
+    const withStates = robertsDoc()
+    withStates.slides.splice(1, 0, { id: 's1-zoom', stateOf: 's1', elements: [] } as any)
+    const id = await seed(withStates)
+    const r = await runTool([id, project({ live: { manifest: { steps: 0, props: [], insertAfter: 's1' } } })])
+    eq(r.code, 0, `insertAfter a slide with states exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq((await readDeck(id)).doc.slides.map((s: { id: string }) => s.id).join(','), 's1,s1-zoom,live,map,demo,numbers', 'the new slide goes after the anchor\'s states, never between them')
+  }
+  console.log('\ninsert and a 412 once: the insert is re-derived, not duplicated (R19)')
+  {
+    const id = await seed()
+    bumps = 1; bumpX = 500
+    log = []
+    const r = await runTool([id, project({ live: { manifest: { steps: 0, props: [], insertAfter: 'map' } } })])
+    eq(r.code, 0, `exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).map((l) => l.status).join(','), '412,200', 'the first PUT is 412, the second 200')
+    const doc = (await readDeck(id)).doc
+    eq(doc.slides.map((s: { id: string }) => s.id).join(','), 's1,map,live,demo,numbers', 'exactly one inserted slide, after map')
+    eq(slideOf(doc, 's1').elements[0].x, 500, 'Robert\'s move survives')
+    bumps = 0
+  }
+
   console.log('\nthe ownership diff itself (a read doc mutated by hand)')
   {
     let mod: any = null
@@ -399,6 +491,7 @@ try {
         ['slide order changed', (d) => { d.slides.reverse() }, /order|count/],
         ['a native slide background changed', (d) => { d.slides[0].background = '#000' }, /s1/],
         ['docId changed', (d) => { d.docId = 'other' }, /docId/],
+        ['a slide added that no scene inserts', (d) => { d.slides.push({ id: 'extra', elements: [], runtime: { steps: 0, props: [] } }) }, /order|count/],
       ]
       for (const [label, mutate, name] of cases) {
         const read = robertsDoc(), out = robertsDoc()

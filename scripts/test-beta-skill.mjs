@@ -145,6 +145,11 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(/splice\.mjs --create <projectDir>/.test(text) && /splice\.mjs <deckId> <projectDir>/.test(text), `${name} gives both splice commands`)
   ok(/Claude owns content, the UI owns geometry/.test(text), `${name} states the ownership rule`)
   ok(/412/.test(text) && /owner probably has the deck open/.test(text), `${name} says what a 412 means`)
+  // A typo fix on a deck with no runtime slide is the common case; the tool is
+  // the only documented way to make it, so the command must be there.
+  ok(/splice\.mjs <deckId> --edits edits\.json/.test(text), `${name} gives the edits-only command`)
+  ok(/insertAfter/.test(text) && /"end"/.test(text), `${name} documents insertAfter and "end" for a new runtime slide`)
+  ok(!/needs at least one scene\s+folder|cannot\s+run with `--edits` alone/.test(text), `${name} no longer says edits need a scene`)
 }
 // The replace recipe U1 wrote is gone: splice.mjs is the only way to change a
 // deck in the store. [^`] keeps each match inside one code block.

@@ -166,7 +166,7 @@ deck. One folder per deck:
   assets/<name>                  heavy files shared by several scenes
   scenes/<slideId>/index.html    the scene
   scenes/<slideId>/still.svg     or still.png, exactly one
-  scenes/<slideId>/scene.json    { "steps": 3, "props": [ … ], "assets": [ … ], "url": "https://…" }
+  scenes/<slideId>/scene.json    { "steps": 3, "props": [ … ], "assets": [ … ], "url": "https://…", "insertAfter": "s2" }
   scenes/<slideId>/assets/<name> heavy files this scene lists
 ```
 
@@ -175,7 +175,8 @@ optional: `steps` (a whole number, default 0), `props` (a list of
 `{ "key", "label", "kind": "text" | "number" | "color", "default" }`),
 `assets` (file names, looked up in the scene's `assets/` and then the
 project's `assets/`) and `url` (https only: the frame loads that page instead
-of `index.html`, which must still exist). Keys pressed inside a hosted `url`
+of `index.html`, which must still exist) and `insertAfter` (update only: add
+this scene as a new slide, see below). Keys pressed inside a hosted `url`
 page do not drive the show; the presenter clicks outside the frame to get the
 arrows back, and offline the still shows.
 
@@ -313,8 +314,11 @@ optionally, `SLIDES_STORE_URL` (default `https://slides.betamobility.ai`).
 # a new deck: the published blank template, deck.json's slides, then the scenes
 node splice.mjs --create <projectDir> [--dry-run]
 
-# an existing deck: replace its runtime slides, apply edits.json
+# an existing deck: replace or insert runtime slides, apply edits.json
 node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+
+# an existing deck, content fixes only (a typo, a figure): no project folder
+node splice.mjs <deckId> --edits edits.json [--dry-run]
 ```
 
 `<deckId>` is the ten characters at the end of `/d/<id>`. Both commands
@@ -327,12 +331,21 @@ error.
   slide whose id matches a scene folder is where that runtime slide goes;
   other scenes are added after the native slides. The deck gets a fresh
   `docId` and the Beta theme, fonts and layouts from the blank template.
-- **Update**: every folder under `scenes/` must name a slide that is already
-  a runtime slide in the deck. A missing id, an id two slides share, or the
-  id of a native slide stops the run. The tool never turns a native slide
-  into a runtime slide, so a new scene in an existing deck has to start as a
-  slide made by `--create`. Update needs at least one scene folder; it cannot
-  run with `--edits` alone.
+- **Update**: a folder under `scenes/` whose name is a runtime slide in the
+  deck replaces that slide. An id two slides share, or the id of a native
+  slide, stops the run; the tool never turns a native slide into a runtime
+  slide. A folder whose name is not in the deck stops the run too, unless its
+  `scene.json` sets `insertAfter`.
+- **Adding a runtime slide to an existing deck**: pick a new slide id that no
+  slide in the deck uses, name the folder after it, and set `"insertAfter"` in
+  its `scene.json` to the id of the slide it follows, or `"end"` to append.
+  The anchor must be a slide in the deck as it is now (not another new
+  scene); the new slide goes after it and after any states of it, and takes
+  its background. Once inserted, the next run replaces it like any other
+  runtime slide and `insertAfter` is ignored.
+- **Edits only**: with no scene to change, run
+  `splice.mjs <deckId> --edits edits.json`. A run with neither scene folders
+  nor edits is refused.
 - **`edits.json`** changes the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
   key per type is `html` (text), `src` (image, media), `option` (chart) and
@@ -353,7 +366,8 @@ so to the user rather than falling back to a hand-written replace.
 **Claude owns content, the UI owns geometry.** You replace runtime slides
 wholesale and change the text, images, chart data and table cells of native
 elements by id. You never change an element's position, size or rotation,
-never add, remove or reorder slides or elements, and never touch slide notes,
+never add, remove or reorder slides or elements (the one exception is a new
+runtime slide placed with `insertAfter`), and never touch slide notes,
 backgrounds or transitions in a stored deck. People move things in the
 editor, and their layout always survives your update. The tool enforces this:
 it compares what it would write with what it read and refuses any change

@@ -715,7 +715,8 @@ runtime slides wholesale (source, still, steps, properties and their
 defaults; presenter-set `values` do not survive) and may change the content
 of native elements by id: `html` on text, `src` on image and media, `option`
 on charts, `rows` on tables. It never changes an element's `x`, `y`, `w`,
-`h` or `rotation`, never adds, removes or reorders slides or elements, and
+`h` or `rotation`, never adds (except a new runtime slide placed with
+`insertAfter`), removes or reorders slides or elements, and
 never changes other slide or document keys in a deck people edit. Never
 regenerate a deck from a script once people have edited it.
 
@@ -729,11 +730,12 @@ no dependencies. Credentials come from `CF_ACCESS_CLIENT_ID` and
 ```bash
 node splice.mjs --create <projectDir> [--dry-run]
 node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+node splice.mjs <deckId> --edits edits.json [--dry-run]
 ```
 
 A project folder holds `deck.json` (`{ title?, slides }`, for `--create`
 only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
-`still.svg`, `scene.json` (`{ steps, props, assets, url }`) and heavy files
+`still.svg`, `scene.json` (`{ steps, props, assets, url, insertAfter }`) and heavy files
 in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
 list of `{ slideId, elementId, html | src | option | rows }`.
 
@@ -741,10 +743,15 @@ list of `{ slideId, elementId, html | src | option | rows }`.
   `docId`, adds `deck.json`'s slides and the scenes, posts the deck and then
   uploads its assets.
 - Update reads the deck with `GET /api/harness/decks/<id>` and keeps its
-  `ETag`. Every scene folder must name a slide that is already a runtime
-  slide; a missing id, a duplicated id or a native slide stops the run, and
-  the tool never converts a native slide. It needs at least one scene
-  folder, and it refuses encrypted decks.
+  `ETag`. A scene folder naming a runtime slide replaces it; a duplicated id
+  or a native slide stops the run, and the tool never converts a native
+  slide. A folder naming no slide in the deck stops the run unless its
+  `scene.json` sets `insertAfter` to the id of a slide in the deck as read,
+  or `"end"`: then a new runtime slide with the folder's id goes after that
+  slide (and after its states), taking its background. Inserted slides are
+  the only slides the write may add. Encrypted decks are refused.
+- With no scene to change, `splice.mjs <deckId> --edits edits.json` applies
+  content edits alone. A run with neither scene folders nor edits is refused.
 - Before writing, the tool compares the document it would write with the one
   it read and refuses any change outside the ownership rule. A refusal writes
   nothing.

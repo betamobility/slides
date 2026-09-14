@@ -7,7 +7,11 @@
 // person arranged in the editor.
 //
 //   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+//   node splice.mjs <deckId> --edits edits.json [--dry-run]
 //   node splice.mjs --create <projectDir> [--dry-run]
+//
+// The second form is a content fix on a deck with no scene to change. A run
+// with neither scene folders nor edits refuses: there is nothing to do.
 //
 // Environment: CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (the Access
 // service token, sent as the same two headers the skill's curl recipes use),
@@ -17,12 +21,20 @@
 //   deck.json                        --create only: { title?, slides: [...] }
 //   scenes/<slideId>/index.html      the scene, inlined (256 KB at most)
 //   scenes/<slideId>/still.png|svg   what thumbnails, print and export show (200 KB)
-//   scenes/<slideId>/scene.json      { steps, props, assets?, url? }
+//   scenes/<slideId>/scene.json      { steps, props, assets?, url?, insertAfter? }
 //   scenes/<slideId>/assets/<name>   heavy files scene.json lists; uploaded to
 //                                    the store's asset route, never inlined
 //                                    (<projectDir>/assets/<name> also found)
 //
 // edits.json is a list of { slideId, elementId, html | src | option | rows }.
+//
+// A scene folder names a runtime slide already in the deck, which it replaces.
+// To add a new one, scene.json sets insertAfter to the id of a slide in the
+// deck as read (or "end"), and the folder name, the new slide's id, must not be
+// in the deck. The new slide goes after that slide and after any states of
+// it; two folders with the same insertAfter land in folder name order. Without
+// insertAfter an unknown id is still refused (AE8), and a native slide's id is
+// refused either way (AE10). Ignored by --create, where deck.json places slides.
 //
 // THE OWNERSHIP RULE (docs/plans/2026-09-14-001-feat-runtime-slides-plan.md,
 // KTD8). A runtime slide is Claude's and is replaced wholesale, presenter
@@ -86,6 +98,7 @@ const isRuntime = (slide) => !!slide && typeof slide.runtime === 'object' && sli
  * request is made.
  */
 export function readProject(dir, { create = false } = {}) {
+  if (!dir && !create) return { deck: undefined, scenes: [] }
   if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Refusal(`project folder not found: ${dir}`)
   let deck
   if (create) {
@@ -104,7 +117,6 @@ export function readProject(dir, { create = false } = {}) {
   const scenesDir = join(dir, 'scenes')
   const ids = existsSync(scenesDir) ? readdirSync(scenesDir).filter((n) => statSync(join(scenesDir, n)).isDirectory()).sort() : []
   const scenes = ids.map((id) => readScene(dir, join(scenesDir, id), id))
-  if (!create && !scenes.length) throw new Refusal(`no scene folders in ${scenesDir}`)
   return { deck, scenes }
 }
 
@@ -138,6 +150,7 @@ function readScene(projectDir, sd, id) {
     if (p.default !== undefined && !validValue(p.kind, p.default)) throw new Refusal(`scene "${id}": prop "${p.key}" default ${JSON.stringify(p.default)} is not a valid ${p.kind}`)
     keys.add(p.key)
   }
+  if (m.insertAfter !== undefined && (typeof m.insertAfter !== 'string' || !m.insertAfter)) throw new Refusal(`scene "${id}": insertAfter must be the id of a slide in the deck, or "end"`)
   if (m.url !== undefined && (typeof m.url !== 'string' || m.url.length > MAX_URL || !/^https:\/\//i.test(m.url))) throw new Refusal(`scene "${id}": url must be https`)
 
   const assets = []
@@ -154,7 +167,7 @@ function readScene(projectDir, sd, id) {
     if (size > ASSET_BUDGET) throw new Refusal(`scene "${id}": asset ${name} is ${kb(size)}, over the 16 MB asset budget`)
     assets.push({ name, path, type, size })
   }
-  return { id, src, still, stillType, steps, props, url: m.url, assets }
+  return { id, src, still, stillType, steps, props, url: m.url, assets, insertAfter: m.insertAfter }
 }
 
 /** edits.json, validated for shape; whether each target exists is checked per read. */
@@ -237,16 +250,53 @@ export function derive(read, { scenes }, edits = []) {
   const byId = (id) => doc.slides.filter((s) => s && s.id === id)
 
   const sceneIds = new Set()
+  const inserted = new Set()
+  const inserts = new Map() // anchor id, or "end", to the scenes that go after it
   for (const scene of scenes) {
     const hits = byId(scene.id)
-    if (!hits.length) throw new Refusal(`slide "${scene.id}" is not in the deck (scenes/${scene.id}); nothing was written`)
+    if (!hits.length && scene.insertAfter !== undefined) {
+      const anchor = scene.insertAfter
+      if (anchor !== 'end') {
+        const at = read.slides.filter((s) => s && s.id === anchor).length
+        if (at !== 1) throw new Refusal(`scene "${scene.id}": insertAfter "${anchor}" ${at ? 'is ambiguous' : 'is not a slide in the deck'}; nothing was written`)
+      }
+      inserts.set(anchor, [...(inserts.get(anchor) || []), scene])
+      inserted.add(scene.id)
+      sceneIds.add(scene.id)
+      continue
+    }
+    if (!hits.length) throw new Refusal(`slide "${scene.id}" is not in the deck (scenes/${scene.id}); set insertAfter in its scene.json to add it as a new slide; nothing was written`)
     if (hits.length > 1) throw new Refusal(`slide id "${scene.id}" is used by ${hits.length} slides in the deck, so scenes/${scene.id} is ambiguous; nothing was written`)
     if (!isRuntime(hits[0])) throw new Refusal(`slide "${scene.id}" is a native slide; the splice tool never converts one (a scene needs a runtime slide, or a runtime: {} placeholder, with that id); nothing was written`)
     sceneIds.add(scene.id)
   }
+  if (inserts.size) {
+    // Rebuilt from the read order: each anchor keeps its states (the hidden
+    // variants that follow it) next to it, and the new slides go after those.
+    const out = []
+    const place = (anchor, neighbour) => {
+      for (const scene of inserts.get(anchor) || []) {
+        const slide = { id: scene.id, elements: [] }
+        if (neighbour && neighbour.background !== undefined) slide.background = structuredClone(neighbour.background)
+        out.push(slide)
+      }
+    }
+    let group = []
+    doc.slides.forEach((slide, i) => {
+      out.push(slide)
+      group.push(slide)
+      const owner = slide?.stateOf ?? slide?.id
+      if (owner !== undefined && doc.slides[i + 1]?.stateOf === owner) return
+      for (const member of group) place(member?.id, member)
+      group = []
+    })
+    place('end', doc.slides[doc.slides.length - 1])
+    doc.slides = out
+  }
   const pruneKeys = []
   for (const scene of scenes) {
     pruneKeys.push(...applyScene(doc, byId(scene.id)[0], scene))
+    if (inserted.has(scene.id)) { plan.push(`  ${scene.id}: new runtime slide inserted after ${scene.insertAfter === 'end' ? 'the last slide' : `"${scene.insertAfter}"`} (source ${kb(scene.src.length)}, still ${kb(scene.still.length)}, ${scene.steps} steps)`); continue }
     plan.push(`  ${scene.id}: runtime slide replaced (source ${kb(scene.src.length)}, still ${kb(scene.still.length)}, ${scene.steps} steps, ${scene.props.length} props${scene.assets.length ? `, assets ${scene.assets.map((a) => `${a.name} ${kb(a.size)}`).join(', ')}` : ''})`)
   }
 
@@ -269,25 +319,32 @@ export function derive(read, { scenes }, edits = []) {
 
   const gone = prune(doc, pruneKeys)
   if (gone.length) plan.push(`  assets no longer referenced, removed: ${gone.join(', ')}`)
-  checkOwnership(read, doc, { scenes: sceneIds, edits: edited })
+  checkOwnership(read, doc, { scenes: sceneIds, edits: edited, inserted })
   return { doc, plan }
 }
 
 /**
  * KTD8, as a diff of the document to write against the one read. Throws a
  * Refusal naming the first offending id. `scenes` is the set of runtime slide
- * ids being replaced; `edits` maps "slideId U+001F elementId" to the keys an
- * edit set on that element.
+ * ids being replaced or inserted; `edits` maps "slideId U+001F elementId" to
+ * the keys an edit set on that element; `inserted` is the set of new runtime
+ * slide ids, the only slides the output may have that the read did not.
  */
-export function checkOwnership(read, out, { scenes, edits }) {
+export function checkOwnership(read, out, { scenes, edits, inserted = new Set() }) {
   for (const k of new Set([...Object.keys(read), ...Object.keys(out)])) {
     if (k === 'assets' || k === 'slides') continue
     if (!same(read[k], out[k])) throw new Refusal(`document key "${k}" would change; the splice tool changes slides only`)
   }
   const ids = (d) => (d.slides || []).map((s) => s?.id)
-  if (!same(ids(read), ids(out))) throw new Refusal('slide order or count would change; slide order belongs to the person editing the deck')
+  const readIds = ids(read)
+  for (const nid of inserted) {
+    if (readIds.includes(nid) || ids(out).filter((x) => x === nid).length !== 1) throw new Refusal(`slide "${nid}" cannot be inserted: the id is already in the deck; nothing was written`)
+    if (!isRuntime(out.slides.find((s) => s?.id === nid)) || !scenes.has(nid)) throw new Refusal(`slide "${nid}": only a runtime slide from a scene folder may be inserted; nothing was written`)
+  }
+  const kept = (out.slides || []).filter((s) => !inserted.has(s?.id))
+  if (!same(readIds, kept.map((s) => s?.id))) throw new Refusal('slide order or count would change; slide order belongs to the person editing the deck')
   read.slides.forEach((before, i) => {
-    const after = out.slides[i]
+    const after = kept[i]
     const sid = before.id
     for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
       if (k === 'elements') continue
@@ -369,6 +426,9 @@ export async function update(id, dir, { edits: editsFile, dryRun = false, env = 
   if (!/^[0-9A-Za-z]{10}$/.test(id)) throw new Refusal(`"${id}" is not a deck id (ten letters and digits, the end of /d/<id>)`)
   const project = readProject(dir)
   const edits = readEdits(editsFile)
+  if (!project.scenes.length && !edits.length) {
+    throw new Refusal(`nothing to do: ${dir ? `no scene folders in ${join(dir, 'scenes')}` : 'no project folder'} and no edits`)
+  }
   const cfg = config(env)
   let uploaded = false
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -455,6 +515,7 @@ export async function create(dir, { dryRun = false, env = process.env, log = con
 
 const USAGE = `usage:
   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+  node splice.mjs <deckId> --edits edits.json [--dry-run]
   node splice.mjs --create <projectDir> [--dry-run]`
 
 export async function main(argv) {
@@ -467,6 +528,7 @@ export async function main(argv) {
   try {
     if (isCreate && args.length === 1 && edits === undefined) await create(args[0], { dryRun })
     else if (!isCreate && args.length === 2 && !args.some((a) => a.startsWith('--'))) await update(args[0], args[1], { edits, dryRun })
+    else if (!isCreate && args.length === 1 && edits !== undefined && !args[0].startsWith('--')) await update(args[0], undefined, { edits, dryRun })
     else { console.error(USAGE); return 2 }
     return 0
   } catch (e) {
