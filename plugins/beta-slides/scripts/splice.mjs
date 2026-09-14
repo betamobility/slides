@@ -596,7 +596,9 @@ export async function update(id, dir, { edits: editsFile, title, dryRun = false,
       const res = await harness(deckUrl, { headers: cfg.auth }, ms)
       if (res.status === 404) throw new Refusal(`deck ${id} is not in the store`)
       if (!res.ok) throw await failed(res, `reading deck ${id}`)
-      const etag = res.headers.get('etag')
+      // x-bento-etag first: Cloudflare drops a strong etag from the compressed
+      // HTML a deck read returns, and a write without one is impossible.
+      const etag = res.headers.get('x-bento-etag') || res.headers.get('etag')
       const html = await bodyText(res, 'GET', deckUrl, ms)
       let read
       try { read = readBlock(html) } catch (e) { throw new Refusal(`deck ${id}: ${e.message}`) }

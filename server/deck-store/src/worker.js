@@ -64,6 +64,11 @@ const META_MAX = 512
 // editor compares the generation it booted with against the 412's, and only a
 // match lets a live tab retry. Missing metadata (a deck stored before this) is 0.
 const GEN_HEADER = 'x-bento-service-gen'
+// The ETag again, under a name Cloudflare leaves alone. On the live host the
+// edge drops a strong `etag` from any response it compresses (every deck is
+// HTML, so every deck read lost it), while custom headers pass untouched.
+// Clients read this first and fall back to `etag`.
+const ETAG_HEADER = 'x-bento-etag'
 const genOf = (obj) => {
   const n = Number.parseInt(obj?.customMetadata?.sg ?? '', 10)
   return Number.isFinite(n) && n >= 0 ? n : 0
@@ -426,12 +431,13 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
     })
     if (current) {
       res.headers.set('etag', current.httpEtag)
+      res.headers.set(ETAG_HEADER, current.httpEtag)
       res.headers.set(GEN_HEADER, String(genOf(current)))
     }
     return res
   }
   track(ctx, req, 'deck_save', 'ok')
-  return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [GEN_HEADER]: String(gen) } })
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag, [GEN_HEADER]: String(gen) } })
 }
 
 async function remove(env, who, id) {
@@ -495,7 +501,7 @@ async function putAsset(req, env, id, name) {
   if (bytes.byteLength > ASSET_MAX) return text(413, 'size')
   if (type === 'image/svg+xml') bytes = new TextEncoder().encode(cleanSvg(new TextDecoder().decode(bytes)))
   const stored = await env.DECKS.put(ASSET_PREFIX(id) + name, bytes, { httpMetadata: { contentType: type } })
-  return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag } })
 }
 
 // `no-cache`, not a max-age: a harness re-uploads an asset under the same name
@@ -507,6 +513,7 @@ async function serveAsset(req, env, id, name) {
   const headers = (obj) => ({
     'cache-control': 'private, no-cache',
     etag: obj.httpEtag,
+    [ETAG_HEADER]: obj.httpEtag,
     'x-content-type-options': 'nosniff',
     // Opened directly, an asset is a document on the store's origin; the
     // sandbox gives it an opaque one, so an SVG the strip missed still
@@ -552,6 +559,7 @@ const deckHeaders = (obj) => ({
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
   etag: obj.httpEtag,
+  [ETAG_HEADER]: obj.httpEtag,
   [GEN_HEADER]: String(genOf(obj)),
 })
 

@@ -197,7 +197,7 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
       const w = (await res.json())?.writer
       if (w === 'person' || w === 'service') writer = w
     } catch {} // unreadable: no writer, so the caller latches
-    throw new StoreConflictError({ writer, etag: res.headers?.get('etag') ?? null, gen: genOf(res) })
+    throw new StoreConflictError({ writer, etag: etagOf(res), gen: genOf(res) })
   }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
@@ -238,6 +238,12 @@ function checkVersion(id: string): Promise<void> {
     .catch(() => {})
 }
 
+/** The ETag a response carries. `x-bento-etag` first: Cloudflare drops a
+ *  strong `etag` from compressed responses, and every deck response is HTML. */
+function etagOf(res: Response): string | null {
+  return res.headers?.get('x-bento-etag') || res.headers?.get('etag') || null
+}
+
 /** The x-bento-service-gen a response carries, or null. */
 function genOf(res: Response): number | null {
   const raw = res.headers?.get('x-bento-service-gen')
@@ -247,7 +253,7 @@ function genOf(res: Response): number | null {
 
 /** Keep the ETag and generation a response names, forgetting what it lacks. */
 function adoptVersion(id: string, res: Response): void {
-  const etag = res.headers?.get('etag')
+  const etag = etagOf(res)
   if (etag) versions.set(id, etag)
   else versions.delete(id)
   const gen = etag ? genOf(res) : null
