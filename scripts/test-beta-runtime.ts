@@ -20,7 +20,8 @@
 //      does not flag it and a paste does not drop it.
 //   2. THE SANITISER HOLDS ITS SHAPE. Unknown prop kinds go, `steps` is a
 //      non-negative integer, `url` is https only, `src` and `still` are
-//      `asset:` refs, and a source above RUNTIME_SRC_BUDGET is refused.
+//      `asset:` refs, and a source above RUNTIME_SRC_BUDGET or a still above
+//      RUNTIME_STILL_BUDGET is refused.
 //      A placeholder (`{}` or `{steps:0, props:[]}`) survives, because the
 //      splice tool recognises a slide it may fill by that record (KTD11).
 //   3. PASTE CARRIES ITS BYTES. The scene source is not referenced by any
@@ -175,6 +176,19 @@ console.log('\npaste budget')
     'checkRuntime with the asset table refuses the oversize source directly')
   ok(rt.checkRuntime?.({ src: 'asset:scene-map', steps: 0, props: [] }, { 'scene-map': sceneAsset })?.src === 'asset:scene-map',
     'checkRuntime keeps a source within budget')
+  // the still mirrors the source gate, against its own budget
+  const bigStill = 'data:image/png;base64,' + 'A'.repeat(300 * 1024)
+  ok(rt.checkRuntime?.({ still: 'asset:still-map', steps: 0, props: [] }, { 'still-map': bigStill })?.still === undefined,
+    'checkRuntime with the asset table refuses a still above RUNTIME_STILL_BUDGET')
+  ok(rt.checkRuntime?.({ still: 'asset:still-map', steps: 0, props: [] }, { 'still-map': STILL_PNG })?.still === 'asset:still-map',
+    'checkRuntime keeps a still within budget')
+  ok(rt.checkRuntime?.({ still: 'asset:still-map', steps: 0, props: [] })?.still === 'asset:still-map',
+    'without an asset table the still ref is kept (SLIDE_CHECKS sees no bytes)')
+  const heavy = runtimeDeck()
+  heavy.assets!['still-map'] = bigStill
+  const heavyPaste = parseClip(serializeSlides([heavy.slides[0]], heavy))?.slides?.[0]
+  ok(heavyPaste?.runtime?.still === undefined && heavyPaste?.runtime?.src === 'asset:scene-map',
+    'on paste an oversize still ref is refused and the in-budget source kept')
 }
 
 // ----------------------------------------------------- 5. clipboard transport
@@ -314,10 +328,37 @@ try { rp = await import('../slides/src/runtime-present.ts') } catch (e) { consol
   ok(rp.assetUrl?.('abc123', '../x') === null, 'an illegal asset name gives no url')
 
   // url-override gating (R7, AE7)
-  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: true, blocked: false }) === true, 'an https url loads when online and not blocked')
-  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: false, blocked: false }) === false, 'navigator offline: no frame, the still stays')
-  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: true, blocked: true }) === false, 'the offline switch: no frame')
-  ok(rp.urlFrameAllowed?.('http://example.com/x', { online: true, blocked: false }) === false, 'plain http never loads')
+  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: true }) === true, 'an https url loads when online')
+  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: false }) === false, 'navigator offline: no frame, the still stays')
+  ok(rp.urlFrameAllowed?.('http://example.com/x', { online: true }) === false, 'plain http never loads')
+
+  // the offline switch gates EVERY frame (an inline scene can fetch on its own)
+  const inline = { html: SCENE }
+  const hosted = { url: 'https://example.com/x' }
+  ok(rp.frameAllowed?.(inline, { offline: false, online: true }) === true, 'inline scene, online: frame')
+  ok(rp.frameAllowed?.(inline, { offline: false, online: false }) === true, 'inline scene, navigator offline but switch off: frame (nothing to load)')
+  ok(rp.frameAllowed?.(inline, { offline: true, online: true }) === false, 'inline scene, offline switch on: no frame, the still stays')
+  ok(rp.frameAllowed?.(hosted, { offline: true, online: true }) === false, 'url scene, offline switch on: no frame')
+  ok(rp.frameAllowed?.(hosted, { offline: false, online: true }) === true, 'url scene, online: frame')
+  ok(rp.frameAllowed?.({ url: 'http://example.com/x' }, { offline: false, online: true }) === false, 'url scene over plain http: no frame')
+
+  // Access-gated asset Blobs go to inline scenes only, never to a hosted page
+  ok(rp.sceneGetsAssets?.(inline) === true, 'an inline (srcdoc) scene receives bento:assets')
+  ok(rp.sceneGetsAssets?.(hosted) === false, 'a url-override scene never receives bento:assets')
+
+  // fetchAssets asks the store to revalidate, so a re-uploaded asset is not an hour stale
+  if (rp.fetchAssets) {
+    const seen: Array<{ url: string; init: RequestInit }> = []
+    const fake = async (url: string | URL, init: RequestInit = {}) => {
+      seen.push({ url: String(url), init })
+      return new Response(new Blob(['<svg/>']), { status: 200, headers: { 'content-type': 'image/svg+xml' } })
+    }
+    const got = await rp.fetchAssets('abc123', ['map.svg', '../bad'], fake)
+    ok(seen.length === 1 && seen[0].url === '/d/abc123/assets/map.svg', `only legal names are requested (${seen.map((r) => r.url).join(',')})`)
+    ok(seen[0]?.init.cache === 'no-cache', `the request revalidates (cache: ${seen[0]?.init.cache})`)
+    ok(seen[0]?.init.credentials === 'same-origin' && seen[0]?.init.redirect === 'manual', 'same-origin credentials, manual redirect')
+    ok(got['map.svg'] instanceof Blob, 'the fetched asset comes back as a Blob')
+  } else ok(false, 'fetchAssets is exported')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -34,7 +34,7 @@
 // steps to walk, and arrows there must change slide or the show gets stuck.
 
 import type { BentoDoc, RuntimeSlide } from './model.ts'
-import { netFetch, remoteSrcBlocked } from '../../kernel/src/net.ts'
+import { netFetch, offlineEnabled } from '../../kernel/src/net.ts'
 import { ASSET_NAME, isRuntimeSlide, runtimeSource } from './runtime.ts'
 
 /** A frame that has not fired `load` by then is removed; the still stays. */
@@ -133,9 +133,29 @@ export function assetUrl(storeId: string | null, name: string): string | null {
   return `/d/${storeId}/assets/${name}`
 }
 
-/** R7: a URL override loads only over https, online, and with the offline switch off. */
-export const urlFrameAllowed = (url: string, env: { online: boolean; blocked: boolean }): boolean =>
-  HTTPS.test(url) && env.online && !env.blocked
+/** R7: a URL override loads only over https and online (the offline switch is frameAllowed's). */
+export const urlFrameAllowed = (url: string, env: { online: boolean }): boolean =>
+  HTTPS.test(url) && env.online
+
+/**
+ * Whether any frame mounts. The offline switch refuses inline scenes too: the
+ * sandbox stops a scene reaching this document, not the network, and a scene
+ * is free to fetch, open a socket or send a beacon of its own (kernel net.ts
+ * promises every network touch is blocked). No frame means the still stays
+ * and no steps are counted, as for a frame that never loaded.
+ */
+export function frameAllowed(source: { html?: string; url?: string }, env: { offline: boolean; online: boolean }): boolean {
+  if (env.offline) return false
+  if (source.html != null) return true
+  return typeof source.url === 'string' && urlFrameAllowed(source.url, { online: env.online })
+}
+
+/**
+ * Only an inline (srcdoc) scene, which travelled inside the deck, is handed the
+ * deck's Access-gated asset Blobs. A URL override is someone else's page: it,
+ * or anything it navigates to, could say bento:ready and walk off with them.
+ */
+export const sceneGetsAssets = (source: { html?: string; url?: string }): boolean => source.html != null
 
 // ---- the controller (present.ts) ---------------------------------------------
 
@@ -210,9 +230,9 @@ export function createRuntimeShow(
     const source = runtimeSource(slide, doc)
     const surface = slidesEl.children[idx]?.querySelector<HTMLElement>('.bento-slide')
     if (!source || !surface) return
-    if (source.url && !urlFrameAllowed(source.url, {
+    if (!frameAllowed(source, {
+      offline: offlineEnabled(),
       online: typeof navigator === 'undefined' || navigator.onLine !== false,
-      blocked: remoteSrcBlocked(source.url),
     })) return
 
     const frame = document.createElement('iframe')
@@ -232,10 +252,20 @@ export function createRuntimeShow(
         () => ({ type: 'bento:init', step: cur.step, steps, props: sceneProps(rt), reduceMotion: hooks.reduceMotion() }),
       ),
     }
-    // A failed or hung load leaves the still, never an empty box.
+    // A failed or hung load leaves the still, never an empty box: the frame
+    // stays invisible (it still loads and runs) until 'load', so a slow or
+    // hanging page shows the still rather than a blank rectangle.
+    //
+    // A hosted page that REFUSES framing (X-Frame-Options, CSP
+    // frame-ancestors) still fires 'load', with the browser's error document
+    // inside, and a cross-origin frame gives the shell no reliable way to tell
+    // that apart from a real page. That case is caught at authoring time: the
+    // splice tool checks a URL override's framing headers before it writes the
+    // slide. Do not wait for bento:ready here instead; hosted pages never send it.
     const fail = () => { if (live === cur) teardown() }
     cur.timer = window.setTimeout(fail, LOAD_TIMEOUT_MS)
-    frame.addEventListener('load', () => clearTimeout(cur.timer), { once: true })
+    frame.style.visibility = 'hidden'
+    frame.addEventListener('load', () => { clearTimeout(cur.timer); frame.style.visibility = '' }, { once: true })
     frame.addEventListener('error', fail, { once: true })
     // content before insertion, so the frame navigates once, straight to the scene
     if (source.html != null) frame.srcdoc = source.html
@@ -243,7 +273,7 @@ export function createRuntimeShow(
     surface.appendChild(frame)
     live = cur
 
-    if (storeId && rt.assets?.length) {
+    if (storeId && rt.assets?.length && sceneGetsAssets(source)) {
       void fetchAssets(storeId, rt.assets).then((got) => {
         if (live === cur && Object.keys(got).length) cur.channel.assets(got)
       })
@@ -284,15 +314,22 @@ export function createRuntimeShow(
  * name that fails (missing, signed out, offline) is skipped: the scene gets
  * what arrived and decides how to look without the rest. `redirect: manual`
  * because a signed-out request is redirected to Access's login page, which
- * must not come back as an asset.
+ * must not come back as an asset. `cache: no-cache` revalidates every time
+ * (the store answers 304 on an unchanged ETag), so an asset re-uploaded
+ * against the same name is not served stale from the HTTP cache.
+ * `fetcher` exists for the rig.
  */
-async function fetchAssets(storeId: string, names: string[]): Promise<Record<string, Blob>> {
+export async function fetchAssets(
+  storeId: string,
+  names: string[],
+  fetcher: (url: string, init: RequestInit) => Promise<Response> = netFetch,
+): Promise<Record<string, Blob>> {
   const out: Record<string, Blob> = {}
   await Promise.all(names.map(async (name) => {
     const url = assetUrl(storeId, name)
     if (!url) return
     try {
-      const res = await netFetch(url, { credentials: 'same-origin', redirect: 'manual' })
+      const res = await fetcher(url, { credentials: 'same-origin', redirect: 'manual', cache: 'no-cache' })
       if (!res.ok || /text\/html/i.test(res.headers.get('content-type') ?? '')) return
       out[name] = await res.blob()
     } catch { /* offline switch, network, or Access: the scene runs without it */ }

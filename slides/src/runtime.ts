@@ -16,7 +16,7 @@
 // file for SLIDE_CHECKS, so the checks below cannot borrow its helpers.
 
 import type { BentoDoc, ImageElement, RuntimeProp, RuntimeSlide, Slide, SlideElement } from './model.ts'
-import { defaultImage, RUNTIME_SRC_BUDGET } from './model.ts'
+import { defaultImage, RUNTIME_SRC_BUDGET, RUNTIME_STILL_BUDGET } from './model.ts'
 
 export function isRuntimeSlide(slide: Slide | null | undefined): boolean {
   return !!slide && typeof slide.runtime === 'object' && slide.runtime !== null
@@ -131,7 +131,8 @@ function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | un
  * only names the store would accept.
  *
  * With `assets` (the paste's asset table) a source whose bytes exceed
- * RUNTIME_SRC_BUDGET is refused too; SLIDE_CHECKS runs without it, because a
+ * RUNTIME_SRC_BUDGET is refused too, and a still above RUNTIME_STILL_BUDGET;
+ * SLIDE_CHECKS runs without it, because a
  * check sees one value and the bytes live elsewhere.
  */
 export function checkRuntime(value: unknown, assets?: Record<string, string>): RuntimeSlide | undefined {
@@ -143,7 +144,7 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
   if (src && !(assets && assetBytes(assets[assetKey(src)]) > RUNTIME_SRC_BUDGET)) out.src = src
   const still = assetRef(value.still)
   if (typeof value.url === 'string' && value.url.length <= MAX_URL && HTTPS.test(value.url)) out.url = value.url
-  if (still) out.still = still
+  if (still && !(assets && assetBytes(assets[assetKey(still)]) > RUNTIME_STILL_BUDGET)) out.still = still
 
   const steps = finite(value.steps)
   out.steps = steps !== undefined && Number.isInteger(steps) && steps >= 0 && steps <= MAX_STEPS ? steps : 0
