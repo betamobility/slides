@@ -17,16 +17,26 @@
 //                                  (with NEW_ENABLED) the blank-deck create page
 //   GET    /api/decks              list (metadata only)
 //   POST   /api/decks              create → 201 {id, url}
-//   PUT    /api/decks/:id          replace in place → 200
-//   DELETE /api/decks/:id          owner only → 204
-//   GET    /d/:id                  the stored bytes, streamed, unchanged
+//   PUT    /api/decks/:id          replace in place → 200 + ETag; If-Match
+//                                  honoured when sent (412), never required
+//   DELETE /api/decks/:id          owner only → 204, the deck's assets with it
+//   GET    /d/:id                  the stored bytes, streamed, unchanged, + ETag
+//   HEAD   /d/:id                  the same headers, no body (the editor's boot)
+//   GET    /d/:id/assets/:name     a scene asset, sandboxed
 //   POST   /api/harness/decks      create, for service-token callers
-//   PUT    /api/harness/decks/:id  replace, for service-token callers
+//   GET    /api/harness/decks/:id  read by id + ETag, for service-token callers
+//   PUT    /api/harness/decks/:id  replace; If-Match REQUIRED (428), stale → 412
+//   PUT    /api/harness/decks/:id/assets/:name
+//                                  upload a scene asset, service token only
 //
 // A person (any @betamobility.io identity) may read, list, create and replace
 // anything; only DELETE is the owner's. A service token (Claude from a file
-// harness) may only create and replace, and only on the harness routes, so a
-// leaked token cannot list or read decks.
+// harness) may create, read a deck whose id it already knows, replace
+// conditionally and upload assets, and only on the harness routes. It cannot
+// list, so a leaked token cannot enumerate anyone's work — but a read hands
+// over the whole file, including the deck's live-session owner keys.
+// Plan: docs/plans/2026-09-14-001-feat-runtime-slides-plan.md U1, U2 (KTD5,
+// KTD6).
 //
 // The worker never reads into a document beyond the shape check on write:
 // one #bento-doc block whose JSON parses and is a bento/slides document or a
@@ -328,32 +338,147 @@ async function createBlank(req, env, ctx, who) {
   return new Response(null, { status: 302, headers: { location: url, 'cache-control': 'no-store' } })
 }
 
-async function replace(req, env, ctx, who, id) {
+/**
+ * The version a caller read, from `If-Match`, as R2 wants it: the bare etag.
+ * `httpEtag` is the quoted form a client echoes back; a weak `W/` prefix is
+ * tolerated because some HTTP clients add one. `*` means "any version", which
+ * is the same as no condition. Returns '' when there is no usable header.
+ */
+function ifMatchOf(req) {
+  const raw = (req.headers.get('if-match') || '').trim()
+  if (!raw || raw === '*') return ''
+  return raw.replace(/^W\//, '').replace(/^"(.*)"$/, '$1')
+}
+
+/**
+ * `put` with an etag precondition, reporting a failed one as `null`.
+ * Workers' R2 resolves `null` when `onlyIf` fails; Miniflare has been seen to
+ * throw a PreconditionFailed instead. Both mean the same thing here, so both
+ * collapse into the one answer the route gives: 412.
+ */
+async function putIfMatch(env, key, bytes, opts, etag) {
+  try {
+    return await env.DECKS.put(key, bytes, etag ? { ...opts, onlyIf: { etagMatches: etag } } : opts)
+  } catch (err) {
+    if (etag && /precondition/i.test(`${err?.name} ${err?.message}`)) return null
+    throw err
+  }
+}
+
+// KTD5. `requireMatch` is the harness route's rule: a replace from a file
+// harness must say which version it read (428 otherwise). The people route
+// honours If-Match when present but cannot require it, because shells already
+// on disk save without one and must keep working.
+async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
   const existing = await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
+  const etag = ifMatchOf(req)
+  if (requireMatch && !etag) {
+    track(ctx, req, 'deck_save', 'rejected')
+    return json(428, { error: 'if-match-required', message: 'Read the deck first (GET /api/harness/decks/:id) and send its ETag as If-Match.' })
+  }
   const bytes = await readBody(req)
   if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
-  await env.DECKS.put(KEY(id), bytes, {
+  const stored = await putIfMatch(env, KEY(id), bytes, {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
       owner: prev.owner || encMeta(who.id), writer: encMeta(who.id),
       created: prev.created || new Date().toISOString(), updated: new Date().toISOString(),
     },
-  })
+  }, etag)
+  if (!stored) {
+    track(ctx, req, 'deck_save', 'conflict')
+    return json(412, { error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.' })
+  }
   track(ctx, req, 'deck_save', 'ok')
-  return empty(200)
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })
 }
 
 async function remove(env, who, id) {
   const existing = await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
   if (decMeta(existing.customMetadata?.owner) !== who.id) return empty(403)
+  // Assets first: a failure part-way leaves a deck with fewer assets (its
+  // scenes show their stills), never orphaned assets nothing can reach.
+  let cursor
+  do {
+    const page = await env.DECKS.list({ prefix: ASSET_PREFIX(id), cursor })
+    if (page.objects.length) await env.DECKS.delete(page.objects.map((o) => o.key))
+    cursor = page.truncated ? page.cursor : undefined
+  } while (cursor)
   await env.DECKS.delete(KEY(id))
   return empty(204)
+}
+
+// --- scene assets (KTD6) -------------------------------------------------------
+//
+// Heavy files a runtime slide's scene needs (a 7 MB map SVG, a CSV) live
+// beside the deck, not inside it. A harness uploads them; the shell on the
+// store origin fetches them with the person's Access cookie and hands the
+// bytes to the sandboxed scene, which never makes a credentialed request.
+// They are keyed by deck id, so a duplicated deck has none until re-uploaded.
+
+const ASSET_MAX = 16 * 1024 * 1024
+const ASSET_PREFIX = (id) => `assets/${id}/`
+const ASSET_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
+const ASSET_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'application/json', 'text/csv'])
+
+/**
+ * Strip what makes an SVG active: script elements, foreignObject (which
+ * embeds arbitrary HTML) and on* handler attributes. A regex pass, because a
+ * worker has no DOM parser; it is a second line behind the GET's
+ * `content-security-policy: sandbox`, not the only one. Repeated until stable
+ * so a split tag (`<scr<script></script>ipt>`) cannot reassemble itself.
+ */
+function cleanSvg(src) {
+  let prev
+  let out = src
+  do {
+    prev = out
+    out = out
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<foreignObject\b[^>]*>[\s\S]*?<\/foreignObject\s*>/gi, '')
+      .replace(/([\s/])on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '$1')
+  } while (out !== prev)
+  // Whatever tags are left unpaired (self-closing, or a stray close).
+  return out.replace(/<\/?(?:script|foreignObject)\b[^>]*>/gi, '')
+}
+
+async function putAsset(req, env, id, name) {
+  if (!ASSET_NAME_RE.test(name)) return text(400, 'name')
+  if (!(await env.DECKS.head(KEY(id)))) return empty(404)
+  const type = (req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+  if (!ASSET_TYPES.has(type)) return text(415, 'type')
+  const declared = Number(req.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > ASSET_MAX) return text(413, 'size')
+  let bytes = await req.arrayBuffer()
+  if (bytes.byteLength > ASSET_MAX) return text(413, 'size')
+  if (type === 'image/svg+xml') bytes = new TextEncoder().encode(cleanSvg(new TextDecoder().decode(bytes)))
+  const stored = await env.DECKS.put(ASSET_PREFIX(id) + name, bytes, { httpMetadata: { contentType: type } })
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag } })
+}
+
+async function serveAsset(env, id, name) {
+  if (!ASSET_NAME_RE.test(name)) return empty(404)
+  const obj = await env.DECKS.get(ASSET_PREFIX(id) + name)
+  if (!obj) return empty(404)
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      'content-type': obj.httpMetadata?.contentType || 'application/octet-stream',
+      'content-length': String(obj.size),
+      'cache-control': 'private, max-age=3600',
+      'x-content-type-options': 'nosniff',
+      // Opened directly, an asset is a document on the store's origin; the
+      // sandbox gives it an opaque one, so an SVG the strip missed still
+      // cannot reach the deck API with the person's cookie.
+      'content-security-policy': 'sandbox',
+    },
+  })
 }
 
 const CSP = [
@@ -370,20 +495,39 @@ const CSP = [
   "base-uri 'self'",
 ].join('; ')
 
+const deckHeaders = (obj) => ({
+  'content-type': 'text/html; charset=utf-8',
+  'content-length': String(obj.size),
+  'cache-control': 'private, no-store',
+  'x-content-type-options': 'nosniff',
+  etag: obj.httpEtag,
+})
+
 async function serve(env, ctx, req, id) {
   const obj = await env.DECKS.get(KEY(id))
   if (!obj) { track(ctx, req, 'deck_open', 'missing'); return empty(404) }
   track(ctx, req, 'deck_open', 'ok')
   return new Response(obj.body, {
     status: 200,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'content-length': String(obj.size),
-      'cache-control': 'private, no-store',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy-report-only': CSP,
-    },
+    headers: { ...deckHeaders(obj), 'content-security-policy-report-only': CSP },
   })
+}
+
+// `HEAD /d/:id` is how the editor learns the version it is showing (KTD12).
+// A head, not a get, so no body is fetched; and not tracked, or every open
+// would count twice.
+async function serveHead(env, id) {
+  const obj = await env.DECKS.head(KEY(id))
+  if (!obj) return empty(404)
+  return new Response(null, { status: 200, headers: { ...deckHeaders(obj), 'content-security-policy-report-only': CSP } })
+}
+
+// `GET /api/harness/decks/:id` (R10). Not owner-scoped, and not tracked: it
+// is a harness's read-before-replace, not a person opening a deck.
+async function harnessRead(env, id) {
+  const obj = await env.DECKS.get(KEY(id))
+  if (!obj) return empty(404)
+  return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
 }
 
 // --- router --------------------------------------------------------------------
@@ -428,7 +572,14 @@ export default {
     // Harness routes: same handlers, open to any verified identity.
     if (path === '/api/harness/decks' && m === 'POST') return create(req, env, ctx, who)
     const hm = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
-    if (hm && m === 'PUT') return replace(req, env, ctx, who, hm[1])
+    if (hm && m === 'GET') return harnessRead(env, hm[1])
+    if (hm && m === 'PUT') return replace(req, env, ctx, who, hm[1], { requireMatch: true })
+    // The asset upload is the one harness route a person may not use (U2): a
+    // person's scenes arrive through the splice tool, never a browser, and an
+    // upload route open to every signed-in page is a way to plant files on
+    // the store's origin. `(.+)` so a bad name is a 400, not a 404.
+    const am = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
+    if (am && m === 'PUT') return who.kind === 'service' ? putAsset(req, env, am[1], am[2]) : empty(403)
 
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
@@ -453,6 +604,9 @@ export default {
     if (dm && m === 'DELETE') return remove(env, who, dm[1])
     const sm = /^\/d\/([0-9A-Za-z]{10})$/.exec(path)
     if (sm && m === 'GET') return serve(env, ctx, req, sm[1])
+    if (sm && m === 'HEAD') return serveHead(env, sm[1])
+    const sa = /^\/d\/([0-9A-Za-z]{10})\/assets\/([^/]+)$/.exec(path)
+    if (sa && m === 'GET') return serveAsset(env, sa[1], sa[2])
 
     return empty(404)
   },

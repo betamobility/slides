@@ -118,18 +118,33 @@ editing an existing deck, never regenerate `docId`.
              --data-binary "@<Topic>.bento.html" \
              https://slides.betamobility.ai/api/harness/decks
 
-   # replace an existing deck in place → 200
+   # replace an existing deck: read it first and keep its ETag …
+   curl -fsS -D headers.txt -o "<Topic>.bento.html" \
+             -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+             https://slides.betamobility.ai/api/harness/decks/<id>
+   ETAG=$(awk 'tolower($1)=="etag:" {print $2}' headers.txt | tr -d '\r')
+
+   # … edit that file, then write back only if nobody saved in between → 200
    curl -fsS -X PUT -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+             -H "If-Match: $ETAG" \
              -H 'content-type: text/html; charset=utf-8' \
              --data-binary "@<Topic>.bento.html" \
              https://slides.betamobility.ai/api/harness/decks/<id>
    ```
 
-   Give the user the `url` from the reply. The token may only create and
-   replace on these two routes — it cannot list or read decks, so a leaked
+   The replace refuses without `If-Match` (`428`) and when the deck changed
+   since your read (`412`, usually because someone has it open and saved).
+   On a `412`, read again and re-apply your change to the fresh file; never
+   write your old copy over theirs.
+
+   Give the user the `url` from the reply. The token may create, read a deck
+   whose id it already has, and replace it; it cannot list decks, so a leaked
    token cannot enumerate anyone's work, and there is no harness way to
-   discover an id you were not given. Anyone signed in at
+   discover an id you were not given. A read hands over the whole file,
+   including the deck's live-session owner keys, so treat a downloaded deck
+   like the token itself. Anyone signed in at
    `https://slides.betamobility.ai/` sees the deck in the list and can edit
    it; the link is the invitation.
 

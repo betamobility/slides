@@ -228,6 +228,8 @@ export async function run(Miniflare) {
       ['GET', '/'], ['GET', '/new'], ['GET', '/api/decks'], ['POST', '/api/decks', minimal],
       ['PUT', '/api/decks/0123456789', minimal], ['DELETE', '/api/decks/0123456789'], ['GET', '/d/0123456789'],
       ['POST', '/api/harness/decks', minimal], ['PUT', '/api/harness/decks/0123456789', minimal], ['GET', '/nowhere'],
+      ['GET', '/api/harness/decks/0123456789'], ['HEAD', '/d/0123456789'],
+      ['PUT', '/api/harness/decks/0123456789/assets/map.png', 'x'], ['GET', '/d/0123456789/assets/map.png'],
       // A prefix-boundary match, not a substring one: these start like an
       // allowlisted prefix and are gated all the same (KTD0).
       ['GET', '/releases-secret'], ['GET', '/releases-secret/manifest.json'], ['GET', '/templates-private/x'],
@@ -515,6 +517,8 @@ export async function run(Miniflare) {
     for (const [m, p, b] of [
       ['GET', '/api/decks'], ['GET', `/d/${second.id}`], ['DELETE', `/api/decks/${second.id}`],
       ['POST', '/api/decks', minimal], ['PUT', `/api/decks/${second.id}`, minimal], ['GET', '/'], ['GET', '/new'],
+      // A read by id is the harness route's, never the people's (R10).
+      ['HEAD', `/d/${second.id}`], ['GET', `/d/${second.id}/assets/map.png`],
     ]) {
       r = await call(m, p, { as: 'service', body: b })
       eq(r.status, 403, `service token on ${m} ${p} is 403`)
@@ -522,7 +526,8 @@ export async function run(Miniflare) {
     r = await call('POST', '/api/harness/decks', { as: 'service', body: deck(slidesDoc('From a harness')) })
     eq(r.status, 201, 'service token on POST /api/harness/decks is 201')
     const harnessId = (await r.json()).id
-    r = await call('PUT', `/api/harness/decks/${harnessId}`, { as: 'service', body: deck(slidesDoc('From a harness, again')) })
+    r = await call('GET', `/api/harness/decks/${harnessId}`, { as: 'service' })
+    r = await call('PUT', `/api/harness/decks/${harnessId}`, { as: 'service', body: deck(slidesDoc('From a harness, again')), headers: { 'if-match': r.headers.get('etag') } })
     eq(r.status, 200, 'service token on PUT /api/harness/decks/:id is 200')
     r = await call('GET', '/api/decks', { as: 'alice' })
     const hrow = (await r.json()).decks.find((d) => d.id === harnessId)
@@ -530,8 +535,157 @@ export async function run(Miniflare) {
     eq(hrow?.writer, 'deadbeef.access', 'and as writer')
     r = await call('POST', '/api/harness/decks', { as: await sign(k1, 'k1', service({ common_name: '' })) })
     eq(r.status, 401, 'a service assertion with neither email nor common_name is 401')
-    r = await call('PUT', `/api/harness/decks/${harnessId}`, { as: 'alice', body: deck(slidesDoc('Human on harness')) })
-    eq(r.status, 200, 'a human identity may use the harness routes (same handlers)')
+    r = await call('GET', `/api/harness/decks/${harnessId}`, { as: 'alice' })
+    r = await call('PUT', `/api/harness/decks/${harnessId}`, { as: 'alice', body: deck(slidesDoc('Human on harness')), headers: { 'if-match': r.headers.get('etag') } })
+    eq(r.status, 200, 'a human identity may use the harness deck routes (same handlers)')
+
+    // ------------------------------- harness read, conditional replace (U1)
+    // Plan docs/plans/2026-09-14-001-feat-runtime-slides-plan.md, KTD5. The
+    // version is R2's httpEtag, never a field in customMetadata.
+    console.log('\nharness read by id and conditional replace (U1, KTD5)')
+    const versionA = deck(slidesDoc('Harness read, version A'))
+    r = await call('POST', '/api/harness/decks', { as: 'service', body: versionA })
+    const readId = (await r.json()).id
+    r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
+    eq(r.status, 200, 'service token GET /api/harness/decks/:id is 200')
+    ok(Buffer.compare(await bodyOf(r), Buffer.from(versionA)) === 0, 'the harness read returns the stored bytes')
+    eq(r.headers.get('content-type'), 'text/html; charset=utf-8', 'with the deck content type')
+    eq(r.headers.get('cache-control'), 'private, no-store', 'and private, no-store')
+    const etagA = r.headers.get('etag')
+    ok(/^"[^"]+"$/.test(etagA || ''), `and a quoted ETag (${etagA})`)
+    r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
+    eq(r.headers.get('etag'), etagA, 'a second read returns the same ETag')
+    r = await call('GET', '/api/harness/decks/zzzzzzzzzz', { as: 'service' })
+    eq(r.status, 404, 'a harness read of an unknown id is 404')
+    r = await call('GET', `/api/harness/decks/${second.id}`, { as: 'service' })
+    eq(r.status, 200, 'a service token can read a deck a person created (read is not owner-scoped)')
+
+    // AE2: Claude read A, a person saved B, Claude writes based on A.
+    const versionB = deck(slidesDoc('Harness read, version B from a person'))
+    r = await call('PUT', `/api/decks/${readId}`, { as: 'alice', body: versionB, headers: { 'if-match': etagA } })
+    eq(r.status, 200, 'a person PUT with the current If-Match is 200')
+    const etagB = r.headers.get('etag')
+    ok(!!etagB && etagB !== etagA, `and answers the new ETag (${etagB})`)
+    r = await call('PUT', `/api/harness/decks/${readId}`, { as: 'service', body: deck(slidesDoc('Claude, based on A')), headers: { 'if-match': etagA } })
+    eq(r.status, 412, 'a harness PUT with a stale If-Match is 412 (AE2)')
+    ok(/re-read/i.test(await r.text()), 'the 412 tells the caller to re-read')
+    r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
+    ok(Buffer.compare(await bodyOf(r), Buffer.from(versionB)) === 0, 'the refused PUT left version B stored, and the next read returns it')
+    eq(r.headers.get('etag'), etagB, 'with version B\'s ETag')
+    r = await call('PUT', `/api/harness/decks/${readId}`, { as: 'service', body: deck(slidesDoc('No If-Match')) })
+    eq(r.status, 428, 'a harness PUT without If-Match is 428')
+    r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
+    eq(r.headers.get('etag'), etagB, 'the 428 wrote nothing')
+    const versionC = deck(slidesDoc('Harness read, version C from Claude'))
+    r = await call('PUT', `/api/harness/decks/${readId}`, { as: 'service', body: versionC, headers: { 'if-match': etagB } })
+    eq(r.status, 200, 'a harness PUT with the current If-Match is 200')
+    const etagC = r.headers.get('etag')
+    ok(!!etagC && etagC !== etagB, 'and answers the new ETag')
+    r = await call('GET', `/api/harness/decks/${readId}`, { as: 'service' })
+    ok(Buffer.compare(await bodyOf(r), Buffer.from(versionC)) === 0, 'the stored bytes changed')
+    eq(r.headers.get('etag'), etagC, 'and the read carries the ETag the PUT answered')
+
+    // The people route: If-Match honoured, never required (shells on disk).
+    const versionD = deck(slidesDoc('Harness read, version D from an old shell'))
+    r = await call('PUT', `/api/decks/${readId}`, { as: 'bob', body: versionD })
+    eq(r.status, 200, 'a person PUT without If-Match is still 200')
+    const etagD = r.headers.get('etag')
+    ok(!!etagD && etagD !== etagC, 'and answers the new ETag')
+    r = await call('PUT', `/api/decks/${readId}`, { as: 'alice', body: deck(slidesDoc('Stale editor')), headers: { 'if-match': etagC } })
+    eq(r.status, 412, 'a person PUT with a stale If-Match is 412 (AE11 at the store)')
+    r = await call('GET', `/d/${readId}`, { as: 'alice' })
+    ok(Buffer.compare(await bodyOf(r), Buffer.from(versionD)) === 0, 'the refused person PUT left the stored bytes untouched')
+    eq(r.headers.get('etag'), etagD, 'GET /d/:id carries the ETag')
+
+    // Shape validation answers before any precondition.
+    r = await call('PUT', `/api/harness/decks/${readId}`, { as: 'service', body: 'no doc block here', headers: { 'if-match': etagA } })
+    eq(r.status, 400, 'a harness PUT failing the shape check is 400 even with a stale If-Match')
+    r = await call('PUT', `/api/decks/${readId}`, { as: 'alice', body: 'no doc block here', headers: { 'if-match': etagA } })
+    eq(r.status, 400, 'a person PUT failing the shape check is 400 even with a stale If-Match')
+
+    // HEAD /d/:id is the editor's boot call (KTD12): headers, no body, no event.
+    await waitFor(() => false, 150)
+    const eventsBeforeHead = events.length
+    r = await call('HEAD', `/d/${readId}`, { as: 'alice' })
+    eq(r.status, 200, 'HEAD /d/:id is 200')
+    eq(r.headers.get('etag'), etagD, 'HEAD carries the same ETag as GET')
+    eq(r.headers.get('content-type'), 'text/html; charset=utf-8', 'and the same content type')
+    eq((await bodyOf(r)).length, 0, 'HEAD has no body')
+    r = await call('HEAD', '/d/zzzzzzzzzz', { as: 'alice' })
+    eq(r.status, 404, 'HEAD of an unknown id is 404')
+    await waitFor(() => false, 150)
+    eq(events.length, eventsBeforeHead, 'HEAD sends no analytics event')
+
+    // ------------------------------------------------ scene assets (U2)
+    console.log('\nscene assets: harness upload, people read (U2, KTD6)')
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('fake png body')])
+    const assetPath = (deckId, name) => `/api/harness/decks/${deckId}/assets/${name}`
+    r = await call('PUT', assetPath(readId, 'map.png'), { as: 'service', body: png, headers: { 'content-type': 'image/png' } })
+    eq(r.status, 200, 'service token PUT of a PNG asset is 200')
+    r = await call('GET', `/d/${readId}/assets/map.png`, { as: 'bob' })
+    eq(r.status, 200, 'a person GET of the asset is 200')
+    ok(Buffer.compare(await bodyOf(r), png) === 0, 'the asset bytes round-trip')
+    eq(r.headers.get('content-type'), 'image/png', 'with the stored content type')
+    eq(r.headers.get('cache-control'), 'private, max-age=3600', 'cache-control is private, max-age=3600')
+    eq(r.headers.get('x-content-type-options'), 'nosniff', 'x-content-type-options is nosniff')
+    eq(r.headers.get('content-security-policy'), 'sandbox', 'content-security-policy is sandbox')
+    r = await call('GET', `/d/${readId}/assets/nothere.png`, { as: 'bob' })
+    eq(r.status, 404, 'an unknown asset is 404')
+
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)">' +
+      '<script type="text/javascript">alert(2)</script><SCRIPT>alert(3)</SCRIPT>' +
+      '<foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">x</div></foreignObject>' +
+      '<rect width="10" height="10" fill="red" onclick=\'alert(4)\' onmouseover=alert(5) /><g/onfocus="alert(6)"></g>' +
+      '<scr<script></script>ipt>alert(7)</script></svg>'
+    r = await call('PUT', assetPath(readId, 'scene.svg'), { as: 'service', body: svg, headers: { 'content-type': 'image/svg+xml; charset=utf-8' } })
+    eq(r.status, 200, 'service token PUT of an SVG asset is 200')
+    r = await call('GET', `/d/${readId}/assets/scene.svg`, { as: 'alice' })
+    const cleaned = await r.text()
+    eq(r.headers.get('content-type'), 'image/svg+xml', 'the SVG serves as image/svg+xml')
+    ok(!/<script/i.test(cleaned), 'the stored SVG carries no <script>')
+    ok(!/foreignObject/i.test(cleaned), 'nor a foreignObject')
+    ok(!/\son[a-z]+\s*=/i.test(cleaned), 'nor an on* handler attribute')
+    ok(!/alert/.test(cleaned), 'and nothing of what they carried')
+    ok(/<rect width="10" height="10" fill="red"/.test(cleaned) && /viewBox="0 0 10 10"/.test(cleaned), 'the drawing itself survives')
+
+    for (const [name, why] of [['dir%2Fmap.png', 'an encoded slash'], ['dir/map.png', 'a slash'], ['a'.repeat(81), 'over 80 chars'], ['.hidden', 'a leading dot']]) {
+      r = await call('PUT', assetPath(readId, name), { as: 'service', body: png, headers: { 'content-type': 'image/png' } })
+      eq(r.status, 400, `an asset name with ${why} is 400`)
+    }
+    r = await call('PUT', assetPath(readId, 'a'.repeat(80)), { as: 'service', body: png, headers: { 'content-type': 'image/png' } })
+    eq(r.status, 200, 'an 80-char asset name is fine')
+    r = await call('PUT', assetPath('zzzzzzzzzz', 'map.png'), { as: 'service', body: png, headers: { 'content-type': 'image/png' } })
+    eq(r.status, 404, 'an asset for an unknown deck is 404')
+    for (const type of ['text/html', 'application/octet-stream', 'image/svg']) {
+      r = await call('PUT', assetPath(readId, 'x.bin'), { as: 'service', body: png, headers: { 'content-type': type } })
+      eq(r.status, 415, `an asset typed ${type} is 415`)
+    }
+    for (const type of ['image/jpeg', 'image/webp', 'application/json', 'text/csv; charset=utf-8']) {
+      r = await call('PUT', assetPath(readId, 'ok.dat'), { as: 'service', body: 'x', headers: { 'content-type': type } })
+      eq(r.status, 200, `an asset typed ${type} is accepted`)
+    }
+    r = await call('PUT', assetPath(readId, 'huge.png'), { as: 'service', body: Buffer.alloc(16 * 1024 * 1024 + 1), headers: { 'content-type': 'image/png' } })
+    eq(r.status, 413, 'a 16 MB + 1 byte asset is 413')
+    r = await call('GET', `/d/${readId}/assets/huge.png`, { as: 'alice' })
+    eq(r.status, 404, 'and nothing was stored')
+    r = await call('PUT', assetPath(readId, 'map.png'), { as: 'alice', body: png, headers: { 'content-type': 'image/png' } })
+    eq(r.status, 403, 'a person cannot PUT to the harness asset route')
+
+    // DELETE cascades: the deck's assets go with it, another deck's stay.
+    r = await call('POST', '/api/decks', { as: 'alice', body: deck(slidesDoc('Deck with assets')) })
+    const doomed = (await r.json()).id
+    for (const name of ['one.png', 'two.png']) {
+      r = await call('PUT', assetPath(doomed, name), { as: 'service', body: png, headers: { 'content-type': 'image/png' } })
+      eq(r.status, 200, `asset ${name} uploaded for the deck about to be deleted`)
+    }
+    r = await call('DELETE', `/api/decks/${doomed}`, { as: 'alice' })
+    eq(r.status, 204, 'the owner deletes the deck')
+    for (const name of ['one.png', 'two.png']) {
+      r = await call('GET', `/d/${doomed}/assets/${name}`, { as: 'alice' })
+      eq(r.status, 404, `deleting the deck removed asset ${name}`)
+    }
+    r = await call('GET', `/d/${readId}/assets/map.png`, { as: 'alice' })
+    eq(r.status, 200, 'another deck\'s assets are untouched')
 
     // ----------------------------------------------------------- /new page
     console.log('\nhandoff page')
