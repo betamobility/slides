@@ -25,7 +25,7 @@ execution: code
 
 ## Product Contract
 
-**Product Contract preservation:** changed, additively: R19 (retry cap) and AE8 to AE10 (splice integrity) added from flow analysis; R9 sharpened to say the still is always inline. No R-ID was removed or reworded otherwise.
+**Product Contract preservation:** changed, additively: R19 (retry cap) and AE8 to AE10 (splice integrity) added from flow analysis; R9 sharpened to say the still is always inline. After document review, on Johan's decisions of 2026-09-14: R20 (conditional editor save), R21 (create through the splice tool), R22 (separate Cowork token) and AE11 added; R7 and R9 gained their stated limitations; the editor-save deferral was removed from Scope Boundaries. No R-ID was removed.
 
 ### Summary
 
@@ -49,6 +49,9 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 - **Claude produces the still when it writes the slide.** The app never captures a sandboxed frame; the still is always current with the code.
 - **Scenes are self-contained.** Each carries the CSS, JS and data it needs. A shared per-deck runtime (the atlas deck's single 44 KB script and 15 KB stylesheet) is deferred.
 - **Heavy assets are referenced, not inlined.** A per-scene weight budget keeps the deck small; a 7 MB map lives in the deck store's asset route or at a URL and needs a network.
+- **Both write paths check the version.** Claude's replace and a person's editor save are each refused when the deck changed since that writer last saw it; nobody overwrites blind (Johan, 2026-09-14).
+- **The splice tool is the only documented way Claude changes an existing deck.** The bare replace recipe leaves the skill; creating a deck also goes through the tool.
+- **Cowork gets its own service token.** It can be revoked without touching local Claude Code runs (Johan, 2026-09-14).
 - **Authoring is scene files plus a splice step.** Each scene is a small HTML file next to its still in a project folder, previewable in a browser; a publish step reads the deck, swaps scenes in by slide id and writes back. Johan's "split the file", built on the read-then-replace store routes.
 
 ### Actors
@@ -68,9 +71,9 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 - R4. A scene may declare steps; the arrow keys advance through the steps before leaving the slide, and step backwards before returning to the previous slide.
 - R5. A scene may declare named properties (a title, a number, a colour) with default values; the editor shows them in the slide panel and a presenter can change them; the scene receives the current values.
 - R6. The editor shows a runtime slide as its still, with reorder, delete, duplicate, speaker notes and the declared properties; scene code is not editable in the UI.
-- R7. A runtime slide with the URL override shows its still when offline or when the page fails to load.
+- R7. A runtime slide with the URL override shows its still when offline or when the page fails to load; keys pressed inside a hosted page do not drive the show, and the presenter clicks outside the frame to regain control.
 - R8. A deck opened in an older shell that does not know the slide kind shows the still and nothing breaks.
-- R9. A scene has a weight budget; the still is always inline; the skill and the splice step refuse to inline scene source above the budget and direct heavy assets to the deck store's asset route or a URL.
+- R9. A scene has a weight budget; the still is always inline; the skill and the splice step refuse to inline scene source above the budget and direct heavy assets to the deck store's asset route or a URL. Referenced assets load only when the deck is opened from the store by a signed-in person; a downloaded copy shows the still for those scenes.
 
 **Round trip: a Claude-made deck stays the deck**
 
@@ -80,13 +83,16 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 - R13. Claude may change the content of native elements by element id (text, image, chart data, table cells) and never their position, size or rotation.
 - R14. Claude replaces a runtime slide wholesale (source, still, declared properties and their defaults); values a presenter set in the UI do not survive the replace.
 - R15. The `beta-slides` skill and `agents.md` document the ownership rule, the read-then-replace workflow, animated SVG with keyframes as a first-class option, the still as a placeholder rather than a screenshot, and the weight budget.
-- R19. After a refused write the splice step re-reads and re-applies at most three times, re-deriving its changes against each fresh read, then stops and reports the conflict.
+- R19. After a refused write the splice step re-reads and re-applies at most three times, re-deriving its changes against each fresh read, then stops and reports the conflict, saying the owner probably has the deck open.
+- R20. An editor save to the store is refused when the deck changed in the store since the editor loaded or last saved it; the person sees that the deck changed and must reload, and their unsaved edits stay in the tab.
 
 **Scene authoring**
 
 - R16. A scene is a small HTML file in a project folder next to its still and any referenced assets, previewable on its own in a browser.
 - R17. A splice step reads the deck, replaces the runtime slides whose ids match scene files, leaves every other slide untouched, and writes the deck back conditionally.
 - R18. The splice step works from Claude Code and from Cowork.
+- R21. The splice step can also create a new deck from a project folder (native slides plus scenes) and return its link, so creating and updating use one tool.
+- R22. Cowork runs the splice step with its own service token, revocable without affecting local Claude Code runs.
 
 ### Key Flows
 
@@ -128,6 +134,7 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 - AE8. **Covers R17.** Given a scene folder names a slide id that is not in the deck, when the splice runs, then it writes nothing and lists the missing id.
 - AE9. **Covers R17.** Given two scene folders name the same slide id, when the splice runs, then it writes nothing and names the collision.
 - AE10. **Covers R17, R13.** Given a scene folder names the id of a native slide, when the splice runs, then it writes nothing and refuses to convert the slide.
+- AE11. **Covers R20, F2.** Given Robert has the deck open and Claude replaced it in the store, when Robert's editor next saves, then the save is refused, Robert sees that the deck changed, and Claude's change is still in the store.
 
 ### Success Criteria
 
@@ -143,7 +150,7 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 - A shared per-deck runtime (common script, stylesheet and data across scenes).
 - Editing scene code inside the bento UI.
 - Merging presenter-set property values with Claude's replace.
-- A conditional save for a person's own editor save; in v1 the editor's save stays an unconditional overwrite.
+- Merging a refused editor save with the store's newer version; in v1 the person reloads.
 - Telling open collaborators that Claude replaced the deck in the store; a deck that is live-shared at the moment of a replace is unsupported in v1.
 - Runtime slides as interactive states (`stateOf`), or steps that jump to a state slide.
 
@@ -187,15 +194,17 @@ Every external "Claude + HTML slides" workflow surveyed converges on one self-co
 
 - **KTD1. The still is an ordinary full-bleed `image` element in `slide.elements`; the runtime fields sit beside it on the slide.** Old shells paint only `elements`, so a runtime slide with an empty element list would render blank (`render.ts renderSlide` loops elements; `docs/PLATFORM.md` §3 preserves unknown fields but does not render them). With the still as the one element, R8 holds with zero code in old shells, thumbnails and print need nothing new, and the first-page preview's image tiers apply unchanged. New shells replace the image with the frame in present mode only.
 - **KTD2. Runtime fields live in one optional `slide.runtime` object; source and still are `asset:` refs.** Shape (directional): `{ src: 'asset:<key>' | undefined, url?: string, still: 'asset:<key>', steps: number, props: [{ key, label, kind: 'text'|'number'|'color', default }], values?: Record<key, value> }`. `asset:` refs reuse `internAsset` dedupe, `sanitizeAssets` limits and clipboard round-trip. Claude's replace writes the whole `runtime` object, so `values` (presenter-set) reset, which is R14. Adding the field is the three-place format change: `model.ts` `Slide`, regenerate `slides/src/modelkeys.generated.ts`, add `SLIDE_CHECKS` in `slides/src/untrusted.ts`.
-- **KTD3. Steps, properties, reduced motion and assets cross the frame boundary by `postMessage`; the frame's content is set on slide enter and cleared on exit.** Keys never cross a sandboxed frame, and `viewDistance: 2` mounts neighbours, so `srcdoc`/`src` are set in the `slidechanged` handler beside `startMediaIn` and cleared beside `pauseMediaIn`, never at render time. Messages (directional): shell to scene `bento:init {step, steps, props, reduceMotion}`, `bento:step {index}`, `bento:props {values}`, `bento:motion {reduce}`, `bento:assets {name: Blob}`; scene to shell `bento:ready`, `bento:navigate {dir}` (a scene may hand an arrow back to the shell). The shell checks `ev.source === frame.contentWindow`.
-- **KTD4. Steps are counted by the shell from the declaration, not discovered by running the scene.** Step state lives in `present.ts goNext/goPrev` beside the `stateOf` logic: forward entry lands on step 0, backward entry on the last step, swipe and speaker-view keys behave like the arrows, a thumbnail-rail click resets to step 0. The speaker view's next-slide preview shows the still. A runtime slide cannot be a `stateOf` state in v1.
-- **KTD5. Conditional replace uses R2's `httpEtag`: harness GET returns `ETag`, harness PUT requires `If-Match` and calls `put` with `onlyIf: { etagMatches }`, answering 412 on mismatch and 428 when `If-Match` is absent.** Versions never go into `customMetadata` (2 KB budget). The people routes (`PUT /api/decks/:id`) stay unconditional in v1. A human save changes the etag, so any concurrent save forces Claude to re-read; that is accepted over inventing a content-only version.
-- **KTD6. Heavy scene assets go to a new Access-gated asset route on the deck store, and the shell fetches them and hands the bytes to the scene.** `PUT /api/harness/decks/:id/assets/:name` (service token, 16 MB cap) stores under `assets/<deckId>/<name>` in `beta-decks`; `GET /d/:id/assets/:name` serves them to people. The scene declares `assets: [names]` in its manifest; on slide enter the shell fetches each (same origin, carries the Access cookie), then posts them as Blobs (`bento:assets`). The sandboxed frame never makes a credentialed request, which sidesteps the cookie question. Offline, the fetch fails and the still stays.
+- **KTD3. Steps, properties, reduced motion and assets cross the frame boundary by `postMessage`; the frame's content is set on slide enter and cleared on exit.** Keys never cross a sandboxed frame, and `viewDistance: 2` mounts neighbours, so `srcdoc`/`src` are set at both call sites where `startMediaIn` runs (the `slidechanged` handler and the init block for the opening slide, which never gets a `slidechanged`) and cleared beside `pauseMediaIn`, never at render time. Messages (directional): shell to scene `bento:init {step, steps, props, reduceMotion}`, `bento:step {index}`, `bento:props {values}`, `bento:motion {reduce}`, `bento:assets {name: Blob}`; scene to shell `bento:ready`, `bento:navigate {dir: 'next'|'prev'|'exit'}`. `bento:init` and `bento:assets` are sent only after `bento:ready` arrives (a message posted before the scene's script runs is lost); assets fetched earlier are held until then. The skill's scene template forwards every unhandled arrow, space, PageUp/PageDown and Escape as `bento:navigate`, and the shell calls `window.focus()` on receipt so the next key lands in the shell. The shell posts with `targetOrigin '*'` (the frame's origin is opaque) and accepts a message only when `ev.source === frame.contentWindow`; it does not filter on `ev.origin`, which arrives as `'null'`.
+- **KTD4. Steps are counted by the shell from the declaration, not discovered by running the scene.** Step state lives in `present.ts goNext/goPrev` beside the `stateOf` logic: forward entry lands on step 0, backward entry on the last step, swipe and speaker-view keys behave like the arrows, a thumbnail-rail click resets to step 0. Reveal fires no `slidechanged` when the rail target is the slide already showing, so the rail's click handler resets step state itself in that case. The speaker view's next-slide preview shows the still. A runtime slide cannot be a `stateOf` state in v1.
+- **KTD5. Conditional replace uses R2's `httpEtag`: harness GET returns `ETag`, harness PUT requires `If-Match` and calls `put` with `onlyIf: { etagMatches }`, answering 412 on mismatch and 428 when `If-Match` is absent.** Versions never go into `customMetadata` (2 KB budget). The people route (`PUT /api/decks/:id`) honours `If-Match` when present and answers 412 on mismatch, but does not require it: shells already on disk save without it and must keep working. `GET /d/:id` and a new `HEAD /d/:id` return `ETag`, and every successful PUT returns the new `ETag`. A human save changes the etag, so any concurrent save forces Claude to re-read; that is accepted over inventing a content-only version.
+- **KTD12. The editor on the store origin tracks the store's version.** `slides/src/beta/store.ts` sends `HEAD /d/:id` at boot to learn the ETag of the deck it is showing, sends `If-Match` on every `putDeck`, and takes the new ETag from each 200. A 412 raises a new `StoreConflictError` that keeps the deck dirty, stops autosave write-back for the session, and shows "This deck changed in the store. Reload to get the latest version before saving." The boot HEAD leaves a sub-second window in which a change lands unseen; accepted, since the alternative is downloading the deck twice.
+- **KTD6. Heavy scene assets go to a new Access-gated asset route on the deck store, and the shell fetches them and hands the bytes to the scene.** `PUT /api/harness/decks/:id/assets/:name` (service token, 16 MB cap) stores under `assets/<deckId>/<name>` in `beta-decks`; `GET /d/:id/assets/:name` serves them to people. The scene declares `assets: [names]` in its manifest; on slide enter the shell fetches each (same origin, carries the Access cookie), then posts them as Blobs (`bento:assets`). The sandboxed frame never makes a credentialed request, which sidesteps the cookie question. The deck id is `storeIdFromLocation()` in `slides/src/beta/store.ts`; when it is null (deck opened from disk, Drive or a download) no fetch is attempted and the still stays, as it does offline. Assets are keyed by deck id, so a "Duplicate as new deck" copy has none until the splice tool re-uploads them against the new id. The asset PUT accepts only `image/png`, `image/jpeg`, `image/webp`, `image/svg+xml`, `application/json` and `text/csv`; SVG has script, `foreignObject` and event-handler attributes stripped on upload; the GET adds `x-content-type-options: nosniff` and `content-security-policy: sandbox` so an asset opened directly never runs on the store's origin.
 - **KTD7. Weight budget constants in `model.ts` beside `MEDIA_EMBED_BUDGET`:** `RUNTIME_SRC_BUDGET` 256 KB for inline scene source, `RUNTIME_STILL_BUDGET` 200 KB for the still, `RUNTIME_ASSET_BUDGET` 16 MB per referenced asset. The splice tool enforces them; the editor never authors runtime slides so it only validates on paste.
-- **KTD8. The ownership rule is enforced in the splice tool, not the store.** The tool diffs its intended output against the fresh read and refuses if any native element's `x`, `y`, `w`, `h` or `rotate` differs, if a slide id is missing, duplicated or belongs to a native slide, or if a budget is exceeded. It never partially writes. After a 412 it re-reads and re-derives at most three times (R19).
+- **KTD8. The ownership rule is enforced in the splice tool, not the store.** The tool diffs its intended output against the fresh read and refuses if any native element's `x`, `y`, `w`, `h` or `rotate` differs, if a slide id is missing, duplicated or belongs to a native slide, or if a budget is exceeded. It never partially writes. After a 412 it re-reads and re-derives at most three times (R19). An encrypted deck (a `bento/enc` envelope in the block) is refused before any diff; v1 does not decrypt. For this rule to hold, the skill documents the tool as the only way to change an existing deck.
 - **KTD9. One guard block per surface, delegating to `slides/src/runtime.ts`.** `renderSlide` early return (still unless `liveMedia`), `present.ts` section build and nav, `pptx.ts mapDeck` before the element loop, `panels.ts buildSlidePanel` top, `untrusted.ts` checks. Fork rule 2: additions are one `case` or one new file.
 - **KTD10. Encrypted decks may carry runtime slides.** Source and still sit inside the `bento/enc` envelope like every other asset; the preview veto is unchanged and the frame only ever receives decrypted bytes in memory.
-- **KTD11. The splice tool lives in the plugin (`plugins/beta-slides/scripts/splice.mjs`), Node with no dependencies, reusing `spliceDoc` extracted to `scripts/lib/bento-doc.mjs`.** It reads the deck like `scripts/export-pptx.mjs` (regex on the `#bento-doc` block, `<` unescape), never regenerates `docId`, and re-escapes `<` on write. A scene project folder is `scenes/<slideId>/index.html`, `still.png|svg`, `scene.json` (`steps`, `props`, `assets`, `url`).
+- **KTD11. The splice tool and its helpers live entirely inside the plugin, Node built-ins only.** The marketplace installs only `plugins/beta-slides/`, so `plugins/beta-slides/scripts/splice.mjs` imports nothing outside that directory: `spliceDoc` moves to `plugins/beta-slides/scripts/lib/bento-doc.mjs` and `scripts/build-beta-templates.mjs` imports it from there. It reads the deck like `scripts/export-pptx.mjs` (regex on the `#bento-doc` block, `<` unescape), never regenerates `docId`, and re-escapes `<` on write. A project folder is `deck.json` (native slides, used only by `--create`) plus `scenes/<slideId>/index.html`, `still.png|svg`, `scene.json` (`steps`, `props`, `assets`, `url`). `--create` builds a deck from the published blank template, adds the native slides and scenes, and POSTs it; update mode needs the slide to already be a runtime slide, and the placeholder shape is `runtime: { steps: 0, props: [] }` plus its still element.
+- **KTD13. Cowork gets its own Access service token; the worker needs no change.** `server/deck-store/src/access.js` accepts any service token Access admits and records its Client ID as writer, so a second token is an Access policy change only. Minting it and adding it to the store's Access application is Johan's step (Access writes are not available to agents). The skill reads credentials from the same two environment variables in both places.
 
 ### High-Level Technical Design
 
@@ -251,8 +260,8 @@ flowchart TB
   C -->|no| X[report, write nothing]
   C -->|yes| D[PUT If-Match]
   D -->|200| Y[done]
-  D -->|412, attempt < 3| A
-  D -->|412, attempt = 3| X
+  D -->|412, retries < 3| A
+  D -->|412, retries = 3| X
 ```
 
 ### Assumptions
@@ -263,11 +272,11 @@ flowchart TB
 
 ### Sequencing
 
-Store first (U1, U2) because the splice tool and the acceptance test depend on it and it deploys independently. Shell next (U3 to U6) in one release. Skill last (U7, U8) once both are live. Acceptance (U9) after the release.
+Store first (U1, U2) because the splice tool and the acceptance test depend on it and it deploys independently; U1's PR also updates the skill's replace recipe to send `If-Match`, because the published skill's bare PUT gets 428 the moment the worker deploys. Shell next (U3 to U6 and U10) in one release. Skill last (U7, U8) once both are live; PR #29 (`docs/beta-claude-authoring-handoff.md`) merges before U8. Acceptance (U9) after the release, the worker deploy and the Cowork token.
 
 ### System-Wide Impact
 
-- **Security posture:** the service token gains read-by-id. The worker header comment (`server/deck-store/src/worker.js`), two places in `server/deck-store/README.md` (the route table and the harness section) and `plugins/beta-slides/skills/beta-slides/SKILL.md` all restate the old "cannot read" property and must change together; `server/deck-store/test/worker.test.mjs` pins the route behaviour (403 on list) and `scripts/test-beta-skill.mjs` pins the URL shapes.
+- **Security posture:** the service token gains read-by-id. The worker header comment (`server/deck-store/src/worker.js`), two places in `server/deck-store/README.md` (the route table and the harness section) and `plugins/beta-slides/skills/beta-slides/SKILL.md` all restate the old "cannot read" property and must change together; `server/deck-store/test/worker.test.mjs` pins the route behaviour (403 on list) and `scripts/test-beta-skill.mjs` pins the URL shapes. The wording must also say what a read hands over: every stored deck carries its collaboration owner keys, so reading a deck by id gives the token owner authority over that deck's live session.
 - **Format:** `Slide.runtime` is additive; upstream shells preserve it and paint the still (KTD1). `docs/DECISIONS.md` gets an entry.
 - **Collab:** `slide.runtime` is a whole-value LWW register under CRDT like `table.rows`; concurrent presenter property edits on two machines are last-writer-wins. A store replace while live-shared is unsupported (Scope Boundaries).
 - **i18n:** new panel and present strings go into all eight catalogs (`ls slides/src/i18n/`).
@@ -278,7 +287,9 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 - **Scenes that need credentials from inside the frame.** Avoided by KTD6 (shell fetches, posts Blobs). If a scene needs a live authenticated API, it uses the URL override to a page that owns its own auth.
 - **Weight creep.** A 256 KB source budget and an inline-only still keep decks small; the tool refuses rather than warns.
 - **Presenter confusion on steps.** A scene with steps that also handles arrows itself would double-step; the skill tells scenes to leave arrows to the shell and use `bento:step`.
-- **Two write paths (editor save, harness replace) with one conditional.** Accepted for v1 and named in Scope Boundaries; a lost Claude change is re-run, a lost human change never happens.
+- **Claude's retries run out while the owner is typing.** Autosave changes the ETag every few seconds, so three re-reads can all lose; the tool says the owner probably has the deck open instead of reporting a bare conflict.
+- **Shells already on disk save without `If-Match`.** They keep overwriting unconditionally until they self-update; the people route cannot require the header without breaking them.
+- **Keys inside a hosted page.** A URL-override page never speaks the protocol, so the presenter clicks outside it to regain the arrows (R7).
 
 ---
 
@@ -286,20 +297,23 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 
 ### U1. Harness read and conditional replace on the deck store
 
-**Goal:** A service token can fetch a deck by id with an `ETag`, and a replace with a stale `If-Match` is refused with 412.
-**Requirements:** R10, R11, AE2
+**Goal:** A service token can fetch a deck by id with an `ETag`; a replace with a stale `If-Match` is refused with 412 on both the harness and the people route.
+**Requirements:** R10, R11, R20, AE2
 **Dependencies:** none
-**Files:** `server/deck-store/src/worker.js`, `server/deck-store/test/worker.test.mjs`, `server/deck-store/README.md`
-**Approach:** Add `GET /api/harness/decks/:id` in the harness block above the `who.kind !== 'user'` check, streaming the object like `serve()` plus `ETag: obj.httpEtag`. Extend `replace()` so harness callers must send `If-Match` (428 without it) and the `put` passes `onlyIf: { etagMatches }`; a failed precondition answers 412 with a short JSON body telling the caller to re-read. People routes keep today's unconditional replace. Update the header comment and both README places (route table and harness section) to say the token can read a deck by id but not list.
+**Files:** `server/deck-store/src/worker.js`, `server/deck-store/test/worker.test.mjs`, `server/deck-store/README.md`, `plugins/beta-slides/skills/beta-slides/SKILL.md`
+**Approach:** Add `GET /api/harness/decks/:id` in the harness block above the `who.kind !== 'user'` check, streaming the object like `serve()` plus `ETag: obj.httpEtag`. Extend `replace()`: harness callers must send `If-Match` (428 without it); people callers may send it; when present the `put` passes `onlyIf: { etagMatches }` and a failed precondition answers 412 with a short JSON body telling the caller to re-read. Every 200 from a PUT carries the new `ETag`. `serve()` adds `ETag`, and `HEAD /d/:id` answers the same headers with no body. Update the header comment and both README places (route table and harness section) to say the token can read a deck by id but not list, and that a read hands over the deck's live-session owner keys. In `SKILL.md`, replace the bare `curl -X PUT` recipe with GET (capture `ETag`) then PUT with `If-Match`, and update its "cannot list or read" sentence, so the published skill keeps working the moment the worker deploys.
 **Patterns to follow:** `serve()` for streaming and headers, `replace()` for metadata preservation, the harness section of the test rig for claims and `call()`.
 **Test scenarios:**
 - Happy path: service token GET of an existing id returns 200, the bytes, `content-type`, `ETag`; a second GET returns the same `ETag`.
 - Happy path: PUT with matching `If-Match` returns 200 and the stored bytes change; the new `ETag` differs.
 - Edge: GET of an unknown id returns 404; GET by a service token of a deck created by a person works (read is not owner-scoped).
 - Error: PUT with a stale `If-Match` returns 412 and the stored bytes are unchanged; PUT without `If-Match` from a service token returns 428; a person's PUT without `If-Match` still returns 200.
+- Happy path: a person's PUT with the current `If-Match` returns 200 and a new `ETag`; with a stale one returns 412. Covers AE11 at the store.
+- Happy path: `GET /d/:id` and `HEAD /d/:id` as a person return the same `ETag`; HEAD has no body.
 - Error: a body that fails `inspect()` still returns the existing 400s, before any precondition.
 - Integration: harness token cannot `GET /api/decks` (list) and cannot `GET /d/:id`; both stay 403.
-**Verification:** `node scripts/test-beta-store.ts` green with the new cases; README table and comment block updated; `scripts/check-store-live.mjs --selftest` still passes.
+- Integration: `scripts/test-beta-skill.mjs` still passes with the GET-then-PUT recipe in `SKILL.md`.
+**Verification:** `node scripts/test-beta-store.ts` and `node scripts/test-beta-skill.mjs` green; README table and comment block updated; `scripts/check-store-live.mjs --selftest` still passes.
 
 ### U2. Asset route for heavy scene assets
 
@@ -307,11 +321,12 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 **Requirements:** R9, AE6
 **Dependencies:** U1
 **Files:** `server/deck-store/src/worker.js`, `server/deck-store/test/worker.test.mjs`, `server/deck-store/README.md`
-**Approach:** `PUT /api/harness/decks/:id/assets/:name` stores under `assets/<id>/<name>` in `DECKS` with the request's content type, 16 MB cap, name restricted to `[A-Za-z0-9._-]{1,80}`, refuses when the deck id does not exist. `GET /d/:id/assets/:name` streams to people with `cache-control: private, max-age=3600` and the stored content type. `DELETE /api/decks/:id` also deletes the deck's assets (list by prefix).
-**Patterns to follow:** `storeBytes()` for put options, `serve()` for streaming, `remove()` for owner checks.
+**Approach:** `PUT /api/harness/decks/:id/assets/:name` stores under `assets/<id>/<name>` in `DECKS`, 16 MB cap, name restricted to `[A-Za-z0-9._-]{1,80}`, refuses when the deck id does not exist. The content type must be on the KTD6 allowlist (415 otherwise); SVG is stored with script elements, `foreignObject` and `on*` attributes stripped. `GET /d/:id/assets/:name` streams to people with the stored content type, `cache-control: private, max-age=3600`, `x-content-type-options: nosniff` and `content-security-policy: sandbox`. `DELETE /api/decks/:id` also deletes the deck's assets (list by prefix).
+**Patterns to follow:** `storeBytes()` for put options, `serve()` for streaming, `remove()` for owner checks; `SVG_BANNED` in `slides/src/export/pptx.ts` for the elements to strip.
 **Test scenarios:**
-- Happy path: upload an SVG then GET it as a person; bytes and content type round-trip.
-- Edge: name with a slash or over 80 chars returns 400; upload for an unknown deck returns 404; 16 MB + 1 byte returns 413.
+- Happy path: upload a PNG then GET it as a person; bytes, content type, `nosniff` and the sandbox CSP round-trip.
+- Happy path: upload an SVG carrying `<script>` and `onload`; the GET returns it without either.
+- Edge: name with a slash or over 80 chars returns 400; upload for an unknown deck returns 404; 16 MB + 1 byte returns 413; `text/html` returns 415.
 - Error: a person cannot PUT to the harness asset route (403); a service token cannot GET `/d/:id/assets/:name` (403).
 - Integration: deleting the deck removes its assets (GET returns 404 afterwards).
 **Verification:** rig green; README route table lists both routes.
@@ -339,16 +354,19 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 **Requirements:** R3, R4, R5, R7, AE4, AE7
 **Dependencies:** U3
 **Files:** `slides/src/render.ts`, `slides/src/present.ts`, `slides/src/runtime.ts`, `slides/src/styles.css`, `scripts/test-beta-runtime.ts`
-**Approach:** `renderSlide` early return: when `isRuntimeSlide` and not `opts.liveMedia`, render the still image only (KTD1 means the normal path already does this; the guard exists so a new shell never paints stray elements). In `present.ts`, on `slidechanged` enter: create the frame (`sandbox="allow-scripts allow-forms"`, `referrerpolicy="no-referrer"`, `pointer-events` on), set `srcdoc` from the source asset or `src` from `url` when `liveFrameAllowed`-style checks pass (online, https, not `remoteSrcBlocked`), layer it over the still, post `bento:init`, fetch declared assets from `/d/:id/assets/<name>` and post `bento:assets`. On exit: clear `srcdoc`/`src`, remove the frame. `goNext/goPrev` consult step state first (KTD4). `setReduceMotion` re-posts `bento:motion`. A frame `error` or a 10 s load timeout removes the frame and leaves the still. Speaker view renders without `liveMedia` and so shows the still.
+**Approach:** `renderSlide` early return: when `isRuntimeSlide` and not `opts.liveMedia`, render the still image only (KTD1 means the normal path already does this; the guard exists so a new shell never paints stray elements). In `present.ts`, mount the scene at both places `startMediaIn` runs (the `slidechanged` handler and the init block for the opening slide): create the frame (`sandbox="allow-scripts allow-forms"`, `referrerpolicy="no-referrer"`, `pointer-events` on), set `srcdoc` from the source asset or `src` from `url` when `liveFrameAllowed`-style checks pass (online, https, not `remoteSrcBlocked`), and layer it over the still. Start fetching declared assets from `/d/<storeIdFromLocation()>/assets/<name>` when that id is non-null; skip the fetch when it is null. On `bento:ready` from that frame, post `bento:init` then any held assets as `bento:assets`; for a URL-override page, which never sends ready, nothing is posted. On `bento:navigate`, call `window.focus()` then `goNext`, `goPrev` or end the show. On exit: clear `srcdoc`/`src`, remove the frame. `goNext/goPrev` consult step state first (KTD4); the rail and grid click handlers reset step state when the target index is the current one. `setReduceMotion` re-posts `bento:motion`. A frame `error` or a 10 s load timeout removes the frame and leaves the still. Speaker view renders without `liveMedia` and so shows the still.
 **Execution note:** verify in a browser with a stepped scene fixture; the DOM measurement gotchas in `AGENTS.md` (hidden tabs throttle rAF) apply.
 **Patterns to follow:** `liveFrame` and `liveFrameAllowed` for sandbox and offline checks; `startMediaIn`/`pauseMediaIn` call sites; `stateOf` handling in `goNext/goPrev`; the speaker popup's own keydown handler.
 **Test scenarios:**
 - Happy path (rig, pure functions): step reducer given `steps: 5` and forward entry starts at 0, advances to 4, then signals leave; backward entry starts at 4.
 - Happy path (browser): a fixture scene logs `bento:init` with the declared props and `bento:step` on each arrow; the sixth right arrow changes slide.
-- Edge: `steps: 0` behaves like a native slide for navigation; a rail click while on step 3 re-enters at step 0.
+- Edge: `steps: 0` behaves like a native slide for navigation; a rail click on the current slide while on step 3 resets to step 0.
+- Edge: presenting from a runtime slide (the opening slide) creates the frame and lands on step 0.
 - Edge: reduced motion toggled mid-slide posts `bento:motion` to the open frame.
+- Edge: after clicking into the scene, a forwarded `bento:navigate {dir:'next'}` advances and the next arrow key is handled by the shell.
 - Error: URL-override scene with `navigator.onLine === false` never creates a frame; a frame `error` event leaves the still visible with no empty box.
-- Error: a message whose `source` is not the frame's window is ignored.
+- Error: `storeIdFromLocation()` null (deck opened from a file) makes no asset request and the scene still receives `bento:init`.
+- Error: a message whose `source` is not the frame's window is ignored; no message is posted before `bento:ready`.
 - Integration: leaving the slide clears `srcdoc`; re-entering reloads the scene from step 0 (no resumed state).
 **Verification:** rig green; browser check of F4 on a fixture deck built from `slides/dist-single`; `restartSvgAnimations` and media behaviour on neighbouring native slides unchanged.
 
@@ -383,13 +401,29 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 - Integration: preview rig cases above.
 **Verification:** `test-beta-pptx.ts` and `test-preview.ts` green.
 
+### U10. Editor: conditional save to the store
+
+**Goal:** An editor save to the store is refused when the deck changed there since the editor last saw it, and the person is told to reload.
+**Requirements:** R20, AE11
+**Dependencies:** U1
+**Files:** `slides/src/beta/store.ts`, `slides/src/editor/editor.ts`, `slides/src/i18n/*.ts` (all eight), `slides/src/i18n/packed.ts`, `scripts/test-beta-store-client.ts`
+**Approach:** Per KTD12. `installStoreHost` sends `HEAD /d/:id` and keeps the `ETag`; `putDeck` sends `If-Match` when it has one and stores the new `ETag` from the 200; a 412 throws `StoreConflictError`. The editor treats it like `StoreSignedOutError`'s failure path (deck stays dirty) and additionally stops autosave write-back for the session and shows the reload message once. A missing `ETag` (older worker) falls back to today's unconditional save.
+**Patterns to follow:** `StoreSignedOutError` in `slides/src/beta/store.ts` and its handling in the kernel save failure path; `scripts/test-beta-store-client.ts` for driving the client against Miniflare.
+**Test scenarios:**
+- Happy path: boot HEAD captures the ETag; two saves in a row both succeed, the second sending the ETag returned by the first.
+- Error: the deck is replaced behind the client's back; the next save throws `StoreConflictError` and the stored bytes are the replacement's. Covers AE11.
+- Edge: HEAD returns no ETag; saves go out without `If-Match` and succeed.
+- Edge: after a conflict, autosave issues no further PUTs until reload.
+- Integration: i18n checks pass with the new message in all eight catalogs.
+**Verification:** `node scripts/test-beta-store-client.ts` green; browser check on a local store: open a deck, replace it through the harness route, type, see the message, reload, see the replacement.
+
 ### U7. The splice tool
 
-**Goal:** One command reads a deck, builds runtime slides from a scene folder, applies content-only edits to native elements, refuses anything the ownership rule forbids, and writes back conditionally with bounded retries.
-**Requirements:** R12, R13, R14, R16, R17, R18, R19, AE1, AE2, AE6, AE8, AE9, AE10
+**Goal:** One command creates a deck from a project folder, or reads an existing deck, builds runtime slides from scene folders, applies content-only edits to native elements, refuses anything the ownership rule forbids, and writes back conditionally with bounded retries.
+**Requirements:** R12, R13, R14, R16, R17, R18, R19, R21, R22, AE1, AE2, AE6, AE8, AE9, AE10
 **Dependencies:** U1, U2, U3
-**Files:** `plugins/beta-slides/scripts/splice.mjs` (new), `scripts/lib/bento-doc.mjs` (new, extracted from `scripts/build-beta-templates.mjs`), `scripts/build-beta-templates.mjs`, `scripts/test-beta-splice.ts` (new), `.github/workflows/ci.yml`
-**Approach:** CLI: `splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]`, credentials from `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`. Read via harness GET, keep the `ETag`. For each `scenes/<slideId>/`: read `index.html`, `still.*`, `scene.json`; enforce budgets; upload assets over the budget to U2's route; intern source and still as assets; build `runtime` and the still image element; require the target slide to exist and already be a runtime slide (or be a placeholder slide flagged `runtime: {}` by the deck author). Apply `edits.json` entries `{slideId, elementId, html|src|option|rows}` to native elements. Diff against the read: refuse if any native element's geometry keys differ, any id is missing or duplicated, or a native slide would change kind. Write with `If-Match`; on 412 re-read and re-derive, three attempts, then exit non-zero with the conflict. Never regenerate `docId`; escape `<` in the block.
+**Files:** `plugins/beta-slides/scripts/splice.mjs` (new), `plugins/beta-slides/scripts/lib/bento-doc.mjs` (new, extracted from `scripts/build-beta-templates.mjs`), `scripts/build-beta-templates.mjs`, `scripts/test-beta-splice.ts` (new), `.github/workflows/ci.yml`
+**Approach:** Per KTD11. CLI: `splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]` and `splice.mjs --create <projectDir>`, credentials from `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`, Node built-ins only and no import outside `plugins/beta-slides/`. `--create` fetches the published blank template, fills native slides from `deck.json` and runtime slides from `scenes/`, POSTs to `/api/harness/decks`, uploads referenced assets against the new id, and prints the link. Update mode reads via harness GET and keeps the `ETag`; an encrypted envelope is refused before anything else. For each `scenes/<slideId>/`: read `index.html`, `still.*`, `scene.json`; enforce budgets; upload assets over the budget to U2's route; intern source and still as assets; build `runtime` and the still image element; require the target slide to exist and already be a runtime slide (or be a placeholder slide flagged `runtime: {}` by the deck author). Apply `edits.json` entries `{slideId, elementId, html|src|option|rows}` to native elements. Diff against the read: refuse if any native element's geometry keys differ, any id is missing or duplicated, or a native slide would change kind. Write with `If-Match`; on 412 re-read and re-derive, up to three retries, then exit non-zero saying the owner probably has the deck open. Never regenerate `docId`; escape `<` in the block. Assets are always uploaded against the deck id being written, so running against a duplicated deck re-uploads them.
 **Execution note:** test-first against a local Miniflare store using the U1 rig's fixtures; the tool must be exercised end to end against a real deck before U8 documents it.
 **Patterns to follow:** `scripts/export-pptx.mjs` for headless read; `spliceDoc` for the block write; `test-beta-store.ts` for driving Miniflare from a rig.
 **Test scenarios:**
@@ -402,15 +436,18 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 - Error: an edit that changes `w` is refused with the offending element named.
 - Error: source over 256 KB or still over 200 KB refused.
 - Integration: the store answers 412 once (fixture bumps the deck between read and write); the tool retries and succeeds; four consecutive 412s exit non-zero. Covers AE2, R19.
-**Verification:** new rig green and registered; a manual run against a scratch deck in the real store round-trips; run from a Cowork session confirms Node is available (or the assumption is recorded as false and U8 documents the Claude Code-only path).
+- Happy path: `--create` on a folder with two native slides and one scene creates a deck whose GET parses, has three slides, one runtime slide, and a fresh `docId`. Covers F1, R21.
+- Error: an encrypted deck is refused before any diff, using the store rig's `encEnvelope()` fixture.
+- Integration: the tool runs from a copy of `plugins/beta-slides/` alone, outside the repo. Covers R18.
+**Verification:** new rig green and registered; a manual run against a scratch deck in the real store round-trips; a run from Cowork with its own token (R22) confirms Node is available, or the assumption is recorded as false and U8 documents the Claude Code-only path.
 
 ### U8. Skill, agents.md and decisions
 
 **Goal:** Every Claude that authors Beta decks knows the runtime slide, the scene folder, the ownership rule, the read-then-replace workflow, animated SVG, the still as a placeholder, and the weight budget.
 **Requirements:** R15, R18
 **Dependencies:** U7
-**Files:** `plugins/beta-slides/skills/beta-slides/SKILL.md`, `docs/agents.md`, `scripts/test-beta-skill.mjs`, `docs/DECISIONS.md`, `CHANGELOG.md`, `docs/beta-claude-authoring-handoff.md`
-**Approach:** SKILL.md: a "Runtime slides" section (when to use one, the scene folder, `scene.json`, the still, budgets, steps and props protocol summary, `splice.mjs` usage, the three-retry behaviour, the ownership rule as a hard rule, the "read before you write" rule, the "cannot list, can read by id" wording). `docs/agents.md` "Beta build": the same for any harness, plus animated SVG with `@keyframes` as first-class, and the still as a hand-drawn placeholder rather than a screenshot. `test-beta-skill.mjs` gains assertions for the new section headings and the ownership sentence. `DECISIONS.md` entry dated 2026-09-14 recording KTD1, KTD5, KTD6 and KTD8. CHANGELOG lead-in for the release. The handoff doc's "Open items" updated.
+**Files:** `plugins/beta-slides/skills/beta-slides/SKILL.md`, `docs/agents.md`, `scripts/test-beta-skill.mjs`, `docs/DECISIONS.md`, `CHANGELOG.md`, `docs/beta-claude-authoring-handoff.md` (only once PR #29 has merged)
+**Approach:** SKILL.md: a "Runtime slides" section (when to use one, the project folder, `scene.json`, the still, budgets, the steps and props protocol with a scene template that forwards unhandled keys, `splice.mjs` and `splice.mjs --create` usage, the three-retry behaviour, the ownership rule as a hard rule, the "read before you write" rule, that referenced assets play only from the store). The bare replace recipe U1 rewrote is removed: the tool is the only documented way to change an existing deck; `curl` create stays for decks with no runtime slides. `docs/agents.md` "Beta build": the same for any harness, plus animated SVG with `@keyframes` as first-class, and the still as a hand-drawn placeholder rather than a screenshot. `test-beta-skill.mjs` gains assertions for the new section headings, the ownership sentence and the absence of a bare PUT example, and its `storeRoute` allowlist learns the two asset routes. `DECISIONS.md` entry dated 2026-09-14 recording KTD1, KTD5, KTD6, KTD8, KTD12 and KTD13. CHANGELOG lead-in for the release. The handoff doc's "Open items" updated.
 **Patterns to follow:** existing `## Beta build` subsections; `test-beta-skill.mjs` URL and wording assertions.
 **Test scenarios:**
 - `test-beta-skill.mjs` asserts the new headings, the splice command, and that every URL named is published.
@@ -421,7 +458,7 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 
 **Goal:** Prove the round trip and the runtime slide on Robert's real deck.
 **Requirements:** Success Criteria; F1 to F5
-**Dependencies:** U1 to U8, a released shell and a deployed worker
+**Dependencies:** U1 to U8 and U10, a released shell, a deployed worker, and the Cowork service token in Access
 **Files:** none in this repo; a scene project folder in Robert's project (Drive)
 **Approach:** Rebuild `/d/Api0W36RwG`: native slides from the template, the map and the demos as scenes with hand-drawn SVG stills, the 6 MB map as a referenced asset. Robert edits three native slides in the UI; Claude runs one update through the splice tool; check nothing moved. Present the stepped map.
 **Test scenarios:**
@@ -434,19 +471,20 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 
 | Gate | Command | Applies to |
 |---|---|---|
-| Typecheck | `cd slides && node_modules/.bin/tsc -b && node_modules/.bin/tsc -p ../kernel` | U3 to U6 |
-| Shell build and splice conformance | `cd slides && npm run build:single && node ../scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html` | U3 to U6 |
+| Typecheck | `cd slides && node_modules/.bin/tsc -b && node_modules/.bin/tsc -p ../kernel` | U3 to U6, U10 |
+| Shell build and splice conformance | `cd slides && npm run build:single && node ../scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html` | U3 to U6, U10 |
 | Model keys parity | `node scripts/build-modelkeys.mjs --check` | U3 |
 | Clipboard and sanitiser rigs | `node scripts/test-clipboard.ts`, `node scripts/test-sanitize.ts` (bundled as in `ci.yml`) | U3 |
 | Runtime rig | `node scripts/test-beta-runtime.ts` | U3, U4 |
 | Export and preview rigs | `node scripts/test-beta-pptx.ts`, `node scripts/test-preview.ts` | U6 |
 | Sync rig (unchanged behaviour) | `node scripts/test-sync.ts` | U3 |
-| i18n | `node scripts/build-i18n.mjs --check && node scripts/test-i18n-coverage.mjs` | U5 |
+| i18n | `node scripts/build-i18n.mjs --check && node scripts/test-i18n-coverage.mjs` | U5, U10 |
 | Store rig | `node scripts/test-beta-store.ts` | U1, U2 |
+| Store client rig | `node scripts/test-beta-store-client.ts` | U10 |
 | Splice rig | `node scripts/test-beta-splice.ts` | U7 |
-| Skill rig | `node scripts/test-beta-skill.mjs` | U8 |
+| Skill rig | `node scripts/test-beta-skill.mjs` | U1, U8 |
 | CI registration | `node scripts/test-ci-registered.ts` | U3, U7 |
-| Browser | present a fixture deck with a stepped scene from `slides/dist-single`; check F4, AE7, reduced motion, speaker view | U4, U5 |
+| Browser | present a fixture deck with a stepped scene from `slides/dist-single`; check F4, AE7, reduced motion, speaker view, opening on a runtime slide; conflict message after a harness replace | U4, U5, U10 |
 | Live store | `env -u CLOUDFLARE_API_TOKEN npx wrangler deploy` in `server/deck-store` (maintainer), then `node scripts/check-store-live.mjs` | U1, U2 |
 
 The shell release follows `docs/RELEASING.md` and is cut by the maintainer on request; U9 waits for it.
@@ -458,19 +496,20 @@ The shell release follows `docs/RELEASING.md` and is cut by the maintainer on re
 **Global**
 
 - All gates above green on `main`; the three PRs squash-merged in order (store, shell, skill).
-- Worker deployed; shell released as `v2026.9.x`; templates rebuilt.
+- Worker deployed; shell released as `v2026.9.x`; templates rebuilt; Cowork service token added to the store's Access application (Johan).
 - U9 passed: Robert's rebuilt deck under 3 MB, one UI-edit-then-Claude-update cycle with nothing lost, a stepped scene presented.
-- Documentation updated in the same PRs: README route table, `docs/security.md`, `SKILL.md`, `docs/agents.md`, `DECISIONS.md`, CHANGELOG.
+- Documentation updated in the same PRs: README route table and harness section, worker header comment, `SKILL.md`, `docs/agents.md`, `DECISIONS.md`, CHANGELOG.
 - No abandoned attempts left in the diff; no kernel file touched beyond the three allowed.
 
 **Per unit**
 
-- U1: rig covers GET, 200/412/428, list still 403; wording updated in the worker comment and both README places.
-- U2: upload, fetch, delete-cascade covered.
+- U1: rig covers harness GET, people HEAD/GET `ETag`, 200/412/428 on both routes, list still 403; wording updated in the worker comment and both README places; the skill's replace recipe sends `If-Match`.
+- U2: upload, fetch, content-type allowlist, SVG stripping, sandbox headers and delete-cascade covered.
 - U3: modelkeys parity and clipboard parity pass; `runtime` survives paste.
-- U4: browser check of F4 and AE7 done and noted in the PR.
+- U4: browser check of F4, AE7 and opening on a runtime slide done and noted in the PR.
 - U5: eight catalogs updated; panel walk-through done.
 - U6: PPTX and preview rigs cover runtime slides.
-- U7: AE1, AE2, AE3, AE6, AE8 to AE10 each map to a passing rig case; a real-store round trip done.
-- U8: skill rig green; a fresh session reproduces a runtime slide from the docs.
+- U7: AE1, AE2, AE3, AE6, AE8 to AE10 and `--create` each map to a passing rig case; the tool runs from a copy of the plugin directory; a real-store round trip done.
+- U8: skill rig green, including the no-bare-PUT assertion; a fresh session reproduces a runtime slide from the docs.
+- U10: AE11 covered in the client rig; conflict message seen in a browser.
 - U9: manual sign-off recorded.
