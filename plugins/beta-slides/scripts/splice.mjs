@@ -38,7 +38,7 @@
 //                                    the store's asset route, never inlined
 //                                    (<projectDir>/assets/<name> also found)
 //
-// edits.json is a list of { slideId, elementId, html | src | option | rows }.
+// edits.json is a list of { slideId, elementId, html | content | src | option | rows }.
 //
 // A scene folder names a runtime slide already in the deck, which it replaces.
 // To add a new one, scene.json sets insertAfter to the id of a slide in the
@@ -97,7 +97,7 @@ const validValue = (kind, v) => kind === 'number' ? typeof v === 'number' && Num
   : typeof v === 'string' && v.length <= MAX_TEXT
 const GEOMETRY = new Set(['x', 'y', 'w', 'h', 'rotation'])
 // The one key per element type an edit may change.
-const CONTENT_KEY = { text: 'html', image: 'src', media: 'src', chart: 'option', table: 'rows' }
+const CONTENT_KEY = { text: 'html', code: 'content', image: 'src', media: 'src', chart: 'option', table: 'rows' }
 
 /** A refusal: the message names the offending id; nothing has been written. */
 export class Refusal extends Error {}
@@ -203,7 +203,7 @@ export function readEdits(file) {
   if (!file) return []
   let list
   try { list = JSON.parse(readFileSync(file, 'utf8')) } catch (e) { throw new Refusal(`edits file does not parse: ${e.message}`) }
-  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of { slideId, elementId, html | src | option | rows }')
+  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of { slideId, elementId, html | content | src | option | rows }')
   for (const e of list) {
     if (!e || typeof e.slideId !== 'string' || typeof e.elementId !== 'string') throw new Refusal('every edit needs slideId and elementId')
     if (Object.keys(e).length < 3) throw new Refusal(`edit for ${e.slideId}/${e.elementId} changes nothing`)

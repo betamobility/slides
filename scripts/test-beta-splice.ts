@@ -126,6 +126,7 @@ function robertsDoc() {
       { id: 'numbers', elements: [
         { id: 'c1', type: 'chart', x: 100, y: 100, w: 500, h: 400, rotation: 0, opacity: 1, option: { series: [{ type: 'bar', data: [1, 2] }] } },
         { id: 'tb', type: 'table', x: 700, y: 100, w: 400, h: 200, rotation: 0, opacity: 1, columns: [1, 1], header: true, rows: [{ cells: [{ html: 'a' }, { html: 'b' }] }] },
+        { id: 'code1', type: 'code', x: 100, y: 520, w: 1000, h: 160, rotation: 0, opacity: 1, fontSize: 24, fontFamily: 'DM Mono, Courier New, monospace', color: '#1A1A1A', align: 'left', valign: 'top', lineHeight: 1.3, content: 'const n = 1', grammarName: 'ts' },
       ] },
     ],
   }
@@ -463,6 +464,26 @@ try {
     const empty = mkdtempSync(join(tmpdir(), 'splice-empty-'))
     temps.push(empty)
     await refuses('neither scenes nor edits', id, [id, empty], /nothing to do/i)
+
+    // A code block's source is its content; its language and geometry are not.
+    const numbersIdx = (d: any) => d.slides.findIndex((s: { id: string }) => s.id === 'numbers')
+    const beforeCode = (await readDeck(id)).doc
+    writeFileSync(edits, JSON.stringify([{ slideId: 'numbers', elementId: 'code1', content: 'const n = 2\nexport { n }' }]))
+    const r3 = await runTool([id, '--edits', edits])
+    eq(r3.code, 0, `a code element's content edit exits 0${r3.code ? `: ${r3.err}` : ''}`)
+    const afterCode = (await readDeck(id)).doc
+    const code1 = slideOf(afterCode, 'numbers').elements.find((e: { id: string }) => e.id === 'code1')
+    eq(code1.content, 'const n = 2\nexport { n }', 'code1 content changed')
+    eq(code1.y, 520, 'code1 y stays as read')
+    const expectCode = structuredClone(beforeCode)
+    expectCode.slides[numbersIdx(expectCode)].elements.find((e: { id: string }) => e.id === 'code1').content = 'const n = 2\nexport { n }'
+    ok(same(afterCode, expectCode), 'nothing else in the document changed')
+    const lang = join(dir, 'lang.json')
+    writeFileSync(lang, JSON.stringify([{ slideId: 'numbers', elementId: 'code1', grammarName: 'py' }]))
+    await refuses('an edit that changes a code element\'s language', id, [id, '--edits', lang], /code1/)
+    const wrongCodeKey = join(dir, 'code-html.json')
+    writeFileSync(wrongCodeKey, JSON.stringify([{ slideId: 'numbers', elementId: 'code1', html: 'x' }]))
+    await refuses('an html edit on a code element', id, [id, '--edits', wrongCodeKey], /code1/)
   }
 
   // ----------------------------------------------------------- insertAfter
