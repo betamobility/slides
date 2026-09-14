@@ -150,6 +150,14 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(/splice\.mjs <deckId> --edits edits\.json/.test(text), `${name} gives the edits-only command`)
   ok(/insertAfter/.test(text) && /"end"/.test(text), `${name} documents insertAfter and "end" for a new runtime slide`)
   ok(!/needs at least one scene\s+folder|cannot\s+run with `--edits` alone/.test(text), `${name} no longer says edits need a scene`)
+  // The review follow-ups: each is a behaviour an agent can only use or
+  // recover from if the doc it reads names it.
+  ok(/splice\.mjs <deckId> --title "<title>"/.test(text), `${name} gives the --title rename command`)
+  ok(/--skip-url-check/.test(text) && /X-Frame-Options/.test(text) && /frame-ancestors/.test(text), `${name} documents the url framing check and --skip-url-check`)
+  ok(/presenter\s+values\s+dropped/.test(text), `${name} points at the dropped presenter values line`)
+  ok(/times? out/.test(text), `${name} says store requests time out`)
+  ok(/elements\s+other\s+than\s+its\s+still/.test(text), `${name} documents the extra-elements refusal`)
+  ok(/same\s+(asset\s+)?name[^.]*different\s+bytes/.test(text), `${name} documents the cross-scene asset name rule`)
 }
 // The replace recipe U1 wrote is gone: splice.mjs is the only way to change a
 // deck in the store. [^`] keeps each match inside one code block.

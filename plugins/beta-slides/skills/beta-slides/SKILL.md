@@ -180,6 +180,11 @@ this scene as a new slide, see below). Keys pressed inside a hosted `url`
 page do not drive the show; the presenter clicks outside the frame to get the
 arrows back, and offline the still shows.
 
+Assets are stored per deck, not per scene: two scenes may list the same asset
+name only when the files hold the same bytes. The same name with different
+bytes stops the run before any request, so give one of the files another
+name.
+
 ### A scene
 
 The scene waits for `bento:init` before it trusts any state, installs its
@@ -312,20 +317,32 @@ optionally, `SLIDES_STORE_URL` (default `https://slides.betamobility.ai`).
 
 ```bash
 # a new deck: the published blank template, deck.json's slides, then the scenes
-node splice.mjs --create <projectDir> [--dry-run]
+node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
 
 # an existing deck: replace or insert runtime slides, apply edits.json
-node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
 
 # an existing deck, content fixes only (a typo, a figure): no project folder
-node splice.mjs <deckId> --edits edits.json [--dry-run]
+node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
+
+# an existing deck, renamed: nothing else changes
+node splice.mjs <deckId> --title "<title>" [--dry-run]
 ```
 
-`<deckId>` is the ten characters at the end of `/d/<id>`. Both commands
-print what they did and the deck's link. Exit code 0 is success, 1 is a
-refusal or a store error (the message says which; a refusal comes before any
-request, and in update mode the deck itself was not changed), 2 is a usage
+`<deckId>` is the ten characters at the end of `/d/<id>`. Every command
+prints what it did and the deck's link. Exit code 0 is success, 1 is a
+refusal or a store error (the message says which; a refusal comes before the
+deck write, and in update mode the deck itself was not changed), 2 is a usage
 error.
+
+Every request to the store times out: 30 seconds for reading or writing a
+deck and for the blank template, 120 seconds for each asset upload. A timeout
+stops the run with a message naming the request. Assets go up before the deck
+is written, so if the run fails after that, the message lists the assets that
+were uploaded and says the deck itself was not changed. With `--create`, the
+new deck's link is printed as soon as the store creates it; if an asset
+upload then fails, the error carries the deck id, and you finish with
+`splice.mjs <deckId> <projectDir>` rather than creating a second deck.
 
 - **`--create`**: `deck.json` holds full bento slides, each with an `id`. A
   slide whose id matches a scene folder is where that runtime slide goes;
@@ -335,7 +352,10 @@ error.
   deck replaces that slide. An id two slides share, or the id of a native
   slide, stops the run; the tool never turns a native slide into a runtime
   slide. A folder whose name is not in the deck stops the run too, unless its
-  `scene.json` sets `insertAfter`.
+  `scene.json` sets `insertAfter`. A runtime slide that holds elements other
+  than its still (something pasted onto it, say) stops the run naming those
+  element ids, because the replace would delete them; ask the person to move
+  or delete them in the editor.
 - **Adding a runtime slide to an existing deck**: pick a new slide id that no
   slide in the deck uses, name the folder after it, and set `"insertAfter"` in
   its `scene.json` to the id of the slide it follows, or `"end"` to append.
@@ -345,7 +365,19 @@ error.
   runtime slide and `insertAfter` is ignored.
 - **Edits only**: with no scene to change, run
   `splice.mjs <deckId> --edits edits.json`. A run with neither scene folders
-  nor edits is refused.
+  nor edits nor `--title` is refused.
+- **`--title "<title>"`** (update only) renames the deck: it changes the
+  document title and nothing else at document level. It works alone, or
+  beside scenes and edits. With `--create`, the title comes from `deck.json`.
+- **The url check**: when a `scene.json` sets `url`, the tool fetches that
+  page once before it touches the store (following one redirect) and stops
+  if the page refuses to be framed by `https://slides.betamobility.ai`: an
+  `X-Frame-Options` header (DENY or SAMEORIGIN), or a
+  `Content-Security-Policy` whose `frame-ancestors` does not allow that
+  origin. Such a page would show only its still in the deck. A page the tool
+  cannot reach (an internal one, say) prints a warning and the run goes on.
+  `--skip-url-check` skips the check; use it only when you know the page
+  allows framing.
 - **`edits.json`** changes the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
   key per type is `html` (text), `src` (image, media), `option` (chart) and
@@ -374,7 +406,9 @@ it compares what it would write with what it read and refuses any change
 outside the rule.
 
 A replace resets the values a presenter set for a scene's properties to your
-defaults. Say so when you update a deck that has them.
+defaults. The tool's plan output (with `--dry-run` and on a real run) has a
+line `<slideId>: presenter values dropped by the replace: key="value", …` for
+each replaced slide that had them. Pass that line on to the user.
 
 **Never regenerate a deck from a script once people have edited it.** A
 fresh `--create` is a new deck; it does not update the old one.

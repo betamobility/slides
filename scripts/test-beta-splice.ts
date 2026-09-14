@@ -8,7 +8,10 @@
 //                                            node scripts/build-beta-templates.mjs)
 //
 // Plan: docs/plans/2026-09-14-001-feat-runtime-slides-plan.md, U7 (KTD8,
-// KTD11; R12 to R14, R16 to R19, R21; AE1 to AE3, AE6, AE8 to AE10).
+// KTD11; R12 to R14, R16 to R19, R21; AE1 to AE3, AE6, AE8 to AE10), plus the
+// code-review follow-ups: timeouts, the deck-wide asset name rule, the
+// extra-elements refusal, --title, the dropped-values report and the url
+// framing check (a throwaway openssl certificate serves the https pages).
 //
 // WHAT THIS PROVES. The tool is run the way Claude runs it: as a child process
 // with CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and SLIDES_STORE_URL in
@@ -28,8 +31,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import { webcrypto } from 'node:crypto'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -180,6 +184,10 @@ let log: Logged[] = []
 /** How many times a person saves the deck just before the tool's next PUT lands. */
 let bumps = 0
 let bumpX = 300
+/** How many of the tool's next asset uploads get no answer at all. */
+let hangAssets = 0
+/** Requests the proxy is deliberately never answering, ended at teardown. */
+const hung: import('node:http').ServerResponse[] = []
 
 const store = (method: string, path: string, { as = 'service', body, headers = {} }: { as?: 'service' | 'robert'; body?: string | Buffer; headers?: Record<string, string> } = {}) =>
   mf.dispatchFetch(ORIGIN + path, { method, body, headers: { 'cf-access-jwt-assertion': as === 'service' ? serviceToken : robertToken, ...headers }, redirect: 'manual' })
@@ -201,6 +209,8 @@ const proxy = createServer(async (req, res) => {
     const body = chunks.length ? Buffer.concat(chunks) : undefined
     let path = req.url || '/'
     const method = req.method || 'GET'
+    // /hang/… is a store that accepts the connection and never answers.
+    if (path.startsWith('/hang/')) { log.push({ method, path, status: 0, service: false }); hung.push(res); return }
     // /moved/… plays the retired host: reads pass, every write is a 301.
     if (path.startsWith('/moved/')) {
       path = path.slice('/moved'.length)
@@ -217,6 +227,7 @@ const proxy = createServer(async (req, res) => {
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
     const deckPut = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
     if (service && method === 'PUT' && deckPut && bumps > 0) { bumps--; await robertSaves(deckPut[1]) }
+    if (service && method === 'PUT' && /\/assets\//.test(path) && hangAssets > 0) { hangAssets--; log.push({ method, path, status: 0, service }); hung.push(res); return }
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
     const out = Buffer.from(await r.arrayBuffer())
@@ -239,9 +250,11 @@ function runTool(args: string[], { tool = TOOL, env = {} as Record<string, strin
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [tool, ...args], { env: e, cwd: tmpdir() })
     let out = '', err = ''
+    // A tool that hangs fails its case instead of hanging the rig.
+    const kill = setTimeout(() => { err += '\n[rig] killed after 60 s'; p.kill('SIGKILL') }, 60_000)
     p.stdout.on('data', (d) => { out += d })
     p.stderr.on('data', (d) => { err += d })
-    p.on('close', (code) => resolve({ code: code ?? -1, out, err }))
+    p.on('close', (code) => { clearTimeout(kill); resolve({ code: code ?? -1, out, err }) })
   })
 }
 
@@ -307,6 +320,8 @@ try {
     ok(decode(after.doc.assets[map.runtime.still.slice(6)]).equals(PNG), 'the still asset is still.png')
     const demo = slideOf(after.doc, 'demo')
     eq(demo.runtime.values, undefined, 'presenter values on the replaced slide are gone (AE3)')
+    ok(/demo[^\n]*presenter values dropped[^\n]*title[^\n]*Bergen/.test(r.out), `the run reports the dropped presenter values by slide, key and value (${r.out.split('\n').find((l) => /values/.test(l)) ?? 'no line'})`)
+    ok(!/map[^\n]*presenter values dropped/.test(r.out), 'and names no slide that had none')
     ok(after.doc.assets[demo.runtime.still.slice(6)].startsWith('data:image/svg+xml;base64,'), 'an svg still is interned as image/svg+xml')
     ok(!('old-src' in after.doc.assets) && !('old-still' in after.doc.assets), 'the replaced record\'s orphaned assets are pruned')
     if (rt) {
@@ -330,20 +345,21 @@ try {
   {
     const id = await seed()
     const before = await readDeck(id)
-    const dir = project({ map: {} })
+    const dir = project({ map: {}, demo: {} })
     log = []
     const r = await runTool([id, dir, '--dry-run'])
     eq(r.code, 0, 'dry run exits 0')
     ok(/map/.test(r.out), 'the plan names the map slide')
+    ok(/demo[^\n]*presenter values dropped[^\n]*title[^\n]*Bergen/.test(r.out), 'the dry-run plan reports the presenter values the replace would drop')
     eq(log.filter((l) => l.method !== 'GET').length, 0, 'no write reached the store')
     eq((await readDeck(id)).etag, before.etag, 'the ETag is unchanged')
   }
 
   // ------------------------------------------------------------ refusals
-  const refuses = async (label: string, id: string, args: string[], name: RegExp) => {
+  const refuses = async (label: string, id: string, args: string[], name: RegExp, env: Record<string, string | undefined> = {}) => {
     const before = await readDeck(id)
     log = []
-    const r = await runTool(args)
+    const r = await runTool(args, { env })
     ok(r.code !== 0, `${label}: exits non-zero`)
     ok(name.test(r.err), `${label}: stderr names it (${r.err.trim().split('\n')[0]})`)
     eq(log.filter((l) => l.method === 'PUT' || l.method === 'POST').length, 0, `${label}: nothing written`)
@@ -385,6 +401,25 @@ try {
     const moved = await runTool([id, project({ map: {} })], { env: { SLIDES_STORE_URL: `${STORE_URL}/moved` } })
     ok(moved.code !== 0 && /redirect/i.test(moved.err), `a store that redirects the write: exits non-zero, never reports success (${moved.err.trim().split('\n')[0]})`)
     eq(log.filter((l) => l.method === 'PUT' && l.status !== 301).length, 0, 'a redirected write: no PUT reached the store')
+
+    // Finding J: the store's asset route is per deck, not per scene.
+    await refuses('two scenes listing one asset name with different bytes', id,
+      [id, project({ map: { manifest: { steps: 0, props: [], assets: ['data.csv'] }, assets: { 'data.csv': 'a\n1\n' } }, demo: { manifest: { steps: 0, props: [], assets: ['data.csv'] }, assets: { 'data.csv': 'a\n2\n' } } })],
+      /data\.csv[\s\S]*(map[\s\S]*demo|demo[\s\S]*map)/)
+    eq(log.length, 0, 'the asset name clash is refused before any request')
+    {
+      const twin = await seed()
+      log = []
+      const r = await runTool([twin, project({ map: { manifest: { steps: 0, props: [], assets: ['data.csv'] }, assets: { 'data.csv': 'a\n1\n' } }, demo: { manifest: { steps: 0, props: [], assets: ['data.csv'] }, assets: { 'data.csv': 'a\n1\n' } } })])
+      eq(r.code, 0, `two scenes listing one asset name with identical bytes run${r.code ? `: ${r.err}` : ''}`)
+      eq(log.filter((l) => l.method === 'PUT' && /\/assets\/data\.csv$/.test(l.path)).length, 1, 'and the shared asset is uploaded once')
+    }
+
+    // Finding N: a runtime slide holding more than its still.
+    const crowded = robertsDoc()
+    ;(crowded.slides[2].elements as any[]).push({ id: 'pasted-note', type: 'text', x: 10, y: 10, w: 100, h: 40, rotation: 0, opacity: 1, html: 'pasted' })
+    const crowdedId = await seed(crowded)
+    await refuses('replacing a runtime slide that holds elements besides its still', crowdedId, [crowdedId, project({ demo: {} })], /demo[\s\S]*pasted-note|pasted-note[\s\S]*demo/)
 
     const enc = await seed({ format: 'bento/enc', v: 1, it: 600000, salt: 'c2FsdA==', iv: 'aXZpdml2aXZpdg==', data: 'Y2lwaGVy' })
     await refuses('an encrypted deck', enc, [enc, project({ map: {} })], /encrypt/i)
@@ -492,6 +527,7 @@ try {
         ['a native slide background changed', (d) => { d.slides[0].background = '#000' }, /s1/],
         ['docId changed', (d) => { d.docId = 'other' }, /docId/],
         ['a slide added that no scene inserts', (d) => { d.slides.push({ id: 'extra', elements: [], runtime: { steps: 0, props: [] } }) }, /order|count/],
+        ['the title changed without --title', (d) => { d.title = 'Other' }, /title/],
       ]
       for (const [label, mutate, name] of cases) {
         const read = robertsDoc(), out = robertsDoc()
@@ -557,6 +593,16 @@ try {
     eq(slideOf((await readDeck(id)).doc, 'map').runtime.src, undefined, 'the deck holds Robert\'s last save, not the splice')
     bumps = 0
   }
+  console.log('\nfour 412s after the assets went up: the message says which assets stay uploaded')
+  {
+    const id = await seed()
+    bumps = 4; bumpX = 600
+    const r = await runTool([id, project({ map: { manifest: { steps: 0, props: [], assets: ['pts.json'] }, assets: { 'pts.json': '[1]' } } })])
+    bumps = 0
+    ok(r.code !== 0 && /owner probably has the deck open/i.test(r.err), 'exits non-zero on the conflict')
+    ok(/pts\.json[^\n]*uploaded|uploaded[^\n]*pts\.json/.test(r.err), `names the asset that was uploaded (${r.err.trim().split('\n').pop()})`)
+    ok(/the deck itself was not changed/i.test(r.err), 'and says the deck itself was not changed')
+  }
 
   // --------------------------------------------------------------- create
   console.log('\n--create: two native slides and one scene become a new deck (F1, R21)')
@@ -600,6 +646,126 @@ try {
     ok(nd.code !== 0 && /deck\.json/.test(nd.err) && !log.some((l) => l.method === 'POST'), '--create without deck.json refuses and posts nothing')
   }
 
+  // ------------------------------------------------------------ --title
+  console.log('\n--title renames a deck and changes nothing else (finding Q1)')
+  {
+    const id = await seed()
+    const before = await readDeck(id)
+    log = []
+    const r = await runTool([id, '--title', 'Frokost i Bergen'])
+    eq(r.code, 0, `<deckId> --title alone exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).length, 1, 'one conditional PUT reached the store')
+    ok(/Frokost i Bergen/.test(r.out), 'the plan names the new title')
+    const after = await readDeck(id)
+    const expect = structuredClone(before.doc)
+    expect.title = 'Frokost i Bergen'
+    ok(same(after.doc, expect), 'only doc.title changed')
+    const r2 = await runTool([id, project({ map: {} }), '--title', 'Frokost igjen'])
+    eq(r2.code, 0, `--title beside a scene exits 0${r2.code ? `: ${r2.err}` : ''}`)
+    eq((await readDeck(id)).doc.title, 'Frokost igjen', 'and the title landed with the scene')
+    const dry = await runTool([id, '--title', 'Never', '--dry-run'])
+    ok(dry.code === 0 && /Never/.test(dry.out), '--title --dry-run prints the rename')
+    eq((await readDeck(id)).doc.title, 'Frokost igjen', 'and writes nothing')
+    await refuses('an empty --title', id, [id, '--title', '  '], /title/)
+    const usage = await runTool([id, '--title'])
+    eq(usage.code, 2, '--title with no value is a usage error')
+    const withCreate = await runTool(['--create', project({}, { slides: [{ id: 'a', elements: [] }] }), '--title', 'x'])
+    eq(withCreate.code, 2, '--create --title is a usage error (deck.json carries the title)')
+  }
+
+  // ----------------------------------------------------------- timeouts
+  console.log('\na store that never answers: the run stops within the timeout (finding E)')
+  {
+    const id = await seed()
+    const started = Date.now()
+    const r = await runTool([id, project({ map: {} })], { env: { SLIDES_STORE_URL: `${STORE_URL}/hang`, SPLICE_TIMEOUT_MS: '400' } })
+    const took = Date.now() - started
+    eq(r.code, 1, 'exits 1')
+    ok(took < 10000, `within the timeout, not hanging (${took} ms)`)
+    ok(/timed out/i.test(r.err) && r.err.includes(`GET ${STORE_URL}/hang/api/harness/decks/${id}`), `names the request that timed out (${r.err.trim().split('\n').pop()})`)
+    const c = await runTool(['--create', project({}, { slides: [{ id: 'a', elements: [] }] })], { env: { SLIDES_STORE_URL: `${STORE_URL}/hang`, SPLICE_TIMEOUT_MS: '400' } })
+    ok(c.code === 1 && /timed out/i.test(c.err) && /templates\/blank\.bento\.html/.test(c.err), `--create: the template fetch times out naming it (${c.err.trim().split('\n').pop()})`)
+  }
+  console.log('\n--create, and an asset upload that never answers: the new deck is not lost (finding E, correctness b)')
+  {
+    hangAssets = 1
+    const r = await runTool(['--create', project({ live: { manifest: { steps: 0, props: [], assets: ['pts.json'] }, assets: { 'pts.json': '[1]' } } }, { title: 'Tapt', slides: [] })], { env: { SPLICE_TIMEOUT_MS: '2000' } })
+    hangAssets = 0
+    const m = /\/d\/([0-9A-Za-z]{10})/.exec(r.out)
+    eq(r.code, 1, 'exits 1')
+    ok(!!m, `the created deck's link is printed before the uploads (${r.out.trim().split('\n')[0]})`)
+    ok(/timed out/i.test(r.err) && /pts\.json/.test(r.err), `the error names the upload that timed out (${r.err.trim().split('\n').pop()})`)
+    if (m) {
+      ok(r.err.includes(m[1]), 'and carries the new deck id')
+      eq((await store('GET', `/api/harness/decks/${m[1]}`)).status, 200, 'the deck exists in the store')
+    }
+  }
+
+  // ----------------------------------------------------- URL framing check
+  console.log('\nscene.json url: a page that refuses framing is refused at authoring time (finding L)')
+  {
+    const cert = mkdtempSync(join(tmpdir(), 'splice-cert-'))
+    temps.push(cert)
+    const gen = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=127.0.0.1',
+      '-keyout', join(cert, 'key.pem'), '-out', join(cert, 'cert.pem')], { stdio: 'pipe' })
+    ok(gen.status === 0, `a throwaway self-signed certificate is minted with openssl${gen.status ? `: ${gen.stderr}` : ''}`)
+    const hits: string[] = []
+    const pages: Record<string, [number, Record<string, string>]> = {
+      '/deny': [200, { 'x-frame-options': 'DENY' }],
+      '/sameorigin': [200, { 'x-frame-options': 'sameorigin' }],
+      '/none': [200, { 'content-security-policy': "default-src 'self'; frame-ancestors 'none'" }],
+      '/self': [200, { 'content-security-policy': "frame-ancestors 'self'" }],
+      '/other': [200, { 'content-security-policy': 'frame-ancestors https://example.com https://intra.example.com' }],
+      '/ours': [200, { 'content-security-policy': "script-src 'self'; frame-ancestors 'self' https://slides.betamobility.ai" }],
+      '/star': [200, { 'content-security-policy': 'frame-ancestors *' }],
+      '/scheme': [200, { 'content-security-policy': 'frame-ancestors https:' }],
+      '/report-only': [200, { 'content-security-policy-report-only': "frame-ancestors 'none'" }],
+      '/plain': [200, {}],
+      '/hop': [302, { location: '/deny' }],
+      '/hop-ok': [302, { location: '/plain' }],
+      '/hop-hop': [302, { location: '/hop-ok' }],
+    }
+    const https = gen.status === 0 ? createHttpsServer({ key: readFileSync(join(cert, 'key.pem')), cert: readFileSync(join(cert, 'cert.pem')) }, (req, res) => {
+      hits.push(`${req.method} ${req.url}`)
+      const [status, headers] = pages[req.url || ''] ?? [404, {}]
+      res.writeHead(status, headers); res.end('<p>page</p>')
+    }) : null
+    if (https) {
+      await new Promise<void>((r) => https.listen(0, '127.0.0.1', () => r()))
+      const base = `https://127.0.0.1:${(https.address() as { port: number }).port}`
+      // The rig's certificate is self-signed; only the child process is told to accept it.
+      const tls = { NODE_TLS_REJECT_UNAUTHORIZED: '0' }
+      const withUrl = (path: string) => project({ map: { manifest: { steps: 0, props: [], url: base + path } } })
+      const id = await seed()
+      for (const [path, what] of [['/deny', 'X-Frame-Options DENY'], ['/sameorigin', 'X-Frame-Options SAMEORIGIN'], ['/none', "frame-ancestors 'none'"],
+        ['/self', "frame-ancestors 'self'"], ['/other', 'frame-ancestors without slides.betamobility.ai'], ['/hop', 'one redirect to a DENY page']]) {
+        await refuses(`a url page with ${what}`, id, [id, withUrl(path)], /scene "map"[^\n]*(X-Frame-Options|frame-ancestors)/, tls)
+      }
+      for (const [path, what] of [['/ours', 'frame-ancestors naming slides.betamobility.ai'], ['/star', 'frame-ancestors *'], ['/scheme', 'frame-ancestors https:'],
+        ['/report-only', 'a report-only policy'], ['/plain', 'no framing headers'], ['/hop-ok', 'one redirect to a plain page']]) {
+        const r = await runTool([id, withUrl(path)], { env: tls })
+        eq(r.code, 0, `a url page with ${what} is accepted${r.code ? `: ${r.err}` : ''}`)
+      }
+      eq(slideOf((await readDeck(id)).doc, 'map').runtime.url, `${base}/hop-ok`, 'and the url lands in the record')
+      const twoHops = await runTool([id, withUrl('/hop-hop')], { env: tls })
+      ok(twoHops.code === 0 && /^warning: scene "map"[^\n]*redirected more than once/m.test(twoHops.err), `two redirects are not followed: a warning, not a refusal (${twoHops.err.trim().split('\n').find((l) => /^warning:/.test(l)) ?? ''})`)
+      // A port that was free a moment ago: connection refused, a real network failure.
+      const closed = createServer()
+      await new Promise<void>((r) => closed.listen(0, '127.0.0.1', () => r()))
+      const closedPort = (closed.address() as { port: number }).port
+      await new Promise((r) => closed.close(r))
+      const down = await runTool([id, project({ map: { manifest: { steps: 0, props: [], url: `https://127.0.0.1:${closedPort}/` } } })], { env: tls })
+      ok(down.code === 0 && new RegExp(`^warning: scene "map"[^\\n]*127\\.0\\.0\\.1:${closedPort}/`, 'm').test(down.err), `an unreachable url is a warning, not a refusal (${down.err.trim().split('\n').find((l) => /^warning:/.test(l)) ?? ''})`)
+      hits.length = 0
+      const skipped = await runTool([id, withUrl('/deny'), '--skip-url-check'], { env: tls })
+      eq(skipped.code, 0, `--skip-url-check bypasses the check${skipped.code ? `: ${skipped.err}` : ''}`)
+      eq(hits.length, 0, '--skip-url-check sends no request to the page')
+      const dry = await runTool([id, withUrl('/deny'), '--dry-run'], { env: tls })
+      ok(dry.code !== 0 && /scene "map"[^\n]*X-Frame-Options/.test(dry.err), 'the check runs on --dry-run too')
+      https.close()
+    }
+  }
+
   // ----------------------------------------------------- the plugin alone
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
   {
@@ -616,6 +782,8 @@ try {
     ok(specifiers.length > 0 && bad.length === 0, `only node: built-ins and ./ imports (${bad.join(', ') || 'none foreign'})`)
   }
 } finally {
+  for (const res of hung) res.destroy()
+  proxy.closeAllConnections()
   proxy.close()
   await mf.dispose()
   for (const t of temps) rmSync(t, { recursive: true, force: true })

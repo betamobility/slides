@@ -717,7 +717,8 @@ of native elements by id: `html` on text, `src` on image and media, `option`
 on charts, `rows` on tables. It never changes an element's `x`, `y`, `w`,
 `h` or `rotation`, never adds (except a new runtime slide placed with
 `insertAfter`), removes or reorders slides or elements, and
-never changes other slide or document keys in a deck people edit. Never
+never changes other slide or document keys in a deck people edit (the one
+document key it may change is `title`, with `--title`). Never
 regenerate a deck from a script once people have edited it.
 
 **The splice tool.** `plugins/beta-slides/scripts/splice.mjs` in
@@ -728,16 +729,19 @@ no dependencies. Credentials come from `CF_ACCESS_CLIENT_ID` and
 `https://slides.betamobility.ai`).
 
 ```bash
-node splice.mjs --create <projectDir> [--dry-run]
-node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
-node splice.mjs <deckId> --edits edits.json [--dry-run]
+node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
+node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
+node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
+node splice.mjs <deckId> --title "<title>" [--dry-run]
 ```
 
 A project folder holds `deck.json` (`{ title?, slides }`, for `--create`
 only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
 `still.svg`, `scene.json` (`{ steps, props, assets, url, insertAfter }`) and heavy files
 in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
-list of `{ slideId, elementId, html | src | option | rows }`.
+list of `{ slideId, elementId, html | src | option | rows }`. Assets are
+stored per deck, so two scenes may list the same asset name only with the
+same bytes; the same name with different bytes is refused before any request.
 
 - `--create` starts from the published blank template, mints a fresh
   `docId`, adds `deck.json`'s slides and the scenes, posts the deck and then
@@ -749,9 +753,25 @@ list of `{ slideId, elementId, html | src | option | rows }`.
   `scene.json` sets `insertAfter` to the id of a slide in the deck as read,
   or `"end"`: then a new runtime slide with the folder's id goes after that
   slide (and after its states), taking its background. Inserted slides are
-  the only slides the write may add. Encrypted decks are refused.
+  the only slides the write may add. A runtime slide that holds elements
+  other than its still is refused, naming those element ids, because the
+  replace would delete them. Encrypted decks are refused.
 - With no scene to change, `splice.mjs <deckId> --edits edits.json` applies
-  content edits alone. A run with neither scene folders nor edits is refused.
+  content edits alone. `--title "<title>"` renames the deck (doc.title and no
+  other document key), alone or beside scenes and edits; `--create` takes the
+  title from `deck.json` instead. A run with no scene folders, no edits and no
+  `--title` is refused.
+- A replaced slide's presenter-set `values` are dropped (R14). The plan output,
+  on `--dry-run` and on a real run, has a line
+  `<slideId>: presenter values dropped by the replace: key="value", …` for
+  each replaced slide that had them.
+- A `scene.json` with `url` is checked before the store is touched: one GET
+  of the page (one redirect followed, 10 s timeout). The run is refused if
+  the answer carries `X-Frame-Options` DENY or SAMEORIGIN, or a
+  `Content-Security-Policy` whose `frame-ancestors` allows neither `*`,
+  `https:` nor `https://slides.betamobility.ai` (`'none'` and `'self'`
+  refuse). A page that cannot be reached is a warning, not a refusal.
+  `--skip-url-check` skips the check.
 - Before writing, the tool compares the document it would write with the one
   it read and refuses any change outside the ownership rule. A refusal writes
   nothing.
@@ -759,6 +779,13 @@ list of `{ slideId, elementId, html | src | option | rows }`.
   answers 428 without it and 412 when the deck changed since the read. On a
   412 the tool reads again and redoes its changes, up to three retries, then
   exits saying the owner probably has the deck open.
+- Every store request times out: 30 s for a deck read or write and for the
+  blank template, 120 s per asset upload. A timeout fails the run with a
+  message naming the request. Assets are uploaded before the deck write, so
+  a run that fails after them lists the uploaded assets and says the deck
+  itself was not changed. `--create` prints the new deck's link as soon as
+  the store creates it, and a later upload failure names the deck id so the
+  run can be finished with `splice.mjs <deckId> <projectDir>`.
 - Exit codes: 0 success, 1 refusal or store error, 2 usage.
 - A deck that is in a live session while the tool writes is unsupported:
   collaborators are not told the store copy changed.
