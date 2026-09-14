@@ -19,6 +19,10 @@
 //      "Data as of <ISO date>" beside its refreshed figure, and every colour
 //      literal on every element has a themeRefs entry.
 //   5. docs/agents.md carries the "Beta build" section the skill points at.
+//   6. Runtime slides (docs/plans/2026-09-14-001, U8): both files carry the
+//      section, the splice tool and the ownership rule; the skill has no bare
+//      replace recipe left; every bento:* message, budget and asset type the
+//      docs name is the one the code uses.
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -56,10 +60,13 @@ const storeRoute = (u) => u === '/'
   || u === '/api/harness/decks'
   || /^\/api\/harness\/decks\/(<id>|[0-9A-Za-z]{10})$/.test(u)
   || /^\/d\/(<id>|[0-9A-Za-z]{10})$/.test(u)
+  || /^\/api\/harness\/decks\/(<id>|[0-9A-Za-z]{10})\/assets\/(<name>|[A-Za-z0-9][A-Za-z0-9._-]{0,79})$/.test(u)
+  || /^\/d\/(<id>|[0-9A-Za-z]{10})\/assets\/(<name>|[A-Za-z0-9][A-Za-z0-9._-]{0,79})$/.test(u)
 const serves = (u) => published.has(u) || storeRoute(u)
 // The predicate's own negative case, so a later widening cannot quietly turn
 // this into a check that passes for anything.
-ok(!serves('/api/harness/nowhere') && !serves('/releases/slides/nope.json') && !serves('/d/'),
+ok(!serves('/api/harness/nowhere') && !serves('/releases/slides/nope.json') && !serves('/d/')
+  && !serves('/d/<id>/assets/') && !serves('/api/harness/decks/<id>/assets/a/b'),
   'a URL the site neither publishes nor routes is still refused')
 const urls = [...new Set([...skill.matchAll(new RegExp(`${SITE.origin.replace(/[.]/g, '\\.')}(/[^\\s)"'\`]*)`, 'g'))].map((m) => m[1].replace(/[.,:;]+$/, '')))]
 ok(urls.length >= 3, `the skill names ${urls.length} URL(s) under ${SITE.origin}`)
@@ -129,6 +136,38 @@ console.log('\nagent guide')
 const guide = read('docs/agents.md')
 ok(/^## Beta build/m.test(guide), 'docs/agents.md carries a "Beta build" section')
 ok(/embed/.test(guide) && /themeRefs/.test(guide) && /Export PPTX|PPTX/.test(guide), 'the Beta build section covers embed, palette slots and the export report')
+
+console.log('\nruntime slides')
+ok(/^## Runtime slides$/m.test(skill), 'the skill carries a "Runtime slides" section')
+ok(/^### Runtime slides$/m.test(guide), 'docs/agents.md carries a "Runtime slides" subsection')
+ok(/^### Motion without a runtime slide$/m.test(guide), 'docs/agents.md carries "Motion without a runtime slide"')
+for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+  ok(/splice\.mjs --create <projectDir>/.test(text) && /splice\.mjs <deckId> <projectDir>/.test(text), `${name} gives both splice commands`)
+  ok(/Claude owns content, the UI owns geometry/.test(text), `${name} states the ownership rule`)
+  ok(/412/.test(text) && /owner probably has the deck open/.test(text), `${name} says what a 412 means`)
+}
+// The replace recipe U1 wrote is gone: splice.mjs is the only way to change a
+// deck in the store. [^`] keeps each match inside one code block.
+ok(!/curl\b[^`]*?-X\s*PUT[^`]*?\/api\/harness\/decks\/<id>/.test(skill), 'the skill has no bare curl -X PUT to /api/harness/decks/<id>')
+ok(/curl[^`]*\/api\/harness\/decks(?![/\w])/.test(skill), 'and keeps the curl create recipe')
+const presentSrc = read('slides/src/runtime-present.ts')
+const codeTypes = new Set([...presentSrc.matchAll(/bento:[a-z]+/g)].map((m) => m[0]))
+for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+  const named = new Set([...text.matchAll(/bento:[a-z]+/g)].map((m) => m[0]).filter((t) => t !== 'bento:slides'))
+  const unknown = [...named].filter((t) => !codeTypes.has(t))
+  ok(named.size >= 7 && unknown.length === 0, `every bento:* message ${name} names is one runtime-present.ts speaks (${named.size} named${unknown.length ? ', unknown: ' + unknown.join(', ') : ''})`)
+}
+const model = read('slides/src/model.ts')
+for (const [k, label, bytes] of [['RUNTIME_SRC_BUDGET', '256 KB', 256 * 1024], ['RUNTIME_STILL_BUDGET', '200 KB', 200 * 1024], ['RUNTIME_ASSET_BUDGET', '16 MB', 16 * 1024 * 1024]]) {
+  const m = new RegExp(`${k} = ([\\d\\s*]+)`).exec(model)
+  const got = m ? m[1].split('*').reduce((a, n) => a * Number(n.trim()), 1) : NaN
+  ok(got === bytes && skill.includes(label) && guide.includes(label), `${k} is ${label} in model.ts, the skill and the guide`)
+}
+const worker = read('server/deck-store/src/worker.js')
+for (const t of ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'application/json', 'text/csv']) {
+  ok(worker.includes(`'${t}'`) && guide.includes(t), `asset type ${t} is accepted by the store and named in the guide`)
+}
+ok(!/<image href="data:image\/png/.test(guide), 'the Embed section no longer recommends a raster screenshot as the view')
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

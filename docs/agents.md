@@ -560,9 +560,11 @@ a deck carrying one opens in an upstream shell without breaking.
   `"asset:<key>"` whose value is that markup. It ALWAYS paints: offline, in
   thumbnails, in print, and in any shell that has never heard of the `app`.
   `validate()` reports a missing view as `embed-missing-view` (error) and a
-  URL in `view` as `embed-remote-view` (warning). A raster screenshot goes in
-  as `<svg viewBox="0 0 W H"><image href="data:image/png;base64,…"/></svg>`.
-  The view is untrusted markup and goes through the svg element's sanitiser:
+  URL in `view` as `embed-remote-view` (warning). A view is a placeholder
+  picture of what the page shows, drawn as SVG (an outline, a title, the
+  shape of the data), not a screenshot of the live page: a screenshot is
+  heavy, goes stale the day the page changes, and reads as a broken page
+  when the frame does not load. The view is untrusted markup and goes through the svg element's sanitiser:
   scripts, handlers and foreign content are stripped.
 - **`app`** names what made it: `bento/dash`, `bento/type`, … or `web` for a
   plain page. Unknown values are rendered (their view), never rejected.
@@ -591,3 +593,168 @@ nothing, and says nothing, not even `unknown-key`. On paste, `sanitizeElement`
 on the slide renders normally. The DECISIONS promise of "never a hole" covers
 an unknown `app` inside a known embed element, not an unknown element type,
 which is why the consumer side of this shape is Beta's upstream pull request.
+
+### Motion without a runtime slide
+
+An `svg` element's `<style>` animations run in present mode: `@keyframes`
+survive the sanitiser, and every time the slide is entered the markup is
+re-inserted so the animation starts again from its first frame. The slide
+stays an ordinary element that people can move and resize in the editor, and
+it exports as a picture. Prefer it for animated diagrams, flows and
+highlights; reach for a runtime slide only when the motion needs script or
+the viewer's input.
+
+Two things to know. Rules inside the `<style>` are scoped to that one
+element, but `@keyframes` names are not, so give each element's keyframes
+names of their own. With reduced motion on (the presenter's `M` key, or the
+OS setting) svg animations are stopped, so draw a resting state that makes
+sense on its own.
+
+### Runtime slides
+
+A runtime slide is one live HTML scene that fills a whole slide. The scene
+runs only in present mode, in a sandboxed frame (`allow-scripts
+allow-forms`, no same-origin access). Everywhere else the slide is its
+**still**: thumbnails, the editor canvas, print and PDF, PowerPoint export,
+and any shell built before runtime slides. The editor shows a runtime slide
+as its still, with reorder, delete, duplicate, notes and the scene's declared
+properties; scene code is not editable in the UI.
+
+**The record.** Runtime fields sit in one optional `slide.runtime` object, and
+the still is also the slide's one element:
+
+```json
+{ "id": "map", "elements": [
+    { "id": "still", "type": "image", "x": 0, "y": 0, "w": 1280, "h": 720,
+      "rotation": 0, "opacity": 1, "src": "asset:still-3f2a9c01b4de", "fit": "cover", "radius": 0 } ],
+  "runtime": {
+    "src": "asset:scene-8c41d2e07a19",
+    "still": "asset:still-3f2a9c01b4de",
+    "steps": 3,
+    "props": [ { "key": "title", "label": "Title", "kind": "text", "default": "Bergen" } ],
+    "assets": [ "bergen.svg" ] } }
+```
+
+- `src` is an `asset:` ref whose value is the scene HTML as a data URI.
+  `still` is an `asset:` ref to the still image, and the same ref is the
+  `src` of the full-bleed `image` element (slide size, `fit: "cover"`).
+- `url` (optional, https only) loads a hosted page instead of `src`. It
+  loads only online and with the offline switch off; otherwise the still
+  shows. Keys pressed inside a hosted page do not drive the show, so the
+  presenter clicks outside the frame to get the arrows back.
+- `steps` is a whole number. `props` is a list of `{ key, label, kind:
+  "text" | "number" | "color", default }`. `values` holds what a presenter
+  set in the slide panel and is dropped whenever the record is replaced.
+  `assets` names heavy files on the deck store (below).
+- A placeholder is `"runtime": { "steps": 0, "props": [] }` plus its still
+  element.
+
+**Why the still is an element.** An older shell paints `elements` and nothing
+else, and keeps unknown keys through open and save. With the still as the
+slide's one element, that shell shows the picture with no code at all, and
+thumbnails, print and the first-page preview need nothing new. New shells lay
+the frame over the still in present mode only. A frame that fails to load, or
+has not loaded after ten seconds, is removed and the still stays.
+
+**The still is a placeholder picture, not a screenshot.** Draw it: an SVG
+outline of the map, the first frame of the demo, a title card, or a small
+PNG. Cap 200 KB. When the runtime slide is slide one, keep it under about
+45 KB: the first-page thumbnail every save writes has a 64 KB budget, the
+still travels as base64, and above the budget the thumbnail shows a tinted
+box instead.
+
+**The protocol.** Everything crosses the frame boundary by `postMessage`, as
+flat objects with a `type` field. The shell posts with target origin `'*'`
+and accepts a message only when its `source` is the frame's window. A scene
+does the same with `window.parent` and never tests `ev.origin` (it is
+`'null'`).
+
+| direction | message | when |
+|---|---|---|
+| scene to shell | `{ type: 'bento:ready' }` | once the scene's message listener is installed |
+| shell to scene | `{ type: 'bento:init', step, steps, props, reduceMotion }` | first, in reply to ready |
+| shell to scene | `{ type: 'bento:assets', assets: { <name>: Blob } }` | after init, once the files are fetched |
+| shell to scene | `{ type: 'bento:step', index }` | the presenter moved a step (from 0) |
+| shell to scene | `{ type: 'bento:props', values }` | property values changed |
+| shell to scene | `{ type: 'bento:motion', reduce }` | reduced motion toggled |
+| scene to shell | `{ type: 'bento:navigate', dir: 'next' \| 'prev' \| 'exit' }` | a key the scene does not use |
+
+Nothing is sent before `bento:ready`, because a message posted before the
+scene's script runs is lost. Steps are counted by the shell from `steps`, and
+only while the scene is listening: the arrows walk the steps before leaving
+the slide, forward entry lands on step 0, backward entry on the last step,
+and a thumbnail-rail jump starts at step 0. A frame that never sent ready has
+no steps, so the arrows change slide. Keys pressed inside the frame never
+reach the shell, so a scene forwards unhandled ArrowLeft, ArrowRight, Space,
+PageUp, PageDown and Escape as `bento:navigate`; the shell takes focus back
+and steps, changes slide or exits. A scene must not move steps on its own
+arrow handling, or it double-steps. The beta-slides skill carries a complete
+scene template.
+
+**Budgets.** Inline scene source 256 KB. Still 200 KB, always inline. Each
+referenced asset 16 MB, at most 64 per scene. Asset types are `image/png`,
+`image/jpeg`, `image/webp`, `image/svg+xml`, `application/json` and
+`text/csv`; names match `[A-Za-z0-9][A-Za-z0-9._-]{0,79}`. SVG assets have
+scripts, `foreignObject` and event handlers stripped on upload, and every
+asset is served with `x-content-type-options: nosniff` and
+`content-security-policy: sandbox`.
+
+**Store-origin assets.** Heavy files are uploaded with
+`PUT https://slides.betamobility.ai/api/harness/decks/<id>/assets/<name>`
+(service token) and served to people at
+`https://slides.betamobility.ai/d/<id>/assets/<name>`. On slide entry the
+shell fetches each name the record lists, on its own origin with the
+viewer's sign-in, and posts the bytes to the scene as Blobs; the sandboxed
+frame never makes a credentialed request. So referenced assets play only
+when the deck is opened from the store by a signed-in person. A copy on
+disk, in Drive or downloaded runs the scene without them, and a "Duplicate as
+new deck" copy has none until the splice tool runs against its new id.
+
+**Ownership: Claude owns content, the UI owns geometry.** An agent replaces
+runtime slides wholesale (source, still, steps, properties and their
+defaults; presenter-set `values` do not survive) and may change the content
+of native elements by id: `html` on text, `src` on image and media, `option`
+on charts, `rows` on tables. It never changes an element's `x`, `y`, `w`,
+`h` or `rotation`, never adds, removes or reorders slides or elements, and
+never changes other slide or document keys in a deck people edit. Never
+regenerate a deck from a script once people have edited it.
+
+**The splice tool.** `plugins/beta-slides/scripts/splice.mjs` in
+betamobility/slides, installed with the beta-slides plugin, is the only
+supported way for an agent to change a deck in the store. Node 18 or newer,
+no dependencies. Credentials come from `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET`, the store from `SLIDES_STORE_URL` (default
+`https://slides.betamobility.ai`).
+
+```bash
+node splice.mjs --create <projectDir> [--dry-run]
+node splice.mjs <deckId> <projectDir> [--edits edits.json] [--dry-run]
+```
+
+A project folder holds `deck.json` (`{ title?, slides }`, for `--create`
+only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
+`still.svg`, `scene.json` (`{ steps, props, assets, url }`) and heavy files
+in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
+list of `{ slideId, elementId, html | src | option | rows }`.
+
+- `--create` starts from the published blank template, mints a fresh
+  `docId`, adds `deck.json`'s slides and the scenes, posts the deck and then
+  uploads its assets.
+- Update reads the deck with `GET /api/harness/decks/<id>` and keeps its
+  `ETag`. Every scene folder must name a slide that is already a runtime
+  slide; a missing id, a duplicated id or a native slide stops the run, and
+  the tool never converts a native slide. It needs at least one scene
+  folder, and it refuses encrypted decks.
+- Before writing, the tool compares the document it would write with the one
+  it read and refuses any change outside the ownership rule. A refusal writes
+  nothing.
+- The write is `PUT /api/harness/decks/<id>` with `If-Match`. The store
+  answers 428 without it and 412 when the deck changed since the read. On a
+  412 the tool reads again and redoes its changes, up to three retries, then
+  exits saying the owner probably has the deck open.
+- Exit codes: 0 success, 1 refusal or store error, 2 usage.
+- A deck that is in a live session while the tool writes is unsupported:
+  collaborators are not told the store copy changed.
+
+Cowork uses its own service token in the same two variables, so it can be
+revoked without affecting local Claude Code runs.
