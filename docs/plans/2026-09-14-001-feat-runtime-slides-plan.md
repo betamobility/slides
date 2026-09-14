@@ -267,7 +267,7 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 
 ### System-Wide Impact
 
-- **Security posture:** the service token gains read-by-id. `docs/security.md`, the worker header comment, the README route table and `SKILL.md` all restate the old "cannot read" property and must change together (`scripts/test-beta-skill.mjs` and `server/deck-store/test/worker.test.mjs` pin the wording).
+- **Security posture:** the service token gains read-by-id. The worker header comment (`server/deck-store/src/worker.js`), two places in `server/deck-store/README.md` (the route table and the harness section) and `plugins/beta-slides/skills/beta-slides/SKILL.md` all restate the old "cannot read" property and must change together; `server/deck-store/test/worker.test.mjs` pins the route behaviour (403 on list) and `scripts/test-beta-skill.mjs` pins the URL shapes.
 - **Format:** `Slide.runtime` is additive; upstream shells preserve it and paint the still (KTD1). `docs/DECISIONS.md` gets an entry.
 - **Collab:** `slide.runtime` is a whole-value LWW register under CRDT like `table.rows`; concurrent presenter property edits on two machines are last-writer-wins. A store replace while live-shared is unsupported (Scope Boundaries).
 - **i18n:** new panel and present strings go into all eight catalogs (`ls slides/src/i18n/`).
@@ -289,8 +289,8 @@ Store first (U1, U2) because the splice tool and the acceptance test depend on i
 **Goal:** A service token can fetch a deck by id with an `ETag`, and a replace with a stale `If-Match` is refused with 412.
 **Requirements:** R10, R11, AE2
 **Dependencies:** none
-**Files:** `server/deck-store/src/worker.js`, `server/deck-store/test/worker.test.mjs`, `server/deck-store/README.md`, `docs/security.md`
-**Approach:** Add `GET /api/harness/decks/:id` in the harness block above the `who.kind !== 'user'` check, streaming the object like `serve()` plus `ETag: obj.httpEtag`. Extend `replace()` so harness callers must send `If-Match` (428 without it) and the `put` passes `onlyIf: { etagMatches }`; a failed precondition answers 412 with a short JSON body telling the caller to re-read. People routes keep today's unconditional replace. Update the header comment, README "Routes › Gated" table and `docs/security.md` to say the token can read a deck by id but not list.
+**Files:** `server/deck-store/src/worker.js`, `server/deck-store/test/worker.test.mjs`, `server/deck-store/README.md`
+**Approach:** Add `GET /api/harness/decks/:id` in the harness block above the `who.kind !== 'user'` check, streaming the object like `serve()` plus `ETag: obj.httpEtag`. Extend `replace()` so harness callers must send `If-Match` (428 without it) and the `put` passes `onlyIf: { etagMatches }`; a failed precondition answers 412 with a short JSON body telling the caller to re-read. People routes keep today's unconditional replace. Update the header comment and both README places (route table and harness section) to say the token can read a deck by id but not list.
 **Patterns to follow:** `serve()` for streaming and headers, `replace()` for metadata preservation, the harness section of the test rig for claims and `call()`.
 **Test scenarios:**
 - Happy path: service token GET of an existing id returns 200, the bytes, `content-type`, `ETag`; a second GET returns the same `ETag`.
@@ -465,7 +465,7 @@ The shell release follows `docs/RELEASING.md` and is cut by the maintainer on re
 
 **Per unit**
 
-- U1: rig covers GET, 200/412/428, list still 403; wording updated in three places.
+- U1: rig covers GET, 200/412/428, list still 403; wording updated in the worker comment and both README places.
 - U2: upload, fetch, delete-cascade covered.
 - U3: modelkeys parity and clipboard parity pass; `runtime` survives paste.
 - U4: browser check of F4 and AE7 done and noted in the PR.
