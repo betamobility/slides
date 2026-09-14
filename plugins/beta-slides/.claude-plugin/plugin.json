@@ -1,6 +1,6 @@
 {
   "name": "beta-slides",
-  "description": "Author Beta Mobility presentations: self-contained .bento.html decks from the Beta build of bento/slides, with editable native slides, code slides that morph between steps, and live HTML scenes spliced into stored decks. Branded from the design system, data refreshed at edit time, editable-PowerPoint export. Installs INSTEAD of bento-slides: both trigger on the same phrases and upstream's downloads the wrong shell.",
+  "description": "Author Beta Mobility presentations: self-contained .bento.html decks from the Beta build of bento/slides, with editable native slides, code slides that morph between steps, and live HTML scenes, including slides ported from hand-rolled reveal.js decks. Branded from the design system, data refreshed at edit time, editable-PowerPoint export. Installs INSTEAD of bento-slides: both trigger on the same phrases and upstream's downloads the wrong shell.",
   "version": "0.2.0",
   "author": {
     "name": "Beta Mobility",

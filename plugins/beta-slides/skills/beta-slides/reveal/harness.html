@@ -1,0 +1,65 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT · Copyright (c) 2026 Beta Mobility -->
+<meta charset="utf-8">
+<title>scene harness</title>
+<style>
+  html, body { margin: 0; background: #1A1A1A; color: #F5F3EF; font: 14px/1.4 Inter, system-ui, sans-serif; height: 100% }
+  header { display: flex; gap: 12px; align-items: center; padding: 8px 12px }
+  iframe { border: 0; width: min(100vw, calc((100vh - 44px) * 16 / 9)); aspect-ratio: 16 / 9; display: block; margin: 0 auto; background: #F5F3EF }
+  button { font: inherit }
+  #log { opacity: .7 }
+</style>
+<header>
+  <strong id="name"></strong>
+  <button id="prev">←</button><span id="pos">step 0 / 0</span><button id="next">→</button>
+  <span id="log"></span>
+</header>
+<iframe id="f" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"></iframe>
+<script>
+// Runs one scene the way beta/slides present mode does
+// (slides/src/runtime-present.ts): srcdoc in a sandbox with no same-origin,
+// nothing posted before bento:ready, then bento:init and the assets as Blobs,
+// steps as bento:step. Serve the PROJECT folder over http (python3 -m
+// http.server) and open harness.html?scene=<slide id>. Arrow keys step, and a
+// scene's forwarded keys (bento:navigate) step too.
+const scene = new URLSearchParams(location.search).get('scene')
+const frame = document.getElementById('f')
+window.log = []
+window.state = { step: 0, steps: 0, ready: false }
+const $ = (id) => document.getElementById(id)
+const show = () => { $('pos').textContent = `step ${state.step} / ${Math.max(0, state.steps - 1)}` }
+window.step = (i) => {
+  state.step = Math.max(0, Math.min(Math.max(0, state.steps - 1), i))
+  frame.contentWindow.postMessage({ type: 'bento:step', index: state.step }, '*')
+  show()
+}
+const move = (dir) => { if (state.ready) step(state.step + (dir === 'next' ? 1 : -1)) }
+$('prev').onclick = () => move('prev')
+$('next').onclick = () => move('next')
+addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') move('next'); if (e.key === 'ArrowLeft') move('prev') })
+;(async () => {
+  if (!scene) { $('name').textContent = 'add ?scene=<slide id> to the URL'; return }
+  $('name').textContent = scene
+  const base = `scenes/${encodeURIComponent(scene)}/`
+  const manifest = await (await fetch(base + 'scene.json')).json()
+  state.steps = manifest.steps || 0
+  show()
+  const assets = {}
+  for (const name of manifest.assets || []) assets[name] = await (await fetch(base + 'assets/' + name)).blob()
+  addEventListener('message', (e) => {
+    if (e.source !== frame.contentWindow) return
+    const m = e.data || {}
+    log.push(m.type + (m.dir ? ':' + m.dir : ''))
+    $('log').textContent = log.slice(-4).join(' · ')
+    if (m.type === 'bento:ready' && !state.ready) {
+      state.ready = true
+      frame.contentWindow.postMessage({ type: 'bento:init', step: state.step, steps: state.steps, props: {}, reduceMotion: false }, '*')
+      frame.contentWindow.postMessage({ type: 'bento:assets', assets }, '*')
+    } else if (m.type === 'bento:navigate') {
+      move(m.dir)
+    }
+  })
+  if (manifest.url) frame.src = manifest.url
+  else frame.srcdoc = await (await fetch(base + 'index.html')).text()
+})()
+</script>

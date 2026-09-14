@@ -11,7 +11,8 @@ description: >-
   data at edit time with an as-of date, and exports editable PowerPoint. Covers
   the three kinds of slide: native slides people edit in bento, code slides
   (syntax-highlighted, morphing between steps) and live HTML scenes (runtime
-  slides) spliced into decks in the store. Full
+  slides) spliced into decks in the store, including porting a hand-rolled
+  reveal.js deck section by section. Full
   schema + recipes at https://slides.betamobility.ai/agents.md.
 ---
 
@@ -46,7 +47,7 @@ you write anything, because each is authored, stored and updated differently.
 |---|---|---|---|
 | Text, charts, tables, images, diagrams, morphs, animated SVG | **Native slide** | Everything: move, resize, retype, restyle | Elements in `slide.elements` |
 | Source code shown to an audience, or a code walkthrough | **Code slide** (a native slide with a `code` element) | Everything, the code included | A `code` element; one slide per step for a walkthrough |
-| A live page: a map to pan, a running demo, script-driven animation, a scene with its own step logic | **Live scene** (runtime slide) | Reorder, notes and the scene's declared properties; not the scene itself | A scene folder, spliced in with `splice.mjs` |
+| A live page: a map to pan, a running demo, script-driven animation, a scene with its own step logic, or a slide from a hand-rolled reveal.js deck | **Live scene** (runtime slide) | Reorder, notes and the scene's declared properties; not the scene itself | A scene folder, spliced in with `splice.mjs` |
 
 Default to native. A code slide is a native slide, so everything under
 Native slides applies to it too. Reach for a live scene only when the browser
@@ -192,11 +193,12 @@ that moved travel to their new place and new tokens fade in.
   `morphId`), and set `"transition": "morph"` on every slide after the first.
   Change a little per step: one function added, one line moved. Put the
   explanation in a title or a side column, not in code comments.
-- **In a stored deck** change the source with `edits.json` and the key
-  `content`: `[{ "slideId": "s4", "elementId": "code-main", "content": "…" }]`.
-  The language, font and box stay as the person left them. For a new step in
-  a stored walkthrough, ask the person to duplicate the slide in the editor,
-  then change its `content` by id.
+- **In a stored deck** the splice tool cannot change a code element: its
+  `content` is not one of the keys `edits.json` accepts, and the tool refuses
+  it. Author code slides before the deck goes into the store (in the file, or
+  in `deck.json` for `--create`). Once it is stored, the person changes the
+  code in the editor (double-click the block), and a new walkthrough step is
+  a slide they duplicate there.
 - **PowerPoint** gets the code as monospace text without syntax colours; the
   export report names each one (`code-colour`). Say so with the report.
 - Code that has to **run** in front of the audience is a live scene, not a
@@ -392,11 +394,112 @@ Rules the template already follows:
 - **A scene is self-contained.** Its CSS, script and small data are inline;
   it makes no request for its assets itself.
 
+### Porting a reveal.js deck: one section, one live scene
+
+A hand-rolled reveal.js deck (maps fetched at runtime, fragment-driven
+animations, a live iframe) becomes a beta/slides deck without rewriting its
+code. Each top-level `<section>` becomes one runtime slide that runs the
+section's own markup, the deck's own CSS and the deck's own script. Reveal
+itself is never loaded: `reveal/shim.js` in this skill's folder stands in for
+it. The shell sends `bento:init` and `bento:step`, and the shim turns them
+into the `ready`, `slidechanged`, `fragmentshown` and `fragmenthidden` events
+the deck script already listens to. This is how the Danmarks Mobilitetsatlas
+deck was ported on 2026-09-14: 15 sections, 22 fragment steps, runtime-fetched
+maps and a live iframe.
+
+1. **Read the deck and plan each section.** Give it a slide id and a kind:
+   - a plain statement (a heading or a sentence, no script) becomes a
+     **native slide** in `deck.json`, a text element under the Beta rules, so
+     people can edit it in the app;
+   - a section with `data-background-iframe="https://…"` becomes a **url
+     scene**: `scene.json` sets `url` to that page, and `index.html` is a
+     one-line placeholder;
+   - everything else becomes a **scene**.
+
+   One flat `<section>` per slide: split a vertical stack (a section inside
+   a section) into separate sections first.
+2. **Write `scenes/<id>/index.html` for each scene**, in this order:
+
+   ```html
+   <!doctype html>
+   <html lang="da"><head><meta charset="utf-8">
+   <style>
+   /* reveal/reset.css, then reveal/reveal.css (this skill's folder, or the deck's own copies) */
+   /* the deck's own stylesheets and <style> blocks, in the order the deck links them */
+   html,body{margin:0;width:100%;height:100%;overflow:hidden}
+   .reveal .slides > section{display:block}
+   </style></head>
+   <body class="reveal-viewport"><div class="reveal"><div class="slides">
+     <section class="present …the section's own classes…" id="…"> …the section's markup… </section>
+   </div></div>
+   <!-- Reveal.initialize's width and height; Reveal's default is 960x700 -->
+   <script>window.BENTO_REVEAL_SIZE = { width: 1280, height: 720 }</script>
+   <script>/* reveal/shim.js, verbatim */</script>
+   <script>/* the deck's own script(s), verbatim, without reveal.js and its plugins */</script>
+   <script>parent.postMessage({ type: 'bento:ready' }, '*')</script>
+   </body></html>
+   ```
+
+   Drop `data-transition`, `data-auto-animate` and `data-background-*` from
+   the section tag. Write every `</script>` inside inlined code as
+   `<\/script>`. The deck script is shared by every section, so it must
+   cope with only one section being present; the atlas script did, because
+   it looks slides up by id.
+3. **`scene.json`**: `steps` is the number of fragment groups plus one (step
+   0 shows none), or 0 for a section without fragments. Fragments that share
+   a `data-fragment-index` are one group; each fragment without one is its
+   own group, after the indexed ones, which is Reveal's order. `assets` lists
+   every file the scene fetches as `assets/<name>`, copied into
+   `scenes/<id>/assets/`. The shim answers `fetch('assets/<name>')` from the
+   files the shell delivers, so the deck's fetch code runs unchanged. The
+   shared script usually fetches files for several slides, so list per scene
+   only the ones that scene draws.
+4. **Stills**: screenshot the original deck at each slide's last step and
+   shrink it (`sips -Z 960 in.png --out still.png`, smaller again until it is
+   under budget; slide one under about 45 KB). A still is `still.png` or
+   `still.svg`, nothing else.
+5. **Check each scene before splicing.** Copy `reveal/harness.html` into the
+   project folder, serve the folder (`python3 -m http.server 8797`), and open
+   `http://127.0.0.1:8797/harness.html?scene=<id>`. It frames the scene the
+   way present mode does, delivers its assets, and steps it with the arrow
+   keys (or `step(3)` in the console). Walk to the last step and back to 0,
+   and check the console is clean.
+6. **Splice**: `splice.mjs --create <projectDir> --dry-run`, then without
+   `--dry-run`. A later change to the source deck is ported into the same
+   folders again and pushed with `splice.mjs <deckId> <projectDir>`, which
+   replaces only the runtime slides and leaves the native slides as people
+   left them.
+
+Know before you port:
+
+- **Each scene carries its own copy** of reveal.css (about 54 KB) and of the
+  deck's CSS and script. The atlas scenes came to about 120 KB each and the
+  deck to 3.7 MB. A scene over 256 KB is refused: move inline data and images
+  out to `assets/`.
+- **Stepping backwards into a slide** enters it at its last step, and the
+  shim replays the fragment events up to there at once. A deck script that
+  ignores a step while the previous animation is still running comes to rest
+  earlier. The atlas port has this gap on two slides.
+- **External fonts.** A `<link>` to Google Fonts in a scene works when the
+  deck is opened online, not offline, and it breaks the rule that a scene is
+  self-contained. The store's content security policy only reports that link
+  today (`content-security-policy-report-only`); if it is ever enforced, the
+  fonts fall back. Embed the faces as `data:` URIs in the scene CSS when that
+  matters.
+- **Reveal calls that navigate** (`Reveal.next()`, `Reveal.slide()`) do
+  nothing in a scene, because the shell owns navigation. Other calls the shim
+  does not implement log a warning rather than throw.
+- A script inside a section's markup runs before the shim. If it calls
+  `Reveal`, move it after the deck script.
+
 ### The still
 
-The still is a placeholder picture of the scene, drawn by you: a hand-drawn
-SVG (the outline of the map, the first frame of the demo, a title) or a small
-PNG. It is not a screenshot of a map or a live page. It is what thumbnails,
+The still is a placeholder picture of the scene. For a new scene, draw it: a
+hand-drawn SVG (the outline of the map, the first frame of the demo, a title)
+or a small PNG. Never trace a map into vectors or paste a screenshot of a map
+as the slide's content. **When porting a deck that already renders** (a
+reveal.js section, below), the still is a screenshot of that slide at its last
+step, shrunk to budget. It is what thumbnails,
 print, PDF, PowerPoint and older shells show, and what present mode shows
 when the frame fails to load.
 
@@ -498,8 +601,8 @@ upload then fails, the error carries the deck id, and you finish with
   allows framing.
 - **`edits.json`** changes the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
-  key per type is `html` (text), `content` (code), `src` (image, media),
-  `option` (chart) and `rows` (table). Anything else is refused.
+  key per type is `html` (text), `src` (image, media), `option` (chart) and
+  `rows` (table). Anything else is refused.
 - **`--dry-run`** reads the deck and prints the plan without writing. Run it
   first.
 - An encrypted deck is refused; the tool does not decrypt. A deck that is in
@@ -514,8 +617,8 @@ so to the user rather than falling back to a hand-written replace.
 ### The ownership rule (hard rule)
 
 **Claude owns content, the UI owns geometry.** You replace runtime slides
-wholesale and change the text, code, images, chart data and table cells of
-native elements by id. You never change an element's position, size or rotation,
+wholesale and change the text, images, chart data and table cells of native
+elements by id. You never change an element's position, size or rotation,
 never add, remove or reorder slides or elements (the one exception is a new
 runtime slide placed with `insertAfter`), and never touch slide notes,
 backgrounds or transitions in a stored deck. People move things in the
@@ -563,6 +666,9 @@ run the command again. Never work around it.
 - [ ] Each slide is the right kind: native by default, source code in a
       `code` element with a real `grammarName`, a live scene only where the
       browser is the point?
+- [ ] A reveal.js port: one flat section per scene, `steps` = fragment
+      groups + 1, every fetched file listed in `assets`, each scene walked
+      forward and back in the harness?
 - [ ] A code walkthrough keeps one element id across its steps, with
       `morph` on every step after the first, and no line clipped at the box?
 - [ ] PPTX exported and its degrade report reported to the user?

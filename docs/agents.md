@@ -594,42 +594,6 @@ on the slide renders normally. The DECISIONS promise of "never a hole" covers
 an unknown `app` inside a known embed element, not an unknown element type,
 which is why the consumer side of this shape is Beta's upstream pull request.
 
-### Code slides
-
-The format has a `code` element that the element list above does not name.
-Use it for any source code on a slide: it keeps the source as plain text,
-highlights it, is editable in the editor, and morphs token by token between
-slides.
-
-```json
-{ "id": "code-main", "type": "code", "x": 96, "y": 176, "w": 1088, "h": 440,
-  "rotation": 0, "opacity": 1,
-  "content": "export function fare(km: number) {\n  return 32 + km * 4.5\n}",
-  "grammarName": "ts",
-  "fontSize": 28, "fontFamily": "'DM Mono', 'Courier New', monospace",
-  "color": "#1A1A1A", "align": "left", "valign": "top", "lineHeight": 1.45,
-  "role": "body", "themeRefs": { "color": "tx1" } }
-```
-
-- `content` is the raw source with real newlines; no HTML.
-- `grammarName` is a language id: `ts`, `js`, `py`, `sql`, `sh`, `json`,
-  `yaml`, `go`, `rust`, `java`, `csharp`, `kotlin`, `swift`, `html`, `css`,
-  `dockerfile`, `hcl`, `r`, `diff`, `md` and about sixty more
-  (`kernel/src/tokenize.ts` `LANGS`, plus `diff` and `md`). Shell is `sh`,
-  not `bash`; an unknown id falls back to `js`.
-- Syntax colours are fixed by the renderer. `color` (plain tokens) is the one
-  palette slot: `tx1` on a light slide, `bg1` on a dark one. A panel behind
-  the code is a `shape` rect on `bg2` placed under it.
-- Lines never wrap and are clipped at the box. At 28 px in DM Mono a 1088 px
-  box holds about 60 characters; a box holds `h / (fontSize × lineHeight)`
-  lines.
-- **Walkthrough**: one slide per step, the same element `id` (or the same
-  `morphId`) on every step, `"transition": "morph"` on each slide after the
-  first, a small change per step.
-- PowerPoint export writes the code as monospace text without syntax colours
-  and reports it as `code-colour`.
-- In a stored deck, `edits.json` changes `content` only; see Runtime slides.
-
 ### Motion without a runtime slide
 
 An `svg` element's `<style>` animations run in present mode: `@keyframes`
@@ -749,8 +713,8 @@ new deck" copy has none until the splice tool runs against its new id.
 **Ownership: Claude owns content, the UI owns geometry.** An agent replaces
 runtime slides wholesale (source, still, steps, properties and their
 defaults; presenter-set `values` do not survive) and may change the content
-of native elements by id: `html` on text, `content` on code, `src` on image
-and media, `option` on charts, `rows` on tables. It never changes an element's `x`, `y`, `w`,
+of native elements by id: `html` on text, `src` on image and media, `option`
+on charts, `rows` on tables. It never changes an element's `x`, `y`, `w`,
 `h` or `rotation`, never adds (except a new runtime slide placed with
 `insertAfter`), removes or reorders slides or elements, and
 never changes other slide or document keys in a deck people edit (the one
@@ -775,7 +739,7 @@ A project folder holds `deck.json` (`{ title?, slides }`, for `--create`
 only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
 `still.svg`, `scene.json` (`{ steps, props, assets, url, insertAfter }`) and heavy files
 in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
-list of `{ slideId, elementId, html | content | src | option | rows }`. Assets are
+list of `{ slideId, elementId, html | src | option | rows }`. Assets are
 stored per deck, so two scenes may list the same asset name only with the
 same bytes; the same name with different bytes is refused before any request.
 
