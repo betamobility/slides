@@ -31,13 +31,14 @@ import type {
   BentoDoc, SlideElement, TextElement, CodeElement, ShapeElement, ImageElement,
   SvgElement, ChartElement, TableElement, MediaElement, EmbedElement,
 } from '../model'
+import { isRuntimeSlide, runtimeStill } from '../runtime'
 
 export interface DegradeEntry {
   /** `*` for a deck-wide degradation (motion, fonts) */
   slideId: string
   /** `*` for a deck-wide degradation */
   elementId: string
-  /** stable machine key: gradient | svg | media | embed | code-colour | motion | fonts | path-arc | image-remote | chart | chart-mixed | table | background | unknown:<type> */
+  /** stable machine key: gradient | svg | media | embed | code-colour | motion | fonts | path-arc | image-remote | chart | chart-mixed | table | background | runtime | unknown:<type> */
   reason: string
   /** one human sentence, shown in the editor toast and printed by the rig */
   detail: string
@@ -81,6 +82,26 @@ export function safeSvg(markup: string): string | null {
   if (!/^<svg[\s>]/i.test(s)) return null
   if (SVG_BANNED.test(s) || SVG_HANDLER.test(s) || SVG_REMOTE.test(s)) return null
   return s
+}
+
+/**
+ * SVG markup behind a picture value: raw `<svg…` or a `data:image/svg+xml`
+ * URI (base64 or percent-encoded), decoded so it can meet safeSvg rather than
+ * travel into the zip as opaque bytes. null when the value is not SVG; '' when
+ * it claims to be and cannot be decoded.
+ */
+export function svgMarkup(value: string | undefined): string | null {
+  if (!value) return null
+  if (/^\s*<svg[\s>]/i.test(value)) return value
+  const m = /^data:image\/svg\+xml([^,]*),/i.exec(value)
+  if (!m) return null
+  const body = value.slice(m[0].length)
+  try {
+    if (/;base64$/i.test(m[1])) return new TextDecoder().decode(Uint8Array.from(atob(body), (c) => c.charCodeAt(0)))
+    return decodeURIComponent(body)
+  } catch {
+    return ''
+  }
 }
 
 // ---- colour ----------------------------------------------------------------
@@ -329,7 +350,21 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
       if (slide.background && slide.background !== 'none') degrade(slide.id, '*', 'background', `Slide background "${slide.background.slice(0, 40)}" is not a flat colour; the theme background is used.`)
     }
 
-    for (const el of slide.elements) {
+    // Beta: a runtime slide (runtime.ts) is a live scene PowerPoint cannot
+    // run, so it exports as a full-bleed picture of its still and nothing
+    // else on the slide is mapped. An SVG still goes through svgPicture, so
+    // the same guard as any other SVG applies; notes and background still do.
+    const runtime = isRuntimeSlide(slide)
+    if (runtime) {
+      const still = runtimeStill(slide, doc)
+      const value = asset(typeof still === 'string' ? still : still?.src)
+      const svg = svgMarkup(value)
+      const data = svg ? await svgPicture(svg, W, H) : svg === null && isData(value) ? value! : PLACEHOLDER_PNG
+      picture(s, data, { x: 0, y: 0, w: W, h: H } as unknown as SlideElement, 'contain')
+      degrade(slide.id, '*', 'runtime', 'A runtime slide is exported as a picture of its still.')
+    }
+
+    for (const el of runtime ? [] : slide.elements) {
       const box = { x: inch(el.x), y: inch(el.y), w: inch(el.w), h: inch(el.h) }
       const rotate = el.rotation ? { rotate: el.rotation } : {}
       const transparency = el.opacity !== undefined && el.opacity < 1 ? Math.round((1 - el.opacity) * 100) : 0
