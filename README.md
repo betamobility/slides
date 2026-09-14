@@ -2,7 +2,7 @@
 
 Beta Mobility's presentation system: a fork of [nyblnet/bento](https://github.com/nyblnet/bento) that builds `bento/slides` with the Beta design system, editable-PPTX export, an `embed` element and a Claude Code plugin. For Beta authors and for Claude.
 
-**Production:** https://slides.betamobility.ai — one host, two surfaces: the deck store (sign in, your decks, `/new`) and the public release channel shipped decks self-update from (current release v2026.9.2, 2026-09-08; v2026.9.1 was the first). `decks.betamobility.ai` is the store's former address and answers `301` until it is deleted.
+**Production:** https://slides.betamobility.ai — one host, two surfaces: the deck store (sign in, your decks, `/new`) and the public release channel shipped decks self-update from (current release v2026.9.5, 2026-09-14; v2026.9.1 was the first). `decks.betamobility.ai` is the store's former address and answers `301` until it is deleted.
 **Client:** Internal
 **Status:** Active, v1.1
 

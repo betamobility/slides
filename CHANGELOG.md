@@ -11,6 +11,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.9.5] — 2026-09-14
+
 - **Live slides for maps and demos.** A slide can now be a runtime slide: a
   small web page that fills the slide and runs when you present, so a map you
   can pan and zoom or a live demo sits in the deck beside ordinary slides. It
