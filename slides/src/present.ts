@@ -14,6 +14,8 @@ import { applyElementFrame, gradientLineCoords, renderSlide } from './render'
 import { paintSpeaker, setSpeakerWindow, speakerIdleBody, speakerWindow } from './screens'
 import { t } from './i18n'
 import { lsGet, lsSet } from '../../kernel/src/storage.ts'
+import { createRuntimeShow } from './runtime-present.ts'
+import { storeIdFromLocation } from './beta/store.ts'
 
 const MORPH_DURATION_DEFAULT = 0.65
 /** Set per-deck by doc.present.morphSeconds; clamped to something sane. */
@@ -90,13 +92,19 @@ export function startPresentation(
     const p = doc.slides.findIndex((s) => s.id === pid)
     return p >= 0 ? p : i
   }
+  // Beta build: runtime slides step through their scene before the slide walk
+  const runtimeShow = createRuntimeShow(doc, slidesEl, storeIdFromLocation(), {
+    goNext: () => goNext(), goPrev: () => goPrev(), exit: () => exit(), reduceMotion: () => reduceMotion,
+  })
   const goNext = () => {
+    if (runtimeShow.next()) return
     const cur = deck.getIndices().h
     for (let i = (isState(cur) ? anchorOf(cur) : cur) + 1; i < doc.slides.length; i++) {
       if (!isState(i)) return deck.slide(i, 0)
     }
   }
   const goPrev = () => {
+    if (runtimeShow.prev()) return
     const cur = deck.getIndices().h
     if (isState(cur)) return deck.slide(anchorOf(cur), 0)
     for (let i = cur - 1; i >= 0; i--) {
@@ -104,6 +112,7 @@ export function startPresentation(
     }
   }
   const hasNext = () => {
+    if (runtimeShow.canNext()) return true
     const cur = deck.getIndices().h
     for (let i = (isState(cur) ? anchorOf(cur) : cur) + 1; i < doc.slides.length; i++) {
       if (!isState(i)) return true
@@ -111,6 +120,7 @@ export function startPresentation(
     return false
   }
   const hasPrev = () => {
+    if (runtimeShow.canPrev()) return true
     const cur = deck.getIndices().h
     if (isState(cur)) return true // right-swipe returns to the parent slide
     for (let i = cur - 1; i >= 0; i--) {
@@ -587,6 +597,7 @@ export function startPresentation(
     reduceMotion = on
     if (persist) lsSet('bento-reduce-motion', on ? 'on' : 'off')
     overlay.classList.toggle('reduce-motion', on)
+    runtimeShow.setReduceMotion(on)
     if (on) clearLaserTrail()
     // Toast only on an explicit toggle (M / speaker button), not the silent
     // OS-preference follow or the initial state.
@@ -714,7 +725,7 @@ export function startPresentation(
       num.className = 'sv-thumb-n'
       num.textContent = String(visibleIndex(idx))
       b.appendChild(num)
-      b.addEventListener('click', () => { deck.slide(idx, 0); toggleGrid(false) })
+      b.addEventListener('click', () => { runtimeShow.jump(idx); deck.slide(idx, 0); toggleGrid(false) })
       return b
     }
 
@@ -837,6 +848,7 @@ export function startPresentation(
     // show if the deck was edited in between — never carry them across
     symCache.clear()
     pauseMediaIn(slidesEl) // stop any playing clip before teardown
+    runtimeShow.dispose()
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     const last = deck.getIndices().h
     try {
@@ -988,7 +1000,9 @@ export function startPresentation(
     if (from) disposeLiveCharts(doc.slides[fromIdx], from)
     mountLiveCharts(doc.slides[toIdx], to, morphing ? doc.slides[fromIdx] : undefined)
     if (from) pauseMediaIn(from)
+    if (from) runtimeShow.leave(fromIdx)
     startMediaIn(to)
+    runtimeShow.enter(toIdx, forward)
     // Capture where this slide's formula symbols sit WHILE it is on screen —
     // once it becomes the outgoing slide there is no layout left to measure.
     // Synchronously, not in rAF: a backgrounded tab never runs animation
@@ -1034,6 +1048,7 @@ export function startPresentation(
       cacheSlideSymbols(doc, first, startIndex)
       mountLiveCharts(doc.slides[startIndex], first)
       startMediaIn(first)
+      runtimeShow.enter(startIndex, true)
     }
   })
 

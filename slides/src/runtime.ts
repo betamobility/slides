@@ -15,8 +15,8 @@
 // Deliberately free of DOM and of untrusted.ts: untrusted.ts imports this
 // file for SLIDE_CHECKS, so the checks below cannot borrow its helpers.
 
-import type { BentoDoc, ImageElement, RuntimeProp, RuntimeSlide, Slide } from './model.ts'
-import { RUNTIME_SRC_BUDGET } from './model.ts'
+import type { BentoDoc, ImageElement, RuntimeProp, RuntimeSlide, Slide, SlideElement } from './model.ts'
+import { defaultImage, RUNTIME_SRC_BUDGET } from './model.ts'
 
 export function isRuntimeSlide(slide: Slide | null | undefined): boolean {
   return !!slide && typeof slide.runtime === 'object' && slide.runtime !== null
@@ -35,6 +35,20 @@ export function runtimeStill(slide: Slide, doc: BentoDoc): ImageElement | string
   if (holder) return holder
   if (images.length) return images[0]
   return ref && doc.assets?.[assetKey(ref)] != null ? ref : null
+}
+
+/**
+ * The elements renderSlide paints for a runtime slide: the still and nothing
+ * else, on every surface (the present-mode frame is laid over this same
+ * still by runtime-present.ts). A bare still ref becomes a full-bleed image.
+ * null for a native slide, or a runtime slide with no still at all, which
+ * then paints its elements like an older shell would.
+ */
+export function runtimePaint(slide: Slide, doc: BentoDoc): SlideElement[] | null {
+  const still = runtimeStill(slide, doc)
+  if (!still) return null
+  if (typeof still !== 'string') return [still]
+  return [defaultImage(still, { id: `${slide.id}-still`, x: 0, y: 0, w: doc.size.width, h: doc.size.height, fit: 'cover' })]
 }
 
 /**
@@ -83,6 +97,9 @@ const MAX_PROPS = 64
 const MAX_TEXT = 4_000
 const MAX_URL = 4_000
 const MAX_STEPS = 10_000
+const MAX_ASSETS = 64
+/** The deck store's own asset-name rule (server/deck-store/src/worker.js ASSET_NAME_RE). */
+export const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
 const PROTO = '__proto__'
 const KIND_DEFAULT: Record<RuntimeProp['kind'], string | number> = { text: '', number: 0, color: '#000000' }
 
@@ -110,7 +127,8 @@ function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | un
  * default. Both are numeric or constant coercions that cannot smuggle anything,
  * and dropping them instead would turn a scene into a native slide over a typo.
  * An unknown prop kind drops that prop only; values are kept only for declared
- * keys. `src` and `still` must be `asset:` refs and `url` https.
+ * keys. `src` and `still` must be `asset:` refs and `url` https; `assets` keeps
+ * only names the store would accept.
  *
  * With `assets` (the paste's asset table) a source whose bytes exceed
  * RUNTIME_SRC_BUDGET is refused too; SLIDE_CHECKS runs without it, because a
@@ -149,6 +167,11 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
       if (v !== undefined) values[prop.key] = v
     }
     if (Object.keys(values).length) out.values = values
+  }
+
+  if (Array.isArray(value.assets)) {
+    const names = [...new Set(value.assets.filter((n): n is string => typeof n === 'string' && ASSET_NAME.test(n)))].slice(0, MAX_ASSETS)
+    if (names.length) out.assets = names
   }
   return out
 }

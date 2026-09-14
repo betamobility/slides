@@ -453,6 +453,9 @@ export interface RuntimeProp {
  * optional because a placeholder the deck author marks for the splice tool is
  * `{ steps: 0, props: [] }` plus its still element and nothing else.
  * `values` are what a presenter set; a replace of the record resets them.
+ * `assets` names heavy files on the deck store's asset route
+ * (`/d/<deckId>/assets/<name>`); present mode fetches them and hands the
+ * bytes to the scene, and only when the deck was opened from the store.
  */
 export interface RuntimeSlide {
   src?: string
@@ -461,6 +464,7 @@ export interface RuntimeSlide {
   steps: number
   props: RuntimeProp[]
   values?: Record<string, string | number>
+  assets?: string[]
 }
 
 export interface BentoDoc {

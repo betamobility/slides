@@ -223,5 +223,102 @@ console.log('\nvalidate advises')
   ok(findings(native).every((f) => !f.code.startsWith('runtime-')), 'a native slide gets no runtime findings')
 }
 
+// ---------------------------------------------- 7. declared scene assets
+console.log('\ndeclared scene assets')
+{
+  const kept = rt.checkRuntime?.({ steps: 0, props: [], assets: ['map.svg', 'data.json', 'map.svg', '../etc/passwd', 'a b', '', 7, '.hidden'] })
+  ok(JSON.stringify(kept?.assets) === JSON.stringify(['map.svg', 'data.json']),
+    `assets keep only store-legal names, deduped (${JSON.stringify(kept?.assets)})`)
+  ok(rt.checkRuntime?.({ steps: 0, props: [], assets: 'map.svg' })?.assets === undefined, 'a non-array `assets` is dropped')
+  ok(rt.checkRuntime?.({ steps: 0, props: [], assets: [] })?.assets === undefined, 'an empty `assets` list is omitted')
+  const many = Array.from({ length: 200 }, (_, i) => `a${i}.png`)
+  ok((rt.checkRuntime?.({ steps: 0, props: [], assets: many })?.assets?.length ?? 0) === 64, 'the asset list is capped at 64')
+  const doc = runtimeDeck()
+  doc.slides[0].runtime!.assets = ['map.svg']
+  const clean = sanitizeSlide(JSON.parse(JSON.stringify(doc.slides[0])))
+  ok(JSON.stringify(clean?.runtime) === JSON.stringify(doc.slides[0].runtime), 'a runtime with assets survives sanitizeSlide byte-identical')
+}
+
+// ------------------------------------------------ 8. present: steps & frame
+// The live half (docs/plans/2026-09-14-001, U4, KTD3/KTD4). What the browser
+// check cannot pin down cheaply lives here as pure functions: the step walk,
+// which messages are accepted, that nothing is posted before the scene says
+// it is ready, and that no asset URL exists without a store deck id.
+console.log('\npresent: steps, messages, readiness, asset urls')
+type PresentModule = typeof import('../slides/src/runtime-present.ts')
+let rp: Partial<PresentModule> = {}
+try { rp = await import('../slides/src/runtime-present.ts') } catch (e) { console.log(`  (runtime-present.ts not loadable: ${(e as Error).message})`) }
+{
+  // step reducer: `steps: 5` is indices 0..4
+  ok(rp.enterStep?.(5, true) === 0, 'forward entry on a 5-step scene lands on step 0')
+  ok(rp.enterStep?.(5, false) === 4, 'backward entry lands on the last step (4)')
+  ok(rp.enterStep?.(0, false) === 0, 'backward entry on a scene without steps is 0')
+  const walk: Array<number | null | undefined> = []
+  let i: number | null | undefined = 0
+  for (let n = 0; n < 5 && typeof i === 'number'; n++) { i = rp.moveStep?.(5, i, 'next'); walk.push(i) }
+  ok(JSON.stringify(walk) === JSON.stringify([1, 2, 3, 4, null]), `next walks 0→4, then signals leave (${JSON.stringify(walk)})`)
+  ok(rp.moveStep?.(5, 4, 'prev') === 3, 'prev from 4 steps back to 3')
+  ok(rp.moveStep?.(5, 0, 'prev') === null, 'prev on step 0 signals leave')
+  ok(rp.moveStep?.(0, 0, 'next') === null && rp.moveStep?.(0, 0, 'prev') === null, '`steps: 0` leaves at once both ways, like a native slide')
+  ok(rp.moveStep?.(1, 0, 'next') === null, 'a single step leaves on next')
+
+  // props: declared defaults overlaid with presenter values
+  const deck = runtimeDeck()
+  const props = rp.sceneProps?.(deck.slides[0].runtime!)
+  ok(JSON.stringify(props) === JSON.stringify({ title: 'Bergen', count: 5, accent: '#1A1A1A' }),
+    `sceneProps overlays values on declared defaults (${JSON.stringify(props)})`)
+
+  // inbound messages
+  ok(rp.parseSceneMessage?.({ type: 'bento:ready' })?.type === 'bento:ready', 'bento:ready parses')
+  ok(rp.parseSceneMessage?.({ type: 'bento:navigate', dir: 'next' })?.type === 'bento:navigate', 'bento:navigate {dir:next} parses')
+  ok(rp.parseSceneMessage?.({ type: 'bento:navigate', dir: 'exit' })?.type === 'bento:navigate', 'bento:navigate {dir:exit} parses')
+  ok(rp.parseSceneMessage?.({ type: 'bento:navigate', dir: 'sideways' }) === null, 'an unknown navigate dir is refused')
+  ok(rp.parseSceneMessage?.('bento:ready') === null && rp.parseSceneMessage?.(null) === null, 'non-object data is refused')
+  ok(rp.parseSceneMessage?.({ type: 'bento:init' }) === null, 'a shell-to-scene type coming back is refused')
+  const frameWin = {} as Window
+  ok(rp.fromFrame?.({ source: frameWin } as unknown as MessageEvent, frameWin) === true, 'a message whose source is the frame window is accepted')
+  ok(rp.fromFrame?.({ source: {} } as unknown as MessageEvent, frameWin) === false, 'a message from any other window is ignored')
+  ok(rp.fromFrame?.({ source: null } as unknown as MessageEvent, null) === false, 'no frame window, nothing accepted (null === null is not a match)')
+
+  // ready gating
+  if (rp.SceneChannel) {
+    const posted: Array<Record<string, unknown>> = []
+    let step = 0
+    const ch = new rp.SceneChannel((m) => posted.push(m as unknown as Record<string, unknown>),
+      () => ({ type: 'bento:init', step, steps: 5, props: {}, reduceMotion: false }))
+    ch.step(2)
+    ch.motion(true)
+    ch.props({ title: 'Oslo' })
+    ch.assets({ 'map.svg': new Blob(['<svg/>'], { type: 'image/svg+xml' }) })
+    ok(posted.length === 0, 'nothing is posted before bento:ready')
+    step = 2
+    ch.ready()
+    ok(posted.map((m) => m.type).join(',') === 'bento:init,bento:assets', `on ready: init first, then held assets (${posted.map((m) => m.type).join(',')})`)
+    ok(posted[0]?.step === 2, 'init carries the step current at ready time')
+    ok(posted[1]?.assets instanceof Object && (posted[1].assets as Record<string, unknown>)['map.svg'] instanceof Blob, 'bento:assets carries {name: Blob}')
+    ch.step(3)
+    ch.motion(false)
+    ch.props({ title: 'Oslo' })
+    ok(posted.slice(2).map((m) => `${m.type}`).join(',') === 'bento:step,bento:motion,bento:props', 'after ready, step/motion/props post straight away')
+    ok(posted[2]?.index === 3 && posted[3]?.reduce === false, 'with their payloads ({index}, {reduce})')
+    const late = new rp.SceneChannel((m) => posted.push(m as unknown as Record<string, unknown>),
+      () => ({ type: 'bento:init', step: 0, steps: 0, props: {}, reduceMotion: false }))
+    const before = posted.length
+    late.ready()
+    ok(posted.length === before + 1, 'with no assets held, ready posts init only')
+  } else ok(false, 'SceneChannel is exported')
+
+  // asset urls
+  ok(rp.assetUrl?.(null, 'map.svg') === null, 'no store deck id, no asset url (a file:// or downloaded copy)')
+  ok(rp.assetUrl?.('abc123', 'map.svg') === '/d/abc123/assets/map.svg', `a store deck id gives the same-origin asset route (${rp.assetUrl?.('abc123', 'map.svg')})`)
+  ok(rp.assetUrl?.('abc123', '../x') === null, 'an illegal asset name gives no url')
+
+  // url-override gating (R7, AE7)
+  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: true, blocked: false }) === true, 'an https url loads when online and not blocked')
+  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: false, blocked: false }) === false, 'navigator offline: no frame, the still stays')
+  ok(rp.urlFrameAllowed?.('https://example.com/x', { online: true, blocked: true }) === false, 'the offline switch: no frame')
+  ok(rp.urlFrameAllowed?.('http://example.com/x', { online: true, blocked: false }) === false, 'plain http never loads')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
