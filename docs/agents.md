@@ -790,5 +790,11 @@ same bytes; the same name with different bytes is refused before any request.
 - A deck that is in a live session while the tool writes is unsupported:
   collaborators are not told the store copy changed.
 
-Cowork uses its own service token in the same two variables, so it can be
-revoked without affecting local Claude Code runs.
+Cowork cannot run the tool: its sandbox has no way to receive the two
+variables (a cloud session holds only session-scoped credentials, and
+connector tokens never enter the shell), and the token must not be pasted into
+a conversation, because a deck read with it carries that deck's live-session
+keys. Authoring needs no credentials at all, though: `/agents.md`,
+`/templates/` and `/releases/` are public. Build the deck, hand the
+`.bento.html` to the user, and tell them to open it and pick **Share → Save to
+Beta**, which stores it under their own identity and returns the deck's link.
