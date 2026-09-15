@@ -59,6 +59,9 @@ Whichever kind, where the deck lives decides how you write it:
   Add, remove and reorder slides and elements freely.
 - **A new deck for the store**: build it locally, then create it with the
   `curl` recipe (no live scenes) or `splice.mjs --create` (any live scene).
+  Both need the store's service token. Where you do not have one (Cowork, say)
+  you still build the whole deck; the user publishes it. See "Publishing
+  without a service token" below.
 - **A deck already in the store**: only `splice.mjs`, under the ownership
   rule. You change content by element id and replace or add live scenes; you
   never add, move or reorder native slides or elements.
@@ -611,10 +614,33 @@ upload then fails, the error carries the deck id, and you finish with
   a live session while the tool writes is unsupported: collaborators are not
   told the store copy changed.
 
-**Cowork** runs the same commands with its own service token, set in the same
-two variables, so it can be revoked without touching local Claude Code runs.
-If `node` is not available in Cowork's shell, the tool cannot run there; say
-so to the user rather than falling back to a hand-written replace.
+### Publishing without a service token (Cowork)
+
+**Cowork cannot write to the store, and there is no way to give it the
+token.** A cloud session runs in a temporary sandbox holding only
+session-scoped credentials, and connector tokens are handled server-side and
+never enter the shell. Do not ask the user to paste `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` into the conversation: the token is long-lived, and
+a deck read with it hands over that deck's live-session keys as well. The same
+applies to any harness whose shell cannot hold the two variables, and to a
+shell without `node`.
+
+This blocks publishing only. Everything the skill needs to AUTHOR a deck is
+public and unauthenticated: `slides.betamobility.ai/agents.md`, `/templates/`
+and `/releases/`. So build the deck in full, write the `.bento.html` where the
+user can reach it (their Drive folder, or the session's files), and hand it
+over:
+
+> Open the file (download it and double-click, or drag it into Chrome), then
+> **Share → Save to Beta**. A store tab opens, you sign in, and you get back a
+> `slides.betamobility.ai/d/<id>` link. From then on ⌘S in that tab saves back
+> in place.
+
+Save to Beta appears in the Share panel whenever the deck is open off the
+store origin, and it needs a valid `@betamobility.io` identity. Anyone else
+gets the login page and keeps the file, which is a complete deck with the
+editor and Export PPTX already in it. Say that plainly rather than reporting
+the deck as unfinished.
 
 ### The ownership rule (hard rule)
 
