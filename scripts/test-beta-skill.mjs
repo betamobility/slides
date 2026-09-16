@@ -193,13 +193,15 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
 // them — the same treatment the 8-hour lifetime already gets. Prose that
 // drifts from a cap is how an agent learns the wrong limit.
 {
-  const worker = read('server/deck-store/src/worker.js')
+  // Read from wherever the constant actually lives: this check caught the
+  // pairing surface moving from worker.js into link.js, which is the point.
+  const link = read('server/deck-store/src/link.js')
   const grant = read('server/deck-store/src/grant.js')
   const readme = read('server/deck-store/README.md')
-  const body = /LINK_BODY_MAX = (\d+)/.exec(worker)
+  const body = /LINK_BODY_MAX = (\d+)/.exec(link)
   const label = /LABEL_MAX = (\d+)/.exec(grant)
   ok(body && Number(body[1]) === 1024 && /at most 1 KB/.test(readme),
-    `the pairing body cap is ${body && body[1]} bytes in the worker and "1 KB" in the README`)
+    `the pairing body cap is ${body && body[1]} bytes in link.js and "1 KB" in the README`)
   ok(label && Number(label[1]) === 80 && /at most 80 characters/.test(readme),
     `the label cap is ${label && label[1]} in grant.js and "80 characters" in the README`)
 }
