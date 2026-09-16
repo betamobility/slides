@@ -29,7 +29,7 @@
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -167,9 +167,14 @@ const mf = new Miniflare({
   modulesRules: [{ type: 'ESModule', include: ['**/*.js'] }],
   compatibilityDate: '2026-07-01',
   r2Buckets: ['DECKS'],
+  kvNamespaces: ['GRANTS'],
   bindings: {
     ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
     PAGES_ORIGIN, NEW_ENABLED: 'on', STORE_HOST: 'slides.betamobility.ai',
+    // No rate-limit binding here: the flag off is what `wrangler dev` does,
+    // and a limiter would refuse a rig that pairs a dozen times in a minute.
+    // The 429 itself is proved in server/deck-store/test/worker.test.mjs.
+    LINK_LIMIT_REQUIRED: 'off',
   },
   outboundService: async (req: Request) => {
     if (req.url === CERTS_URL) return new Response(JSON.stringify(jwks), { headers: { 'content-type': 'application/json' } })
@@ -194,6 +199,33 @@ const hung: import('node:http').ServerResponse[] = []
 
 const store = (method: string, path: string, { as = 'service', body, headers = {} }: { as?: 'service' | 'robert'; body?: string | Buffer; headers?: Record<string, string> } = {}) =>
   mf.dispatchFetch(ORIGIN + path, { method, body, headers: { 'cf-access-jwt-assertion': as === 'service' ? serviceToken : robertToken, ...headers }, redirect: 'manual' })
+
+// The pairing flow, from the rig's side.
+//
+// `autoApprove` makes the proxy do what a person does: the moment the tool's
+// POST /api/link/start is answered, the proxy opens /link/<code> as robert,
+// takes the nonce out of the page and posts the approval — all before the
+// start response goes back, so the tool's first poll is already a 200. That
+// keeps the pairing cases fast and exercises the real approval route rather
+// than writing consent into KV behind the worker's back.
+let autoApprove = true
+// `pollGone` answers the tool's poll 410 without forwarding: what the tool
+// sees when nobody clicked and the code lapsed (F4), without a ten-minute wait.
+let pollGone = false
+const approvals: string[] = []
+
+async function approveAsRobert(code: string) {
+  const page = await (await store('GET', `/link/${code}`, { as: 'robert' })).text()
+  const nonce = (/name="nonce" value="([^"]+)"/.exec(page) || [])[1]
+  if (!nonce) throw new Error(`no nonce on the approval page for ${code}`)
+  const res = await store('POST', `/link/${code}/approve`, {
+    as: 'robert',
+    headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' },
+    body: `nonce=${encodeURIComponent(nonce)}`,
+  })
+  if (res.status !== 200) throw new Error(`the approval answered ${res.status}`)
+  approvals.push(code)
+}
 
 /** Robert drags t-04 and saves from the editor, which sends no If-Match. */
 async function robertSaves(id: string) {
@@ -228,12 +260,26 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (pollGone && method === 'GET' && /^\/api\/link\//.test(path)) {
+      log.push({ method, path, status: 410, service: false })
+      res.writeHead(410, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ state: 'gone', message: 'This pairing is no longer open. Start a new one.' }))
+      return
+    }
     const deckPut = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
     if (service && method === 'PUT' && deckPut && bumps > 0) { bumps--; await robertSaves(deckPut[1]) }
     if (service && method === 'PUT' && /\/assets\//.test(path) && hangAssets > 0) { hangAssets--; log.push({ method, path, status: 0, service }); hung.push(res); return }
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
-    const out = Buffer.from(await r.arrayBuffer())
+    let out = Buffer.from(await r.arrayBuffer())
+    // A person approves, between the start answer and the tool's first poll.
+    if (autoApprove && method === 'POST' && path === '/api/link/start' && r.status === 200) {
+      try {
+        await approveAsRobert(JSON.parse(out.toString()).code)
+      } catch (e) {
+        out = Buffer.from(JSON.stringify({ error: `rig approval failed: ${String(e)}` }))
+      }
+    }
     const h: Record<string, string> = {}
     r.headers.forEach((v: string, k: string) => { if (k !== 'content-length' && k !== 'transfer-encoding' && !(stripEtag && k === 'etag' && /text\/html/.test(r.headers.get('content-type') || ''))) h[k] = v })
     res.writeHead(r.status, h)
@@ -245,10 +291,17 @@ const proxy = createServer(async (req, res) => {
 await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', () => r()))
 const STORE_URL = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`
 
+// Where the tool is allowed to keep a grant during this run. Set on EVERY
+// case, service-token ones included: the developer running this rig may well
+// have a real ~/.bento/slides-grant.json, and without this every existing
+// case would quietly gain a second credential.
+const GRANT_FILE = join(mkdtempSync(join(tmpdir(), 'beta-grant-')), 'slides-grant.json')
+temps.push(dirname(GRANT_FILE))
+
 function runTool(args: string[], { tool = TOOL, env = {} as Record<string, string | undefined> } = {}): Promise<{ code: number; out: string; err: string }> {
   const e: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL') e[k] = v
-  Object.assign(e, { CF_ACCESS_CLIENT_ID: CLIENT_ID, CF_ACCESS_CLIENT_SECRET: CLIENT_SECRET, SLIDES_STORE_URL: STORE_URL })
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL' && k !== 'SLIDES_GRANT_FILE') e[k] = v
+  Object.assign(e, { CF_ACCESS_CLIENT_ID: CLIENT_ID, CF_ACCESS_CLIENT_SECRET: CLIENT_SECRET, SLIDES_STORE_URL: STORE_URL, SLIDES_GRANT_FILE: GRANT_FILE })
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete e[k]; else e[k] = v }
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [tool, ...args], { env: e, cwd: tmpdir() })
@@ -783,6 +836,128 @@ try {
   }
 
   // ----------------------------------------------------- the plugin alone
+  console.log('\n--link: the agent pairs, the person clicks once, publishing follows (U5, F1/AE1/AE6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    // No service token at all: this is Cowork, where there is none to have.
+    const noToken = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
+    const linked = await runTool(['--link'], { env: noToken })
+    eq(linked.code, 0, `--link exits 0${linked.code ? `: ${linked.err}` : ''}`)
+    ok(/\/link\/[0-9A-Za-z]{10}/.test(linked.out), 'it prints the approval URL for the person to open')
+    ok(/Approve/i.test(linked.out), 'with one line telling them what to do')
+    ok(approvals.length > 0, 'the rig approved it as robert, through the real approval route')
+    ok(/robert@betamobility\.io/.test(linked.out), 'and the tool says who approved')
+    // AE1 in the rig's terms: nothing that looks like a token is printed.
+    ok(!/[A-Za-z0-9_-]{43}/.test(linked.out), 'no grant material is printed to stdout')
+    ok(existsSync(GRANT_FILE), 'the grant is remembered in the grant file')
+    const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+    eq(saved.owner, 'robert@betamobility.io', 'which records who it acts as')
+    eq(saved.store, STORE_URL, 'and which store it belongs to')
+    ok(typeof saved.grant === 'string' && saved.grant.length >= 43, 'and holds the grant itself')
+    eq(statSync(GRANT_FILE).mode & 0o777, 0o600, 'readable only by its owner')
+    ok(log.some((l) => l.method === 'POST' && l.path === '/api/link/start'), 'the pairing started at /api/link/start')
+
+    // AE6: a second deck in the same session needs no second approval.
+    const approvalsAfterLink = approvals.length
+    log = []
+    const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Fra Cowork', slides: [{ id: 'cover', elements: [] }] })
+    const made = await runTool(['--create', dir], { env: noToken })
+    eq(made.code, 0, `--create with a grant exits 0${made.code ? `: ${made.err}` : ''}`)
+    const id = (/\/d\/([0-9A-Za-z]{10})/.exec(made.out) || [])[1]
+    ok(!!id, 'and prints the deck link')
+    ok(log.every((l) => !l.path.startsWith('/api/harness/')), 'every store request went to the publish path, not the harness one')
+    ok(log.some((l) => l.method === 'POST' && l.path === '/api/publish/decks'), 'the create was POST /api/publish/decks')
+    eq(approvals.length, approvalsAfterLink, 'no second approval was asked for (AE6)')
+    const row = (await (await store('GET', '/api/decks', { as: 'robert' })).json() as { decks: { id: string; owner: string; writer: string }[] })
+      .decks.find((d) => d.id === id)
+    eq(row?.owner, 'robert@betamobility.io', 'the deck belongs to the person who approved (AE2)')
+    eq(row?.writer, 'grant:robert@betamobility.io', 'and the last writer names their agent')
+
+    // F2: an edit in the same session, through the same grant.
+    log = []
+    const edits = join(mkdtempSync(join(tmpdir(), 'beta-edits-')), 'edits.json')
+    temps.push(dirname(edits))
+    const readBack = docOf(await (await store('GET', `/api/harness/decks/${id}`)).text())
+    const nativeSlide = readBack.slides.find((sl: { id: string }) => sl.id === 'cover')
+    if (nativeSlide) nativeSlide.elements = [{ id: 't-01', type: 'text', x: 10, y: 10, w: 100, h: 20, html: 'før' }]
+    await store('PUT', `/api/decks/${id}`, { as: 'robert', body: deckHtml(readBack) })
+    writeFileSync(edits, JSON.stringify([{ slideId: 'cover', elementId: 't-01', html: 'etter' }]))
+    const changed = await runTool([id, '--edits', edits], { env: noToken })
+    eq(changed.code, 0, `an edit through the same grant exits 0${changed.code ? `: ${changed.err}` : ''}`)
+    eq(docOf(await (await store('GET', `/api/harness/decks/${id}`)).text()).slides.find((sl: { id: string }) => sl.id === 'cover').elements[0].html,
+      'etter', 'and the change landed')
+    ok(log.some((l) => l.method === 'PUT' && l.path === `/api/publish/decks/${id}`), 'as a conditional write on the publish path')
+  }
+
+  console.log('\nthe service token wins when both exist (U5, KTD10)')
+  {
+    log = []
+    // The grant file from the case above is still there, and the service token
+    // is back in the environment: the higher-capability credential is used, so
+    // a stale grant on a developer machine never reroutes a production run.
+    ok(existsSync(GRANT_FILE), 'the grant file is still on disk')
+    const id = await seed()
+    const r = await runTool([id, project({ map: {} })])
+    eq(r.code, 0, `the run exits 0${r.code ? `: ${r.err}` : ''}`)
+    ok(log.some((l) => l.path === `/api/harness/decks/${id}` && l.service), 'and went to the harness path with the service token')
+    ok(log.every((l) => !l.path.startsWith('/api/publish/')), 'never to the publish path')
+  }
+
+  console.log('\na grant file for another store is refused before any request (U5, KTD10)')
+  {
+    log = []
+    const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+    writeFileSync(GRANT_FILE, JSON.stringify({ ...saved, store: 'https://decks.betamobility.ai' }), { mode: 0o600 })
+    const r = await runTool([await seed(), project({ map: {} })], {
+      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+    })
+    ok(r.code !== 0, 'the run is refused')
+    ok(/decks\.betamobility\.ai/.test(r.err) || /another store/i.test(r.err), 'saying the grant belongs to another store')
+    eq(log.length, 0, 'and not one request was made')
+    writeFileSync(GRANT_FILE, JSON.stringify(saved), { mode: 0o600 })
+  }
+
+  console.log('\nan approval that lapsed: say so, name --link, forget the grant (U5, F3/R16)')
+  {
+    // Revoke it the way the person would, from the index.
+    const kv = await mf.getKVNamespace('GRANTS')
+    for (const k of (await kv.list({})).keys) await kv.delete(k.name)
+    log = []
+    const r = await runTool([await seed(), project({ map: {} })], {
+      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+    })
+    ok(r.code !== 0, 'the run stops')
+    ok(/--link/.test(r.err), 'and tells the agent to run --link again')
+    ok(/approval/i.test(r.err), 'in terms of the approval, never of a token')
+    ok(!existsSync(GRANT_FILE), 'the dead grant file is deleted, so the next run pairs cleanly')
+    ok(!log.some((l) => l.method === 'PUT' || l.method === 'POST'), 'nothing was written')
+  }
+
+  console.log('\nnobody approves: the deck is built and unpublished, and the file is complete (U5, F4)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false
+    pollGone = true
+    const r = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    autoApprove = true
+    pollGone = false
+    ok(r.code !== 0, 'the tool exits non-zero when the pairing lapses')
+    ok(/nobody|no one|not approved|lapsed|expired/i.test(r.err), 'saying nobody approved it')
+    ok(!existsSync(GRANT_FILE), 'and writes no grant file')
+  }
+
+  console.log('\nneither credential: the refusal names both ways in (U5)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    const r = await runTool([await seed(), project({ map: {} })], {
+      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+    })
+    ok(r.code !== 0, 'the run is refused')
+    ok(/--link/.test(r.err), 'and names --link')
+    ok(/CF_ACCESS_CLIENT_ID/.test(r.err), 'as well as the service token, for a terminal run')
+  }
+
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
   {
     const copy = mkdtempSync(join(tmpdir(), 'beta-slides-plugin-'))
