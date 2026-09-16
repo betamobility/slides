@@ -83,15 +83,25 @@ The trailing slash is part of each prefix, in the worker and in the Access desti
 
 | Route | Who | Answer |
 |---|---|---|
-| `GET /link/<code>` | person | the approval page: what a grant reaches, for how long, when the pairing started, and the agent's label as quoted escaped text. `410` when the code is unknown, expired or used |
-| `POST /link/<code>/approve` | person | records consent and answers the done page. Requires `Sec-Fetch-Site: same-origin` (or an `Origin` equal to this one) **and** the page's nonce, else `403`; `410` when the code is gone |
-| `POST /api/grants/<hash>/revoke` | person, own grants | `303` to `/`. Same-origin required (`403`); a hash that is not theirs is `404`, which is also what a hash that never existed answers |
+| `GET /link/<code>` | person, in a browser tab | the approval page: what a grant reaches, for how long, when the pairing started, and the agent's label as quoted escaped text. Served only to a real navigation (`Sec-Fetch-Dest: document`), so a script cannot read its nonce; `410` when the code is unknown, expired or used |
+| `POST /link/<code>/approve` | person | records consent and answers the done page. Requires `Sec-Fetch-Site: same-origin` (or an `Origin` equal to this one), a real navigation, **and** the page's nonce, else `403`; `410` when the code is gone; `502` when the store cannot finish recording it |
+| `POST /api/grants/<hash>/revoke` | person, own grants | `303` to `/`. Same-origin and a real navigation required (`403`); a hash that is not theirs is `404`, which is also what a hash that never existed answers |
 
 These sit behind the human application, not the Bypass prefixes: the whole point is that Access has already established who is approving. A service token gets `403`.
 
-Approve and revoke are **same-origin form posts, never GETs**. Access attaches the session assertion to a cross-site auto-submitting form as readily as to our own page, so the header check is what makes the click a consent rather than a forgery; and `/link/*` and `/` carry `content-security-policy: frame-ancestors 'none'` with `x-frame-options: DENY`, because both pages act on a click.
+Approve and revoke are **same-origin form posts, never GETs**. Access attaches the session assertion to a cross-site auto-submitting form as readily as to our own page, so the header check is what makes the click a consent rather than a forgery.
+
+**Same-origin is not sufficient on this host, and that is why there are three more rules.** `/d/:id` serves uploaded deck HTML as a first-party document here, so a script planted in a stored deck is same-origin for free — and could otherwise start its own pairing on the public route, read `/link/<code>` for the nonce, post the approval, and hold a grant acting as whoever opened the deck. Closing that needed one behavioural check and two response headers, each chosen by measurement (see `docs/DECISIONS.md`, 2026-09-16):
+
+- **A real navigation, not a script's request.** `Sec-Fetch-Dest` is `empty` for a `fetch`, `iframe` for an iframe and `document` for a page load or form post, and a page cannot forge it — so the approval page and both write routes require `document`. `Sec-Fetch-User` is *not* used: a script's `form.submit()` inside a click handler carries `?1` just like a real click.
+- **`Cross-Origin-Opener-Policy: same-origin`** on `/link/*` and `/`. A popup is a navigation, so the check above admits it; COOP is what stops the deck that opened it from reading its DOM.
+- **`form-action 'none'`, enforcing, on every served deck.** The one directive promoted out of report-only (v1.1's KTD9 keeps the rest), because a deck has no forms and the store's own control plane does.
+
+`/link/*` and `/` also carry `frame-ancestors 'none'` with `x-frame-options: DENY`, `cross-origin-resource-policy` and `referrer-policy: no-referrer`.
 
 A grant is 32 random bytes. **The store keeps only `sha256` of it**, under `grant:<hash>` and `person:<email>:<hash>` in the `GRANTS` KV namespace, with an eight-hour `expirationTtl` and the same expiry checked against the value's own clock on every verify (KV is eventually consistent; the clock in the value is what fails closed). So a namespace dump between an approval and its delivery holds nothing usable, and the raw token exists in the open exactly once — in the answer to the poll that minted it. There is no signing key and no secret anywhere in the flow.
+
+A grant CREATE is **not** shell-pinned, unlike a grant replace: there is no stored shell to pin it against, which the plan accepted on the grounds that a service token could already do the same. `form-action 'none'` above removes the specific escalation that made this urgent; the open options (an allowlist of trusted shell digests, or serving decks from a separate origin) are recorded in `docs/DECISIONS.md` rather than half-built.
 
 A grant read drops the **whole** `collab` block, not its private keys only: room plus symmetric key is what a read-only copy carries, a reader capability that would outlive the eight hours. The restore on write is what keeps a read-modify-write from destroying the live session instead. An encrypted deck (`bento/enc`) is served and stored unchanged — its keys are inside the ciphertext.
 

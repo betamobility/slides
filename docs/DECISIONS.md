@@ -6664,3 +6664,70 @@ response — a header a grant's re-serialised read does depend on, and one only 
 real HTTP client can observe.
 
 Plan of record: `docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md`.
+
+## 2026-09-16 — BETA FORK: same-origin is not a consent check on a host that serves decks
+
+Found by review, after the pairing flow above was built and green. The
+approval's protection was `Sec-Fetch-Site: same-origin` plus a per-pairing
+nonce. Both are correct against a cross-site forgery and neither survives an
+attacker who is ON this origin — and `/d/:id` serves uploaded deck HTML as a
+first-party document here, with the CSP report-only.
+
+So the whole handshake could be driven from a script planted in any stored
+deck: start a pairing on the public route, fetch `/link/<code>` with the
+reader's session, lift the nonce, post the approval, poll the handle, and hold
+a grant acting as whoever opened the deck. Any partner can store a deck, and so
+can a grant — which makes an injected agent a way in.
+
+MEASURED in Chrome, because the fix turns on which of these a browser can
+forge:
+
+| how the page is reached | dest | mode | user |
+|---|---|---|---|
+| `fetch('/link/…')` | empty | cors | – |
+| an iframe | iframe | navigate | – |
+| `window.open` | document | navigate | – |
+| a script's `form.submit()` | document | navigate | null |
+| the same inside a click handler | document | navigate | **?1** |
+
+`Sec-Fetch-User` is therefore **not** a defence: a script that submits a form
+inside a click handler gets the user-activation flag for free. What does hold:
+
+1. **The approval page is served only to a real navigation** (`dest=document`).
+   A script's fetch and an iframe cannot read the nonce. A request with no
+   `Sec-Fetch-Dest` at all is a non-browser client carrying no victim session,
+   so it still passes — the README's verification curls keep working.
+2. **`Cross-Origin-Opener-Policy: same-origin` on `/link/*` and `/`.** Without
+   it a popup opened by a deck's script is same-origin and its DOM readable;
+   with it the read throws. Measured both ways.
+3. **A served deck carries exactly ONE enforcing CSP directive:
+   `form-action 'none'`.** This narrows v1.1's KTD9 ("no enforced CSP") on
+   purpose and only that far: every other directive stays report-only because
+   nobody has verified the full policy against real decks, a deck has no forms,
+   and a deck still fetches its own assets with the header present (measured).
+   The forged POST is blocked at navigation and never reaches the worker.
+
+**Still open, and Johan's to decide: a grant CREATE is not shell-pinned.** A
+grant's replace pins the bytes outside the `#bento-doc` block, so it cannot
+swap the runtime around someone's deck; create has nothing to pin against, and
+the plan accepted that on the grounds that a service token was the same. That
+reasoning is weaker now — a person uploading a hostile shell does it
+knowingly, while an agent can be made to do it by the document it was asked to
+summarise. `form-action 'none'` removes the specific escalation this entry is
+about; it does not make a planted script harmless. The two real options are an
+allowlist of trusted shell digests on create, or serving `/d/:id` from an
+origin that is not the store's control plane. Both are larger than this change
+and neither is urgent for four partners, so they are written down rather than
+half-done.
+
+Two smaller decisions from the same review:
+
+- **`mintGrant` writes the revocation index before the credential.** The two KV
+  writes are not atomic; the old order's failure mode was a grant that verifies
+  for eight hours, appears on nobody's list and cannot be revoked. The new
+  order's failure mode is an index entry pointing at nothing.
+- **`pollPairing` claims the handle before minting.** Same reasoning one level
+  up: losing an approval costs a click the person can see, while losing a
+  minted grant leaves a live credential nobody holds and nobody knows to end.
+
+Plan of record: `docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md`.
