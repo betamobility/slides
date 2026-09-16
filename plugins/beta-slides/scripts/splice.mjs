@@ -7,6 +7,7 @@
 // person arranged in the editor.
 //
 //   node splice.mjs --link
+//   node splice.mjs --read <deckId> [--out <file>]
 //   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
 //   node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
 //   node splice.mjs <deckId> --title "<title>" [--dry-run]
@@ -95,7 +96,12 @@ const MAX_ATTEMPTS = 4 // one write and three re-derived retries (R19)
 // grant it collects. The label is what the approval page shows them, in quotes.
 const GRANT_FILE_ENV = 'SLIDES_GRANT_FILE'
 const LINK_LABEL = 'Claude (Cowork)'
-const POLL_MS = 2000
+// Seven seconds, not two. The store's pairing limiter is 10 requests per
+// minute per address and the pairing START route shares that budget, so a
+// 2-second poll spent two thirds of its requests being refused and could lock
+// out the next pairing's start. The first poll still goes out immediately, so
+// a click that has already happened is collected at once.
+const POLL_MS = 7000
 const TIMEOUT = { store: 30_000, asset: 120_000, url: 10_000 }
 // The origin a url scene is framed by (the store host people open decks on),
 // fixed rather than taken from SLIDES_STORE_URL: that one can be a test proxy.
@@ -501,9 +507,30 @@ function forgetGrant(path) {
   try { if (path) rmSync(path, { force: true }) } catch { /* nothing to do about it */ }
 }
 
+/**
+ * Is this saved approval over?
+ *
+ * A grant file with no readable `expires` counts as EXPIRED, not as live: the
+ * field is the only local signal there is, so an unreadable one means the file
+ * cannot be trusted to still be good. Erring the other way turned a truncated
+ * file into a store 401 blamed on the person.
+ */
 const expiredGrant = (g) => {
   const t = Date.parse(g?.expires || '')
-  return Number.isFinite(t) && t <= Date.now()
+  return !Number.isFinite(t) || t <= Date.now()
+}
+
+/** The store URL and request timeouts, read the same way by every command. */
+function storeEnv(env) {
+  let override
+  if (env.SPLICE_TIMEOUT_MS !== undefined && env.SPLICE_TIMEOUT_MS !== '') {
+    override = Number(env.SPLICE_TIMEOUT_MS)
+    if (!Number.isFinite(override) || override <= 0) throw new Refusal('SPLICE_TIMEOUT_MS must be a positive number of milliseconds')
+  }
+  return {
+    store: (env.SLIDES_STORE_URL || 'https://slides.betamobility.ai').replace(/\/+$/, ''),
+    timeout: (kind) => override ?? TIMEOUT[kind],
+  }
 }
 
 /**
@@ -520,13 +547,7 @@ const expiredGrant = (g) => {
  * and this stops a stale file from sending a bearer to a different host at all.
  */
 function config(env) {
-  const store = (env.SLIDES_STORE_URL || 'https://slides.betamobility.ai').replace(/\/+$/, '')
-  let override
-  if (env.SPLICE_TIMEOUT_MS !== undefined && env.SPLICE_TIMEOUT_MS !== '') {
-    override = Number(env.SPLICE_TIMEOUT_MS)
-    if (!Number.isFinite(override) || override <= 0) throw new Refusal('SPLICE_TIMEOUT_MS must be a positive number of milliseconds')
-  }
-  const timeout = (kind) => override ?? TIMEOUT[kind]
+  const { store, timeout } = storeEnv(env)
 
   if (env.CF_ACCESS_CLIENT_ID || env.CF_ACCESS_CLIENT_SECRET) {
     for (const k of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
@@ -718,11 +739,19 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms))
  * The deadline comes from the store's own `expires`, not a number here: the
  * pairing's lifetime is the store's to decide and to change.
  */
-export async function link({ env = process.env, log = console.log } = {}) {
-  const store = (env.SLIDES_STORE_URL || 'https://slides.betamobility.ai').replace(/\/+$/, '')
-  let override
-  if (env.SPLICE_TIMEOUT_MS !== undefined && env.SPLICE_TIMEOUT_MS !== '') override = Number(env.SPLICE_TIMEOUT_MS)
-  const ms = Number.isFinite(override) && override > 0 ? override : TIMEOUT.store
+export async function link({ env = process.env, log = console.log, force = false } = {}) {
+  const { store, timeout } = storeEnv(env)
+  const ms = timeout('store')
+
+  // An agent that re-runs --link defensively must not cost the person another
+  // click: one approval covers eight hours and any number of decks, so say so
+  // and stop rather than starting a second pairing.
+  const held = readGrant(env)
+  if (!force && held && !expiredGrant(held) && held.store.replace(/\/+$/, '') === store) {
+    log(`Already approved by ${held.owner}, until ${held.expires}. Nothing to do; publish as usual.`)
+    return
+  }
+
   const startUrl = `${store}/api/link/start`
   const res = await harness(startUrl, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -741,19 +770,42 @@ export async function link({ env = process.env, log = console.log } = {}) {
 
   const deadline = Date.parse(expires) || Date.now() + 10 * 60 * 1000
   const pollUrl = `${store}/api/link/${handle}`
+  // `answered` tells a pairing nobody clicked apart from one where the store
+  // never got a word in to us. Without it, a run throttled or disconnected for
+  // its whole window reports that the person did not approve — which may be
+  // the exact opposite of what happened.
+  let answered = false
+  let backoff = POLL_MS
   for (let first = true; ; first = false) {
     if (!first) {
       if (Date.now() >= deadline) break
-      await wait(POLL_MS)
+      await wait(backoff)
     }
-    const poll = await harness(pollUrl, {}, ms)
-    if (poll.status === 202) continue // nobody has clicked yet
-    if (poll.status === 429) continue // the limiter, not the person; keep waiting
+    let poll
+    try {
+      poll = await harness(pollUrl, {}, ms)
+    } catch (e) {
+      // A dropped connection must not end the pairing: the person may be about
+      // to click, or may already have, and this handle is the only thing that
+      // can collect the grant. Back off and keep asking until the deadline.
+      backoff = Math.min(backoff * 2, 15_000)
+      if (first) log(`  (the store did not answer: ${e.message.split('.')[0]}; still waiting)`)
+      continue
+    }
+    if (poll.status === 202) { answered = true; backoff = POLL_MS; continue } // nobody has clicked yet
+    // The limiter, not the person. Back off so the polling stops competing
+    // with its own budget, and keep waiting.
+    if (poll.status === 429) { backoff = Math.min(backoff * 2, 15_000); continue }
     if (poll.status === 410) {
-      throw new Refusal('nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.')
+      throw new Refusal(answered
+        ? 'nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.'
+        : 'the pairing expired without the store ever answering this run. The deck is not published; the file on disk is a complete deck on its own. Run --link again.')
     }
     if (poll.status === 503) throw new Error(`${pollUrl}: the store cannot answer pairings right now (its rate limiter is not configured); tell the maintainer`)
-    if (!poll.ok) throw await failed(poll, 'waiting for the approval')
+    // NOT `failed()`: this route takes no credential, so its wording about
+    // CF_ACCESS_* would send the reader after the wrong thing entirely.
+    if (!poll.ok) throw new Error(`waiting for the approval: the store answered ${poll.status} on a route that needs no credential`)
+    answered = true
     let body
     try { body = JSON.parse(await bodyText(poll, 'GET', pollUrl, ms)) } catch { throw new Error('waiting for the approval: the store answered 200 but its body did not parse') }
     if (!body.grant) {
@@ -767,7 +819,54 @@ export async function link({ env = process.env, log = console.log } = {}) {
     log(`(kept in ${path}, readable only by you; nothing else was written)`)
     return
   }
-  throw new Refusal('nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.')
+  throw new Refusal(answered
+    ? 'nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.'
+    : 'the pairing expired without the store ever answering this run. The deck is not published; the file on disk is a complete deck on its own. Run --link again.')
+}
+
+// ---- read ---------------------------------------------------------------------------------
+
+/**
+ * `--read <deckId>`: the deck as it is now, and the ids an edit needs.
+ *
+ * This exists because the documented "read before you write" step was a curl
+ * carrying `CF_ACCESS_CLIENT_ID`, which a paired session does not have — so
+ * the whole "fix a typo in an existing deck" path dead-ended for exactly the
+ * sessions pairing was built for, at the step that comes before every edit.
+ * Going through `cfg` instead means it works with either way in, and the
+ * bearer never appears in a command an agent types or a transcript keeps.
+ *
+ * The file is written rather than printed (a deck is about a megabyte), and
+ * what IS printed is the inventory an `edits.json` is built from: every slide,
+ * which are runtime slides the tool replaces wholesale, and every native
+ * element with the one key an edit may change.
+ */
+export async function read(id, { out, env = process.env, log = console.log } = {}) {
+  if (!/^[0-9A-Za-z]{10}$/.test(id)) throw new Refusal(`"${id}" is not a deck id (ten letters and digits, the end of /d/<id>)`)
+  const cfg = config(env)
+  const ms = cfg.timeout('store')
+  const url = `${cfg.api}/decks/${id}`
+  const res = await harness(url, { headers: cfg.auth }, ms)
+  if (res.status === 404) throw new Refusal(`deck ${id} is not in the store`)
+  if (!res.ok) throw await failed(res, `reading deck ${id}`, cfg)
+  const html = await bodyText(res, 'GET', url, ms)
+  const file = out || `${id}.bento.html`
+  writeFileSync(file, html)
+  let doc
+  try { doc = readBlock(html) } catch (e) { throw new Refusal(`deck ${id}: ${e.message}`) }
+  log(`${file}  (${kb(Buffer.byteLength(html))}, read with ${cfg.credential})`)
+  if (isEncrypted(doc)) {
+    log('the deck is encrypted; the tool cannot read inside it')
+    return
+  }
+  log(`title: ${doc.title || '(untitled)'}`)
+  for (const s of Array.isArray(doc.slides) ? doc.slides : []) {
+    if (isRuntime(s)) { log(`  ${s.id}  (runtime slide: replace it with a scene folder)`); continue }
+    const els = (Array.isArray(s.elements) ? s.elements : [])
+      .filter((e) => e && CONTENT_KEY[e.type])
+      .map((e) => `${e.id} (${e.type}: ${CONTENT_KEY[e.type]})`)
+    log(`  ${s.id}${s.stateOf ? ` [state of ${s.stateOf}]` : ''}${els.length ? `: ${els.join(', ')}` : ': nothing an edit may change'}`)
+  }
 }
 
 // ---- update and create --------------------------------------------------------------------
@@ -911,6 +1010,7 @@ export async function create(dir, { dryRun = false, skipUrlCheck = false, env = 
 
 const USAGE = `usage:
   node splice.mjs --link
+  node splice.mjs --read <deckId> [--out <file>]
   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
   node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
   node splice.mjs <deckId> --title "<title>" [--dry-run]
@@ -923,15 +1023,19 @@ export async function main(argv) {
   const value = (n) => { const i = args.indexOf(n); if (i < 0) return undefined; const v = args[i + 1]; args.splice(i, 2); return v === undefined || v.startsWith('--') ? null : v }
   const dryRun = flag('--dry-run')
   const isLink = flag('--link')
+  const isRead = flag('--read')
   const isCreate = flag('--create')
   const skipUrlCheck = flag('--skip-url-check')
   const edits = value('--edits')
   const title = value('--title')
+  const out = value('--out')
   try {
-    if (edits === null || title === null) { console.error(USAGE); return 2 }
+    if (edits === null || title === null || out === null) { console.error(USAGE); return 2 }
     // `--link` takes nothing else: it is the pairing, not a deck operation.
-    if (isLink && !isCreate && args.length === 0 && edits === undefined && title === undefined && !dryRun) await link({})
+    if (isLink && !isCreate && !isRead && args.length === 0 && edits === undefined && title === undefined && !dryRun) await link({})
     else if (isLink) { console.error(USAGE); return 2 }
+    else if (isRead && !isCreate && args.length === 1 && edits === undefined && title === undefined && !dryRun) await read(args[0], { out })
+    else if (isRead) { console.error(USAGE); return 2 }
     else if (isCreate && args.length === 1 && edits === undefined && title === undefined) await create(args[0], { dryRun, skipUrlCheck })
     else if (!isCreate && args.length === 2 && !args.some((a) => a.startsWith('--'))) await update(args[0], args[1], { edits, title, dryRun, skipUrlCheck })
     else if (!isCreate && args.length === 1 && (edits !== undefined || title !== undefined) && !args[0].startsWith('--')) await update(args[0], undefined, { edits, title, dryRun, skipUrlCheck })

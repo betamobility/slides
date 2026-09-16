@@ -746,7 +746,13 @@ same bytes; the same name with different bytes is refused before any request.
 - `--create` starts from the published blank template, mints a fresh
   `docId`, adds `deck.json`'s slides and the scenes, posts the deck and then
   uploads its assets.
-- Update reads the deck with `GET /api/harness/decks/<id>` and keeps its
+- `node splice.mjs --read <deckId> [--out <file>]` is how you get the slide
+  and element ids an `edits.json` needs. It writes the deck to a file and
+  prints the inventory, going through whichever way in this session has — the
+  service token, or an approval from `--link` — so it works in a sandbox that
+  has no token, unlike a `curl` carrying `CF_ACCESS_*`.
+- Update reads the deck with `GET /api/harness/decks/<id>` (or
+  `/api/publish/decks/<id>` under an approval) and keeps its
   `ETag`. A scene folder naming a runtime slide replaces it; a duplicated id
   or a native slide stops the run, and the tool never converts a native
   slide. A folder naming no slide in the deck stops the run unless its

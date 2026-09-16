@@ -189,6 +189,30 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
     `the grant lifetime is ${hours} hours in grant.js, the skill and the guide`)
 }
 
+// Numbers the README states as prose, checked against the code that enforces
+// them — the same treatment the 8-hour lifetime already gets. Prose that
+// drifts from a cap is how an agent learns the wrong limit.
+{
+  const worker = read('server/deck-store/src/worker.js')
+  const grant = read('server/deck-store/src/grant.js')
+  const readme = read('server/deck-store/README.md')
+  const body = /LINK_BODY_MAX = (\d+)/.exec(worker)
+  const label = /LABEL_MAX = (\d+)/.exec(grant)
+  ok(body && Number(body[1]) === 1024 && /at most 1 KB/.test(readme),
+    `the pairing body cap is ${body && body[1]} bytes in the worker and "1 KB" in the README`)
+  ok(label && Number(label[1]) === 80 && /at most 80 characters/.test(readme),
+    `the label cap is ${label && label[1]} in grant.js and "80 characters" in the README`)
+}
+// The read-before-you-write step must work for a paired session too: the curl
+// recipe carries CF_ACCESS_*, which Cowork does not have.
+{
+  const splice = read('plugins/beta-slides/scripts/splice.mjs')
+  ok(/--read <deckId>/.test(splice), 'splice.mjs offers a --read primitive')
+  for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+    ok(/splice\.mjs --read/.test(text), `${name} gives the --read command for reading a deck before editing it`)
+  }
+}
+
 // The replace recipe U1 wrote is gone: splice.mjs is the only way to change a
 // deck in the store. [^`] keeps each match inside one code block.
 ok(!/curl\b[^`]*?-X\s*PUT[^`]*?\/api\/harness\/decks\/<id>/.test(skill), 'the skill has no bare curl -X PUT to /api/harness/decks/<id>')

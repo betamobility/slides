@@ -696,6 +696,18 @@ fresh `--create` is a new deck; it does not update the old one.
 now, not a copy from earlier in the session:
 
 ```bash
+node splice.mjs --read <deckId> [--out current.bento.html]
+```
+
+It writes the deck to a file and prints the inventory an `edits.json` is built
+from: every slide, which ones are runtime slides you replace wholesale, and
+every native element with the one key an edit may change. **Use this whichever
+way you got in** — it goes through the service token when you have one and
+through an approval when you do not, and it never puts a credential in a
+command. The `curl` below is the equivalent for a shell that has the service
+token and no `node`:
+
+```bash
 curl -fsS -o current.bento.html \
      -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \

@@ -223,9 +223,21 @@ const html = (body, extra = {}) => new Response(body, { status: 200, headers: { 
 // arrive with the person's Access session attached (KTD13). Belt and braces:
 // `frame-ancestors` is the modern rule, `x-frame-options` the one an older
 // browser honours.
+// Pages that act on a click, hardened against a script on this same origin
+// (a stored deck at /d/:id is first-party HTML here):
+//
+//  · frame-ancestors / x-frame-options — not clickjackable.
+//  · Cross-Origin-Opener-Policy — a popup opened by a deck's script is
+//    severed from its opener, so the script cannot read this page's DOM and
+//    lift the nonce. MEASURED: without it `w.document` reads fine
+//    same-origin; with it the read throws a DOMException.
+//  · Cross-Origin-Resource-Policy — not readable as a subresource either.
 const NO_FRAMING = {
   'content-security-policy': "frame-ancestors 'none'",
   'x-frame-options': 'DENY',
+  'cross-origin-opener-policy': 'same-origin',
+  'cross-origin-resource-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
 }
 
 // --- write validation (shape only) ------------------------------------------
@@ -494,6 +506,32 @@ async function restoreIntoUpload(existing, bytes) {
   }
 }
 
+/**
+ * The 412 both conflict paths answer: the precondition classified up front on
+ * the grant path, and a failed `onlyIf` on the put.
+ *
+ * Who wrote the version that won, and which version it is. The editor uses
+ * both: a tab live-synced with its room already holds a person's edits and may
+ * retry against this ETag; an agent's replace never travels through sync, so
+ * the editor stops. `writer` is the stored identity, and verifyAccess only
+ * ever gives a person an email, so an `@` was the person test — a grant's
+ * writer carries one too, which is what `wroteAsPerson` excludes.
+ */
+async function conflict(env, ctx, req, id) {
+  track(ctx, req, 'deck_save', 'conflict')
+  const current = await env.DECKS.head(KEY(id))
+  const res = json(412, {
+    error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
+    writer: wroteAsPerson(decMeta(current?.customMetadata?.writer)) ? 'person' : 'service',
+  })
+  if (current) {
+    res.headers.set('etag', current.httpEtag)
+    res.headers.set(ETAG_HEADER, current.httpEtag)
+    res.headers.set(GEN_HEADER, String(genOf(current)))
+  }
+  return res
+}
+
 // KTD5. `requireMatch` is the harness route's rule: a replace from a file
 // harness must say which version it read (428 otherwise). The people route
 // honours If-Match when present but cannot require it, because shells already
@@ -511,6 +549,15 @@ async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCo
   let bytes = await readBody(req)
   if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
   if (restoreCollab) {
+    // THE PRECONDITION IS CLASSIFIED FIRST, before the shell is compared.
+    // Otherwise a person saving between a grant's read and its write — which
+    // legitimately moves the shell, that is how an update lands — surfaces as
+    // `400 shell` instead of `412`. The tool re-reads and retries a 412 and
+    // gives up on a 400, so the wrong one of those two turns an ordinary
+    // conflict into a failed run. `existing` is already the current object, so
+    // this costs no extra read; the `onlyIf` on the put below stays, because
+    // the get-then-put window is still a race and its 412 is the right answer.
+    if (etag && etag !== existing.etag) return conflict(env, ctx, req, id)
     const restored = await restoreIntoUpload(existing, bytes)
     if (restored.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, restored.reason) }
     bytes = restored.bytes
@@ -530,26 +577,7 @@ async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCo
       sg: String(gen),
     },
   }, etag)
-  if (!stored) {
-    track(ctx, req, 'deck_save', 'conflict')
-    // Who wrote the version that won, and which version it is. The editor
-    // uses both: a tab live-synced with its room already holds a person's
-    // edits and may retry against this ETag; a service's replace never
-    // travels through sync, so the editor stops. `writer` is the Access
-    // identity, and verifyAccess only ever gives a person an email, so an
-    // `@` is the person test (a service token's id is `<hex>.access`).
-    const current = await env.DECKS.head(KEY(id))
-    const res = json(412, {
-      error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
-      writer: wroteAsPerson(decMeta(current?.customMetadata?.writer)) ? 'person' : 'service',
-    })
-    if (current) {
-      res.headers.set('etag', current.httpEtag)
-      res.headers.set(ETAG_HEADER, current.httpEtag)
-      res.headers.set(GEN_HEADER, String(genOf(current)))
-    }
-    return res
-  }
+  if (!stored) return conflict(env, ctx, req, id)
   track(ctx, req, 'deck_save', 'ok')
   return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag, [GEN_HEADER]: String(gen) } })
 }
@@ -671,9 +699,26 @@ const CSP = [
 // grant's read is re-serialised, so `obj.size` would be a lie the client
 // truncates on. The ETag stays the STORED object's, so the If-Match a grant
 // sends back still names a version R2 knows.
+// The ONE policy a served deck gets in enforcing mode, beside the report-only
+// CSP above. A deck is uploaded HTML served first-party on the store's own
+// origin, so a planted script could otherwise submit a form to the store's
+// own control plane — which is exactly how the pairing approval would be
+// forged (a script's form post is indistinguishable from a real click: both
+// arrive same-origin, dest=document, mode=navigate, and even Sec-Fetch-User
+// is ?1 inside a click handler; all measured).
+//
+// Narrow on purpose. `form-action` is the only directive here, so nothing
+// about a deck's scripts, fetches, fonts or media changes and the full policy
+// stays report-only until someone has verified it against real decks. A deck
+// has no forms — MEASURED: with this header a deck still fetches its own
+// assets (200) while its form post is blocked at navigation and never reaches
+// the server at all.
+const DECK_ENFORCED_CSP = "form-action 'none'"
+
 const deckHeaders = (obj, length = obj.size) => ({
   'content-type': 'text/html; charset=utf-8',
   'content-length': String(length),
+  'content-security-policy': DECK_ENFORCED_CSP,
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
   etag: obj.httpEtag,
@@ -851,12 +896,48 @@ async function linkPoll(env, handle) {
  * browser sets `Sec-Fetch-Site` itself and a page cannot forge it, so that is
  * the primary check; `Origin` covers a client that omits it. A request with
  * neither header is not a browser form post and is refused.
+ *
+ * SAME-ORIGIN IS NOT ENOUGH ON THIS HOST, which is why `pageRequest` below
+ * exists as well: `/d/:id` serves uploaded deck HTML as a first-party
+ * document here, so a script inside a stored deck is same-origin for free.
  */
 function sameOrigin(req, url) {
   const site = (req.headers.get('sec-fetch-site') || '').toLowerCase()
   if (site) return site === 'same-origin'
   const origin = req.headers.get('origin')
   return !!origin && origin === url.origin
+}
+
+/**
+ * Is this a real page in a browser, rather than a script's request?
+ *
+ * The attack this closes: a script in a stored deck (first-party on this
+ * origin, see above) starts its own pairing on the public route, reads
+ * `/link/<code>` to lift the nonce, and posts the approval — collecting a
+ * grant that acts as whoever opened the deck. Every step is same-origin.
+ *
+ * MEASURED, in Chrome, rather than taken from the spec:
+ *
+ *   fetch('/link/…')                  dest=empty     mode=cors
+ *   an iframe                         dest=iframe    mode=navigate
+ *   window.open(…)                    dest=document  mode=navigate
+ *   a script's form.submit()           dest=document  mode=navigate  user=null
+ *   the same inside a click handler    dest=document  mode=navigate  user=?1
+ *
+ * So `dest` separates a script's READ of the page (empty, iframe) from a real
+ * navigation — that is what this function is for — while `Sec-Fetch-User` is
+ * NOT a defence, because a script that submits a form inside a click handler
+ * gets `?1` for free. The popup read and the forged form post are closed by
+ * two response headers instead: COOP on these pages (a popup's opener cannot
+ * touch its DOM) and `form-action 'none'` on a served deck.
+ *
+ * A request with no `Sec-Fetch-Dest` at all is allowed through: that is a
+ * non-browser client (curl in the README's verification steps), which carries
+ * no victim's session to abuse. `sameOrigin` still governs the writes.
+ */
+function pageRequest(req) {
+  const dest = (req.headers.get('sec-fetch-dest') || '').toLowerCase()
+  return !dest || dest === 'document'
 }
 
 /**
@@ -953,14 +1034,14 @@ export default {
 
     // Harness routes: same handlers, open to any verified identity.
     if (path === '/api/harness/decks' && m === 'POST') return create(req, env, ctx, who)
-    const hm = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+    const hm = new RegExp(`^/api/harness/decks/(${ID_PAT})$`).exec(path)
     if (hm && m === 'GET') return harnessRead(env, hm[1])
     if (hm && m === 'PUT') return replace(req, env, ctx, who, hm[1], { requireMatch: true })
     // The asset upload is the one harness route a person may not use (U2): a
     // person's scenes arrive through the splice tool, never a browser, and an
     // upload route open to every signed-in page is a way to plant files on
     // the store's origin. `(.+)` so a bad name is a 400, not a 404.
-    const am = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
+    const am = new RegExp(`^/api/harness/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
     if (am && m === 'PUT') return agentWrite(who) ? putAsset(req, env, am[1], am[2]) : empty(403)
 
     // Everything else is for people. A service token stops here.
@@ -978,17 +1059,29 @@ export default {
     // established who is approving. A service token is refused above.
     const lm = new RegExp(`^/link/(${ID_PAT})$`).exec(path)
     if (lm && m === 'GET') {
+      // A script cannot READ this page: its nonce is the second half of the
+      // approval's protection, and a fetch or an iframe from a stored deck is
+      // same-origin for free on this host.
+      if (!pageRequest(req)) return text(403, 'Open this link in a browser tab.')
       const pairing = await readPairing(env, lm[1])
       if (!pairing) return text(410, 'This approval link has expired or has already been used.')
       return html(linkPage(who.id, lm[1], pairing), NO_FRAMING)
     }
     const la = new RegExp(`^/link/(${ID_PAT})/approve$`).exec(path)
     if (la && m === 'POST') {
-      if (!sameOrigin(req, url)) return text(403, 'This has to be approved from the store’s own page.')
+      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be approved from the store’s own page.')
       const nonce = await formNonce(req)
       // Read once, for the label the done page repeats back.
       const pairing = await readPairing(env, la[1])
-      const outcome = await approvePairing(env, la[1], nonce, who.id)
+      let outcome
+      try {
+        outcome = await approvePairing(env, la[1], nonce, who.id)
+      } catch {
+        // The consent may already have been recorded — the state write lands
+        // before the code is deleted — so say so rather than showing a raw
+        // platform error to someone who just clicked Approve.
+        return text(502, 'The store could not finish recording this approval. Check with whoever asked for it before approving again.')
+      }
       if (outcome === 'nonce') return text(403, 'This approval form is out of date. Open the link again.')
       if (outcome !== 'ok') return text(410, 'This approval link has expired or has already been used.')
       return html(linkDonePage(who.id, pairing || {}), NO_FRAMING)
@@ -999,7 +1092,7 @@ export default {
     // and same-origin, because Access attaches the session either way (KTD13).
     const gr = /^\/api\/grants\/([0-9a-f]{64})\/revoke$/.exec(path)
     if (m === 'POST' && (gr || path.startsWith('/api/grants/'))) {
-      if (!sameOrigin(req, url)) return text(403, 'This has to be revoked from the store’s own page.')
+      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be revoked from the store’s own page.')
       // A hash that is not this person's revokes nothing and answers 404: the
       // page never shows anyone else's, so there is nothing to distinguish.
       if (!gr || !(await revokeGrant(env, who.id, gr[1]))) return empty(404)
@@ -1018,13 +1111,13 @@ export default {
     }
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
     if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
-    const dm = /^\/api\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+    const dm = new RegExp(`^/api/decks/(${ID_PAT})$`).exec(path)
     if (dm && m === 'PUT') return replace(req, env, ctx, who, dm[1])
     if (dm && m === 'DELETE') return remove(env, who, dm[1])
-    const sm = /^\/d\/([0-9A-Za-z]{10})$/.exec(path)
+    const sm = new RegExp(`^/d/(${ID_PAT})$`).exec(path)
     if (sm && m === 'GET') return serve(env, ctx, req, sm[1])
     if (sm && m === 'HEAD') return serveHead(env, sm[1])
-    const sa = /^\/d\/([0-9A-Za-z]{10})\/assets\/([^/]+)$/.exec(path)
+    const sa = new RegExp(`^/d/(${ID_PAT})/assets/([^/]+)$`).exec(path)
     if (sa && m === 'GET') return serveAsset(req, env, sa[1], sa[2])
 
     return empty(404)

@@ -377,7 +377,17 @@ export async function run(Miniflare) {
     eq(r.headers.get('x-content-type-options'), 'nosniff', 'x-content-type-options is nosniff')
     const csp = r.headers.get('content-security-policy-report-only') || ''
     ok(csp.length > 0, 'a report-only CSP ships with the deck')
-    ok(!r.headers.has('content-security-policy'), 'no enforced CSP in v1.1 (KTD9)')
+    // v1.1's KTD9 shipped NO enforcing CSP at all, on purpose: nobody had
+    // verified the full policy against real decks. That still holds for every
+    // directive but one. The one-click publish plan gave this origin a consent
+    // flow (/link/<code>/approve), and a deck is first-party HTML here, so a
+    // planted script could otherwise post an approval as whoever opened it —
+    // measured: a script's form post is indistinguishable from a real click.
+    // `form-action` is therefore enforced, alone, and a deck has no forms.
+    eq(r.headers.get('content-security-policy'), "form-action 'none'",
+      'exactly one enforcing directive, and it is form-action (one-click publish plan)')
+    ok(!/script-src|connect-src|img-src/.test(r.headers.get('content-security-policy') || ''),
+      'nothing else is enforced: the full policy is still report-only (KTD9)')
     for (const frag of ["script-src 'self' 'unsafe-inline' blob:", 'font-src', 'data:', 'img-src', 'media-src', 'connect-src', 'wss://sync.betamobility.ai', 'frame-src https:']) {
       ok(csp.includes(frag), `CSP carries ${frag}`)
     }
@@ -1163,7 +1173,12 @@ export async function run(Miniflare) {
     })
     const pollPair = (handle, extra = {}) => call('GET', `/api/link/${handle}`, { headers: { ...fromIp(), ...extra } })
     const nonceIn = (page) => (/name="nonce" value="([^"]+)"/.exec(page) || [])[1]
-    const sameOrigin = { 'sec-fetch-site': 'same-origin' }
+    // What a real browser sends for a page load and a form post, measured in
+    // Chrome: site=same-origin, mode=navigate, dest=document. The worker now
+    // requires the `dest` too, because a script's fetch of the approval page
+    // (dest=empty) is same-origin for free on a host that serves decks.
+    const sameOrigin = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }
+    const asDocument = { 'sec-fetch-dest': 'document' }
     // The value's own clock is what expires a pairing, so the rig can retire
     // one without waiting ten minutes. Only `exp` is touched.
     const expireKey = async (key) => {
@@ -1183,15 +1198,19 @@ export async function run(Miniflare) {
 
     r = await pollPair(pair.handle)
     eq(r.status, 202, 'a poll before approval is 202')
-    let pollBody = await r.text()
-    ok(!/grant/i.test(pollBody) || !/[A-Za-z0-9_-]{43}/.test(pollBody), 'and carries no grant material')
+    const pollBody = await r.text()
+    // NOT an OR. The previous form (`!/grant/i || !/token-shape/`) could only
+    // fail if BOTH appeared, so it passed on any body — including one that had
+    // started leaking a token. The token shape alone is the property.
+    eq(JSON.parse(pollBody).state, 'pending', 'and says so plainly')
+    ok(!/[A-Za-z0-9_-]{43}/.test(pollBody), 'and carries nothing token-shaped at all')
 
     console.log('\nthe approval page: what it says, and what it refuses (U2, R3/R19)')
     r = await call('GET', `/link/${pair.code}`)
     eq(r.status, 401, 'the approval page is behind Access: no assertion is 401')
     r = await call('GET', `/link/${pair.code}`, { as: 'service' })
     eq(r.status, 403, 'and a service token is not a person: 403')
-    r = await call('GET', `/link/${pair.code}`, { as: 'alice' })
+    r = await call('GET', `/link/${pair.code}`, { as: 'alice', headers: asDocument })
     eq(r.status, 200, 'a signed-in person gets the page')
     const approvePage = await r.text()
     ok(approvePage.includes('publish decks as you'), 'it says what is being granted')
@@ -1291,6 +1310,90 @@ export async function run(Miniflare) {
     await expireKey(`handle:${stalePair.handle}`)
     r = await pollPair(stalePair.handle)
     eq(r.status, 410, 'and its handle polls 410, so the agent learns nobody approved (F4)')
+
+    // ------------------- a script on this origin cannot drive the approval (U2)
+    //
+    // The hole a same-origin check alone leaves open, and the reason this is
+    // not theoretical: /d/:id serves uploaded deck HTML as a first-party
+    // document on THIS host, so a script planted in a stored deck is
+    // same-origin for free. Left unguarded it could start its own pairing on
+    // the public route, read the approval page to lift the nonce, post the
+    // approval, and collect a grant acting as whoever opened the deck.
+    //
+    // Sec-Fetch-Dest is what separates a script's READ of the page from a real
+    // navigation, measured in Chrome: a fetch is dest=empty, an iframe is
+    // dest=iframe, a real page load or form post is dest=document. The other
+    // two halves are response headers, asserted below.
+    console.log('\na script on this origin cannot read the nonce or post the approval (U2, R19)')
+    const scripted = await (await startPair('a deck with a script in it')).json()
+    for (const [what, headers] of [
+      ['a fetch', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' }],
+      ['an iframe', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' }],
+    ]) {
+      const rr = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers })
+      eq(rr.status, 403, `${what} of the approval page is refused, so the nonce is unreadable`)
+      ok(!(await rr.text()).includes('nonce'), 'and the refusal carries no nonce')
+    }
+    // The page a person actually opens still works, and the nonce is there.
+    r = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers: asDocument })
+    eq(r.status, 200, 'while a real page load is served')
+    const scriptedNonce = nonceIn(await r.text())
+    ok(!!scriptedNonce, 'with its nonce')
+    // Even holding the nonce, a scripted POST is refused.
+    r = await call('POST', `/link/${scripted.code}/approve`, {
+      as: 'alice',
+      headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${scriptedNonce}`,
+    })
+    eq(r.status, 403, 'a scripted approve is refused even with the right nonce')
+    r = await pollPair(scripted.handle)
+    eq(r.status, 202, 'and the pairing is still pending')
+
+    console.log('\nthe headers that close the rest of that chain (U2)')
+    r = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers: asDocument })
+    eq(r.headers.get('cross-origin-opener-policy'), 'same-origin',
+      'COOP on the approval page: a popup opened by a deck script cannot read its DOM')
+    eq(r.headers.get('cross-origin-resource-policy'), 'same-origin', 'and it is not readable as a subresource')
+    eq(r.headers.get('referrer-policy'), 'no-referrer', 'and the code does not travel in a Referer')
+    r = await call('GET', '/', { as: 'alice' })
+    eq(r.headers.get('cross-origin-opener-policy'), 'same-origin', 'the index, which carries Revoke, is COOP-protected too')
+    // The deck itself: one ENFORCING directive, and only that one, so the
+    // report-only policy is unchanged. A deck has no forms; the approval does.
+    const cspDeck = await call('GET', `/d/${second.id}`, { as: 'alice' })
+    eq(cspDeck.headers.get('content-security-policy'), "form-action 'none'",
+      'a served deck cannot submit a form anywhere, which is how a planted script would post an approval')
+    ok(/script-src/.test(cspDeck.headers.get('content-security-policy-report-only') || ''),
+      'while the full policy stays report-only, unchanged')
+
+    console.log('\na revoke driven by a script is refused too (U4, R19)')
+    const scriptRevoke = await mintGrant(grantEnv, 'alice@betamobility.io', 'for the script test')
+    r = await call('POST', `/api/grants/${scriptRevoke.hash}/revoke`, {
+      as: 'alice', headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+    })
+    eq(r.status, 403, 'a scripted revoke is refused')
+    ok(await verifyGrant(asReq(bearer(scriptRevoke.token)), grantEnv), 'and the grant survives')
+
+    console.log('\nan approval in the pairing\u2019s last seconds is still collectable (U2)')
+    const late = await (await startPair('late clicker')).json()
+    r = await call('GET', `/link/${late.code}`, { as: 'alice', headers: asDocument })
+    const lateNonce = nonceIn(await r.text())
+    // One second of pairing left when the click lands.
+    const lateLink = JSON.parse(await kv.get(`link:${late.code}`))
+    lateLink.exp = Math.floor(Date.now() / 1000) + 1
+    await kv.put(`link:${late.code}`, JSON.stringify(lateLink))
+    const lateHandle = JSON.parse(await kv.get(`handle:${late.handle}`))
+    lateHandle.exp = Math.floor(Date.now() / 1000) + 1
+    await kv.put(`handle:${late.handle}`, JSON.stringify(lateHandle))
+    r = await call('POST', `/link/${late.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${lateNonce}`,
+    })
+    eq(r.status, 200, 'the click is accepted with a second to spare')
+    // The approval carries its OWN clock from here, so a poll two seconds
+    // later still collects it instead of being told nobody approved.
+    await new Promise((res) => setTimeout(res, 2000))
+    r = await pollPair(late.handle)
+    eq(r.status, 200, 'and two seconds later the grant is still delivered, not 410')
+    ok(!!(await r.json()).grant, 'with a real grant in it')
 
     console.log('\nthe pairing values are not credentials anywhere else (AE4)')
     const unapproved = await (await startPair('unapproved')).json()
@@ -1575,6 +1678,53 @@ export async function run(Miniflare) {
     r = await call('PUT', `/api/decks/${live.id}`, { as: 'bob', body: pinSrc.replace('shell-marker', 'a-new-shell') })
     eq(r.status, 200, "a person's save is not pinned: a shell update is what ⌘S after an update is")
 
+    console.log('\na person\u2019s save between a grant\u2019s read and its write is a 412, not a shell refusal (U8)')
+    {
+      // The case the rig could not previously produce: its deck() helper emits
+      // a byte-identical shell every time, so the 412-race case never also
+      // moved the shell. A real person's save DOES move it — that is how a
+      // shell update lands — and the pin ran before the precondition, so a
+      // routine conflict came back as `400 shell`. The tool retries a 412 and
+      // gives up on a 400, so the wrong one turns a conflict into a failed run.
+      const raced = deck(withText('Kappl\u00f8p', 'a', { collab: liveCollab }), { pad: 'first-shell' })
+      r = await call('POST', '/api/decks', { as: 'bob', body: raced })
+      const id = (await r.json()).id
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const readEtag = r.headers.get('x-bento-etag')
+      const readSrc = await r.text()
+      // Bob saves, and his save changes the shell as well as the block.
+      r = await call('PUT', `/api/decks/${id}`, {
+        as: 'bob', body: deck(withText('Kappl\u00f8p', 'b', { collab: liveCollab }), { pad: 'a-newer-shell' }),
+      })
+      eq(r.status, 200, "bob's save lands first")
+      // Now the grant writes what it read.
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': readEtag }), body: readSrc,
+      })
+      eq(r.status, 412, 'the grant write is a 412: re-read and try again')
+      const body = await r.json()
+      eq(body.error, 'changed', 'with the conflict body the tool already understands')
+      eq(body.writer, 'person', 'naming the person who won')
+      ok(!!r.headers.get('x-bento-etag'), 'and the current etag to retry against')
+      // And the retry, against the fresh version, succeeds.
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const freshEtag = r.headers.get('x-bento-etag')
+      const freshSrc = await r.text()
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': freshEtag }), body: freshSrc,
+      })
+      eq(r.status, 200, 'the re-derived write then succeeds')
+      // The shell pin still refuses a shell the grant made up itself.
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const pinEtag2 = r.headers.get('x-bento-etag')
+      const pinSrc2 = await r.text()
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': pinEtag2 }), body: pinSrc2.replace('a-newer-shell', 'agent-made-this'),
+      })
+      eq(r.status, 400, 'while an invented shell is still refused')
+      eq(await r.text(), 'shell', 'with the reason `shell`')
+    }
+
     console.log('\nan encrypted deck is served and stored as it is (U8)')
     const encBytes = deck(encEnvelope())
     r = await call('POST', '/api/decks', { as: 'bob', body: encBytes })
@@ -1623,7 +1773,7 @@ export async function run(Miniflare) {
     ok(bobIdx.includes('Bobs agent'), 'he sees his own')
 
     const revoke = (hash, { as = 'alice', headers = {} } = {}) => call('POST', `/api/grants/${hash}/revoke`, {
-      as, headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded', ...headers },
+      as, headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded', ...headers },
     })
     // 404, where the plan's U4 scenario said 403: a hash nobody's page ever
     // showed bob is indistinguishable from a hash that does not exist, and
@@ -1659,6 +1809,65 @@ export async function run(Miniflare) {
     r = await call('GET', '/', { as: 'alice' })
     ok(!(await r.text()).includes('Agent access'), 'with no grants there is no section')
     ok(!!bobsGrant.hash, 'sanity: the fixture existed')
+
+    // ------------------------- the defensive branches, and the mint ordering
+    console.log('\nwhat happens when the parts underneath misbehave (U1/U2/U8)')
+
+    // The revocation index is written BEFORE the credential, so a failure
+    // between the two leaves something listable and inert rather than a live
+    // grant nobody can see or end. Asserted by watching the write order.
+    {
+      const order = []
+      const realPut = kv.put.bind(kv)
+      const probe = {
+        put: (key, value, opts) => { order.push(String(key).split(':')[0]); return realPut(key, value, opts) },
+        get: kv.get.bind(kv), list: kv.list.bind(kv), delete: kv.delete.bind(kv),
+      }
+      const g = await mintGrant({ GRANTS: probe }, 'alice@betamobility.io', 'ordering')
+      eq(order.join(' then '), 'person then grant', 'the revocation index is written before the credential')
+      ok(await verifyGrant(asReq(bearer(g.token)), grantEnv), 'and the grant still works')
+      await revokeGrant(grantEnv, 'alice@betamobility.io', g.hash)
+    }
+
+    // A stored deck whose block cannot be rewritten: a grant read must refuse
+    // rather than fall back to serving the bytes it was supposed to strip.
+    {
+      const broken = 'brokenblok'
+      const twoBlocks = `<!doctype html><html><body>`
+        + `<script type="application/json" id="bento-doc">{"format":"bento/slides","v":1,"slides":[]}</script>`
+        + `<script type="application/json" id="bento-doc">{"format":"bento/slides","v":1,"slides":[]}</script>`
+        + `</body></html>`
+      // Straight into R2, past `inspect`, which would have refused it.
+      const r2 = await mf.getR2Bucket('DECKS')
+      await r2.put(`decks/${broken}.bento.html`, twoBlocks, {
+        httpMetadata: { contentType: 'text/html; charset=utf-8' },
+        customMetadata: { title: 'broken', docId: '', kind: 'deck', owner: encodeURIComponent('bob@betamobility.io'), writer: encodeURIComponent('bob@betamobility.io'), created: new Date().toISOString(), updated: new Date().toISOString(), sg: '0' },
+      })
+      const rr = await call('GET', `/api/publish/decks/${broken}`, { headers: bearer(aliceTok) })
+      eq(rr.status, 502, 'a grant read of an unrewritable deck refuses')
+      ok(!(await rr.text()).includes('bento-doc'), 'and does not hand back the bytes it could not strip')
+      const person = await call('GET', `/d/${broken}`, { as: 'bob' })
+      eq(person.status, 200, "while a person's read of the same deck is unaffected")
+    }
+
+    // A grant write whose shell matches but whose block no longer parses.
+    {
+      const rr0 = await call('GET', `/api/publish/decks/${bare.id}`, { headers: bearer(aliceTok) })
+      const etag0 = rr0.headers.get('x-bento-etag')
+      const src0 = await rr0.text()
+      const corrupt = src0.replace(/(id=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, '$1{not json$2')
+      const rr = await call('PUT', `/api/publish/decks/${bare.id}`, {
+        headers: { ...bearer(aliceTok), 'if-match': etag0 }, body: corrupt,
+      })
+      eq(rr.status, 400, 'a grant write whose block does not parse is refused')
+      eq(await rr.text(), 'json', 'with the one-word reason `json`')
+    }
+
+    // NOT TESTED HERE, deliberately: a limiter binding that THROWS rather than
+    // one that is absent. Miniflare offers no way to make its ratelimits
+    // binding fail, and the alternatives were a stub that proves nothing or an
+    // assertion that cannot fail. The absent-binding case above covers the same
+    // two-line branch (503 with the flag on, pass-through with it off).
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

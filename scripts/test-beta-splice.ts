@@ -212,6 +212,8 @@ let autoApprove = true
 // `pollGone` answers the tool's poll 410 without forwarding: what the tool
 // sees when nobody clicked and the code lapsed (F4), without a ten-minute wait.
 let pollGone = false
+/** How many of the tool's next polls get no answer at all (a dropped connection). */
+let pollDrops = 0
 const approvals: string[] = []
 
 async function approveAsRobert(code: string) {
@@ -260,6 +262,12 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (pollDrops > 0 && method === 'GET' && /^\/api\/link\//.test(path) && path !== '/api/link/start') {
+      pollDrops--
+      log.push({ method, path, status: 0, service: false })
+      res.destroy()   // a dropped connection mid-poll, not an answer
+      return
+    }
     if (pollGone && method === 'GET' && /^\/api\/link\//.test(path)) {
       log.push({ method, path, status: 410, service: false })
       res.writeHead(410, { 'content-type': 'application/json' })
@@ -956,6 +964,73 @@ try {
     ok(r.code !== 0, 'the run is refused')
     ok(/--link/.test(r.err), 'and names --link')
     ok(/CF_ACCESS_CLIENT_ID/.test(r.err), 'as well as the service token, for a terminal run')
+  }
+
+  console.log('\n--read: the ids an edit needs, through whichever credential is live (U5)')
+  {
+    // The gap this closes: the documented read-before-you-write step was a
+    // curl carrying CF_ACCESS_*, which a paired session does not have — so the
+    // step before every edit dead-ended for exactly the sessions pairing
+    // exists to serve.
+    const id = await seed()
+    const outFile = join(mkdtempSync(join(tmpdir(), 'beta-read-')), 'current.bento.html')
+    temps.push(dirname(outFile))
+    log = []
+    const withToken = await runTool(['--read', id, '--out', outFile])
+    eq(withToken.code, 0, `--read with the service token exits 0${withToken.code ? `: ${withToken.err}` : ''}`)
+    ok(existsSync(outFile), 'it writes the deck to a file rather than printing a megabyte')
+    ok(/s1/.test(withToken.out) && /t-04/.test(withToken.out), 'and prints the slide and element ids an edits.json needs')
+    ok(/text: html/.test(withToken.out), 'with the one key an edit may change for each')
+    ok(/map/.test(withToken.out) && /runtime/.test(withToken.out), 'naming runtime slides as replace-wholesale')
+    ok(log.some((l) => l.path === `/api/harness/decks/${id}` && l.service), 'the read went through the service token')
+
+    // The same command, in a paired session, with no token at all.
+    rmSync(GRANT_FILE, { force: true })
+    const noToken = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
+    await runTool(['--link'], { env: noToken })
+    log = []
+    const withGrant = await runTool(['--read', id, '--out', outFile], { env: noToken })
+    eq(withGrant.code, 0, `--read with a grant exits 0${withGrant.code ? `: ${withGrant.err}` : ''}`)
+    ok(/t-04/.test(withGrant.out), 'and prints the same ids')
+    ok(log.some((l) => l.path === `/api/publish/decks/${id}`), 'through the publish path this time')
+    ok(!/[A-Za-z0-9_-]{43}/.test(withGrant.out), 'and the bearer never appears in what it prints')
+  }
+
+  console.log('\n--link twice does not cost a second click (U5)')
+  {
+    // An agent that re-runs --link defensively must not ask the person again:
+    // one approval covers eight hours and any number of decks.
+    const before = approvals.length
+    const again = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    eq(again.code, 0, 'the second --link exits 0')
+    eq(approvals.length, before, 'without a second approval')
+    ok(/[Aa]lready approved/.test(again.out), 'saying the approval it already holds is still good')
+    ok(/robert@betamobility\.io/.test(again.out), 'and who it acts as')
+  }
+
+  console.log('\na dropped connection mid-poll does not lose the pairing (U5)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    pollDrops = 1   // the first poll gets no answer at all
+    const r = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    pollDrops = 0
+    eq(r.code, 0, `--link survives a dropped poll and still collects the grant${r.code ? `: ${r.err}` : ''}`)
+    ok(existsSync(GRANT_FILE), 'the grant is remembered')
+    ok(/robert@betamobility\.io/.test(r.out), 'and the run reports who approved')
+  }
+
+  console.log('\na grant file with no expiry is treated as over, not as live (U5)')
+  {
+    const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+    delete saved.expires
+    writeFileSync(GRANT_FILE, JSON.stringify(saved), { mode: 0o600 })
+    log = []
+    const r = await runTool([await seed(), project({ map: {} })], {
+      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+    })
+    ok(r.code !== 0, 'the run is refused')
+    ok(/--link/.test(r.err), 'and names --link rather than letting the store answer 401')
+    eq(log.length, 0, 'no request was made with a grant that cannot be dated')
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')

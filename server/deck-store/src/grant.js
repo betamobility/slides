@@ -33,6 +33,10 @@ export const LABEL_MAX = 80
 // Ten minutes for a pairing, and that number is also the sentence the tool
 // prints while it waits. A code nobody clicks costs nothing when it lapses.
 export const PAIRING_TTL_S = 10 * 60
+// How long an APPROVED pairing stays collectable, counted from the click
+// rather than from the start. KV's minimum expirationTtl is 60 seconds, and
+// two minutes leaves room for a poll that is mid-backoff when the click lands.
+export const DELIVERY_GRACE_S = 120
 
 // A pairing code is a deck-id shape (ten base62 characters, short enough to
 // read off a URL); a handle, a nonce and a grant token are opaque 32-byte
@@ -71,10 +75,17 @@ export async function mintGrant(env, email, label, { now = Date.now() } = {}) {
     label: String(label ?? '').slice(0, LABEL_MAX),
   }
   const value = JSON.stringify(record)
+  // ORDER MATTERS, and it is the revocation index first. These two writes are
+  // not atomic: if the second throws, the first has already landed. Writing
+  // the live credential first would leave a grant that verifies for eight
+  // hours, appears on nobody's list and cannot be revoked — fail-open. This
+  // way the worst case is an index entry pointing at a grant that does not
+  // verify: visible, revocable, inert.
+  //
   // The person key carries the same record as metadata so the index page's
   // list costs one KV operation instead of one per grant.
-  await env.GRANTS.put(grantKey(hash), value, { expirationTtl: GRANT_TTL_S })
   await env.GRANTS.put(personKey(email, hash), value, { expirationTtl: GRANT_TTL_S, metadata: record })
+  await env.GRANTS.put(grantKey(hash), value, { expirationTtl: GRANT_TTL_S })
   return { token, hash, exp, created }
 }
 
@@ -88,7 +99,9 @@ export async function mintGrant(env, email, label, { now = Date.now() } = {}) {
 export async function verifyGrant(req, env) {
   if (!env?.GRANTS) return null // unbound = closed, as verifyAccess is
   const raw = (req.headers.get('authorization') || '').trim()
-  const m = /^Bearer[ ]+(\S+)$/.exec(raw)
+  // RFC 7235 makes the scheme case-insensitive, so `bearer` is a valid way to
+  // send this and must not read as a bad token.
+  const m = /^Bearer[ ]+(\S+)$/i.exec(raw)
   if (!m || !TOKEN_RE.test(m[1])) return null
   const hash = await hashToken(m[1])
   let record
@@ -208,9 +221,14 @@ export async function approvePairing(env, code, nonce, email) {
   if (!nonce || String(nonce) !== rec.nonce) return 'nonce'
   const handle = await readJson(env, handleKey(rec.handle))
   if (!handle || handle.state !== 'pending') return 'gone'
+  // The approval gets its OWN clock, not the pairing's remainder. A person who
+  // clicks with ten seconds left has approved; if the handle kept the original
+  // expiry, the agent's next poll would answer 410 and the tool would tell
+  // them nobody approved — the one message that is both false and insulting.
+  const exp = Math.floor(Date.now() / 1000) + DELIVERY_GRACE_S
   await env.GRANTS.put(handleKey(rec.handle), JSON.stringify({
-    ...handle, state: 'approved', email,
-  }), { expirationTtl: PAIRING_TTL_S })
+    ...handle, state: 'approved', email, exp,
+  }), { expirationTtl: DELIVERY_GRACE_S })
   // Last: the code stops existing the moment consent is recorded, so nothing
   // can approve it twice and the page it served is gone.
   await env.GRANTS.delete(linkKey(code))
@@ -243,12 +261,16 @@ export async function pollPairing(env, handle) {
     return { state: 'done' }
   }
   if (rec.state !== 'approved' || !rec.email) return { state: 'gone' }
-  const grant = await mintGrant(env, rec.email, rec.label)
-  // Marked delivered before the answer leaves, so a retry cannot mint a
-  // second grant against the same approval. Two polls racing here can both
-  // mint; only the agent holds the handle, and the plan accepts that.
+  // CLAIM, THEN MINT. The handle is marked delivered BEFORE a credential
+  // exists, because the two writes are not atomic and the orderings fail
+  // differently: mint-then-mark loses a live eight-hour grant into KV that
+  // nobody holds and nobody knows to revoke, while mark-then-mint loses only
+  // the approval — the person clicks again, which is a cost they can see and
+  // undo. Two polls racing here can still both mint; only the agent holds the
+  // handle, and the plan accepts that.
   await env.GRANTS.put(handleKey(handle), JSON.stringify({ ...rec, state: 'delivered', email: undefined }), {
-    expirationTtl: PAIRING_TTL_S,
+    expirationTtl: DELIVERY_GRACE_S,
   })
+  const grant = await mintGrant(env, rec.email, rec.label)
   return { state: 'delivered', token: grant.token, owner: rec.email, exp: grant.exp }
 }
