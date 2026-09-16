@@ -64,6 +64,10 @@ h1{font-family:var(--font-serif);font-weight:500;font-size:clamp(1.75rem,4vw,2.6
 h2{font-family:var(--font-serif);font-weight:500;font-size:1.375rem;line-height:1.2;margin:3rem 0 .5rem}
 td form{margin:0}
 td button{padding:.3rem .9rem;font-size:.8125rem}
+/* On a phone the grants table would push Revoke out of the scroll container,
+   and that button is the only reason the section exists. When it is Approved
+   or the action, the action wins: Ends is the column that says the same thing. */
+@media (max-width:560px){.grants th:nth-child(2),.grants td:nth-child(2){display:none}}
 .who{font-family:var(--font-mono);font-size:.75rem;color:var(--color-on-surface-muted)}
 p{margin:0 0 1rem;max-width:40rem}
 .muted{color:var(--color-on-surface-muted)}
@@ -157,7 +161,7 @@ function grantsSection(grants) {
 </tr>`).join('\n')
   return `<h2>Agent access</h2>
 <p class="muted">Agents you approved can create decks and change any deck by its link, as you, until these times. They cannot list the store or delete anything.</p>
-<div class="wrap"><table>
+<div class="wrap"><table class="grants">
 <thead><tr><th>Asked for by</th><th>Approved</th><th>Ends</th><th></th></tr></thead>
 <tbody>
 ${rows}
