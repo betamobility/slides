@@ -59,9 +59,10 @@ Whichever kind, where the deck lives decides how you write it:
   Add, remove and reorder slides and elements freely.
 - **A new deck for the store**: build it locally, then create it with the
   `curl` recipe (no live scenes) or `splice.mjs --create` (any live scene).
-  Both need the store's service token. Where you do not have one (Cowork, say)
-  you still build the whole deck; the user publishes it. See "Publishing
-  without a service token" below.
+  Both need a way in to the store: the service token where you have one, or
+  `splice.mjs --link` — one click from the user in a browser they are already
+  signed into — where you do not (Cowork, say). See "Publishing without a
+  service token" below; never ask for a pasted token.
 - **A deck already in the store**: only `splice.mjs`, under the ownership
   rule. You change content by element id and replace or add live scenes; you
   never add, move or reorder native slides or elements.
@@ -614,22 +615,51 @@ upload then fails, the error carries the deck id, and you finish with
   a live session while the tool writes is unsupported: collaborators are not
   told the store copy changed.
 
-### Publishing without a service token (Cowork)
+### Publishing without a service token: ask for one click (Cowork)
 
-**Cowork cannot write to the store, and there is no way to give it the
-token.** A cloud session runs in a temporary sandbox holding only
-session-scoped credentials, and connector tokens are handled server-side and
-never enter the shell. Do not ask the user to paste `CF_ACCESS_CLIENT_ID` and
-`CF_ACCESS_CLIENT_SECRET` into the conversation: the token is long-lived, and
-a deck read with it hands over that deck's live-session keys as well. The same
-applies to any harness whose shell cannot hold the two variables, and to a
-shell without `node`.
+**Cowork cannot hold the store's service token, and it does not need one.** A
+cloud session runs in a temporary sandbox with only session-scoped
+credentials, and connector tokens are handled server-side and never reach the
+shell. Pair instead: the store hands you a short-lived grant that acts as the
+person who approves it.
 
-This blocks publishing only. Everything the skill needs to AUTHOR a deck is
-public and unauthenticated: `slides.betamobility.ai/agents.md`, `/templates/`
-and `/releases/`. So build the deck in full, write the `.bento.html` where the
-user can reach it (their Drive folder, or the session's files), and hand it
-over:
+**Never ask the user to paste `CF_ACCESS_CLIENT_ID` or
+`CF_ACCESS_CLIENT_SECRET` into the conversation.** The token runs for a year,
+and a deck read with it hands over that deck's live-session keys as well. The
+pairing below exists so nobody has to handle a secret.
+
+```bash
+node splice.mjs --link          # prints a link; relay it and wait
+node splice.mjs --create <projectDir>   # then publish, as them
+```
+
+1. Run `--link`. It prints one instruction and one URL ending in
+   `/link/<code>`.
+2. Give the user that URL, as a link, and wait. Do not run anything else
+   meanwhile.
+3. They open it in a browser where they are already signed in, see what is
+   being granted ("publish decks as you", for 8 hours, when the pairing
+   started, and what you called yourself), and click **Approve** once.
+4. `--link` returns, saying who approved and until when. Every later
+   `splice.mjs` command in that session publishes as them, with no second
+   approval.
+
+The grant lasts **8 hours**, so one approval covers a whole working session and
+any number of decks. It can create decks, and read and change any deck by its
+link; it cannot list the store, delete a deck, or read a deck's live-session
+keys. The user can end it at any time from the deck list at
+`slides.betamobility.ai`, under **Agent access**.
+
+**When an approval lapses**, the tool says so and names `--link` again. Run it
+and ask for one more click. Do not fall back to a hand-written `curl` replace,
+and do not ask for a token.
+
+**When nobody clicks**, the pairing expires after ten minutes and the tool
+says the deck is not published. The file on disk is a complete deck on its own
+— say that, rather than reporting the work as lost.
+
+**When the sandbox cannot run `node` or reach the store at all**, fall back to
+handing the file over:
 
 > Open the file (download it and double-click, or drag it into Chrome), then
 > **Share → Save to Beta**. A store tab opens, you sign in, and you get back a
@@ -664,6 +694,18 @@ fresh `--create` is a new deck; it does not update the old one.
 
 **Read before you write.** Before you plan a change, read the deck as it is
 now, not a copy from earlier in the session:
+
+```bash
+node splice.mjs --read <deckId> [--out current.bento.html]
+```
+
+It writes the deck to a file and prints the inventory an `edits.json` is built
+from: every slide, which ones are runtime slides you replace wholesale, and
+every native element with the one key an edit may change. **Use this whichever
+way you got in** — it goes through the service token when you have one and
+through an approval when you do not, and it never puts a credential in a
+command. The `curl` below is the equivalent for a shell that has the service
+token and no `node`:
 
 ```bash
 curl -fsS -o current.bento.html \

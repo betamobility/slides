@@ -109,6 +109,85 @@ export async function sweep(paths, exceptions, fetchOne) {
   return { results, checked: results.length, failures: results.filter((r) => r.verdict === 'FAIL').length }
 }
 
+// ---- the agent routes (--routes) ------------------------------------------
+//
+// The pairing and publish prefixes are Access BYPASS destinations, added in a
+// dashboard this repository cannot see, exactly like the release channel. The
+// inventory sweep above cannot notice them: they are not published files. So
+// this is the one thing that says whether those two destinations still exist
+// and still point where the worker expects.
+//
+// The asymmetry is the whole check. `/api/link/start` and `/api/publish/` must
+// answer WITHOUT a login, because an agent has no session — while `/api/link`
+// (no trailing slash) and `/link/<code>` sit OUTSIDE the bypassed prefixes and
+// must still be gated, because Access answers before the worker does. If the
+// destinations were entered as bare prefixes without the slash, or dropped,
+// one half of that flips.
+//
+// A pairing started here is a ten-minute KV entry nobody approves; it grants
+// nothing and expires by itself.
+
+/** A 3xx into Access, or a 401 from the worker: either way, not public. */
+const isGated = (res) => res.status === 401 || res.status === 403
+  || (res.status >= 300 && res.status < 400 && !isTidyingRedirect(res.url, res.headers?.location))
+
+export function routeExpectations() {
+  const deadBearer = `Bearer ${'x'.repeat(43)}`
+  return [
+    {
+      name: 'POST /api/link/start answers with no login at all',
+      method: 'POST', path: '/api/link/start',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label: 'live check' }),
+      // 429 is a pass: the endpoint is there and its limiter is working. 503
+      // is not — that is the limiter binding missing in production.
+      ok: (res) => (res.status === 200 && /"code"/.test(res.body || '')) || res.status === 429,
+      why: 'the Bypass destination /api/link/ is missing, so an agent cannot start a pairing',
+    },
+    {
+      name: 'a bad bearer on the publish path is 401 with no body',
+      method: 'GET', path: '/api/publish/decks/0123456789', headers: { authorization: deadBearer },
+      ok: (res) => res.status === 401 && !res.body,
+      why: 'the publish prefix is not reaching the worker, or is answering something other than a flat refusal',
+    },
+    {
+      name: 'the publish prefix has no list route',
+      method: 'GET', path: '/api/publish/decks', headers: { authorization: deadBearer },
+      ok: (res) => res.status === 401,
+      why: 'a grant must never be able to enumerate the store',
+    },
+    {
+      name: 'bare /api/link is still gated',
+      method: 'GET', path: '/api/link',
+      ok: isGated,
+      why: 'the Bypass destination was entered without its trailing slash, widening the public surface',
+    },
+    {
+      name: 'the approval page is still behind Access',
+      method: 'GET', path: '/link/0123456789',
+      ok: isGated,
+      why: 'the approval page is how the store learns who approved; anonymous access there would break the whole premise',
+    },
+    {
+      // The frame headers on `/` and `/link/*` cannot be read anonymously —
+      // Access answers first — so the worker rig is where those are asserted.
+      // What IS checkable here is that the index is gated at all.
+      name: 'the index is still gated',
+      method: 'GET', path: '/',
+      ok: isGated,
+      why: 'the deck list would be readable by anyone',
+    },
+  ]
+}
+
+export async function sweepRoutes(checks, fetchRoute) {
+  const results = []
+  for (const c of checks) {
+    const res = await fetchRoute(c)
+    results.push({ name: c.name, status: res.status, pass: !!c.ok(res), why: c.why })
+  }
+  return { results, checked: results.length, failures: results.filter((r) => !r.pass).length }
+}
+
 // ---- self-test: the three cases, no network -------------------------------
 
 if (args.includes('--selftest')) {
@@ -144,6 +223,41 @@ if (args.includes('--selftest')) {
     'an exception that answers 200 anyway is reported, so the list cannot rot unnoticed')
   ok(out.failures === 0, 'but it does not fail the run: it is a wider surface, not a broken consumer')
 
+  // --- the agent routes, both directions of the asymmetry ------------------
+  const routeChecks = routeExpectations()
+  ok(routeChecks.some((c) => c.path === '/api/link/start' && c.method === 'POST'), 'the route pass starts a pairing anonymously')
+  ok(routeChecks.some((c) => c.path === '/api/link' && c.method === 'GET'), 'and asserts the bare prefix is still gated')
+
+  const healthy = async (c) => {
+    if (c.path === '/api/link/start') return { status: 200, body: '{"code":"abc0123456","handle":"h"}', headers: {}, url: 'https://h' + c.path }
+    if (c.path.startsWith('/api/publish/')) return { status: 401, body: '', headers: {}, url: 'https://h' + c.path }
+    return { status: 302, body: '', headers: { location: 'https://team.cloudflareaccess.com/login' }, url: 'https://h' + c.path }
+  }
+  let rt = await sweepRoutes(routeChecks, healthy)
+  ok(rt.failures === 0, `a correctly configured host passes every route check (${rt.checked} checked)`)
+
+  // The two failures that matter, because each is a dashboard edit nobody logs.
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/api/link/start'
+    ? { status: 302, body: '', headers: { location: 'https://team.cloudflareaccess.com/login' }, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 1 && /link\/ is missing/.test(rt.results.find((r) => !r.pass).why),
+    'a dropped Bypass destination fails, and the message says which one')
+
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/api/link'
+    ? { status: 200, body: 'hello', headers: {}, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 1 && /trailing slash/.test(rt.results.find((r) => !r.pass).why),
+    'a destination entered without its trailing slash fails too, the other way round')
+
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/api/link/start'
+    ? { status: 503, body: 'store: the pairing rate limiter is not configured', headers: {}, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 1, 'a 503 from the start route fails: the limiter binding is missing in production')
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/api/link/start'
+    ? { status: 429, body: '', headers: {}, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 0, 'while a 429 passes: the endpoint is there and its limiter is working')
+
   console.log(`\n${checks - failures}/${checks} checks passed`)
   process.exit(failures ? 1 : 0)
 }
@@ -151,6 +265,36 @@ if (args.includes('--selftest')) {
 // ---- the live run ----------------------------------------------------------
 
 const host = (opt('host', DEFAULT_HOST)).replace(/\/+$/, '')
+
+// `--routes` is its own run: it needs no published tree, only the live host.
+if (args.includes('--routes')) {
+  console.log(`the agent routes against ${host}, anonymously\n`)
+  const fetchRoute = async (c) => {
+    const url = host + c.path
+    try {
+      const r = await fetch(url, {
+        method: c.method, headers: { 'user-agent': 'beta-store-live-check', ...(c.headers || {}) },
+        body: c.body, redirect: 'manual',
+      })
+      return { status: r.status, body: await r.text().catch(() => ''), headers: { location: r.headers.get('location') }, url }
+    } catch (err) {
+      return { status: 0, body: String(err?.message || err), headers: {}, url }
+    }
+  }
+  const out = await sweepRoutes(routeExpectations(), fetchRoute)
+  for (const r of out.results) console.log(`  ${r.pass ? 'ok   ' : 'FAIL '} ${r.name} (${r.status})${r.pass ? '' : `\n         ${r.why}`}`)
+  console.log(`\n${out.checked - out.failures}/${out.checked} route checks passed`)
+  if (out.failures) {
+    console.log(`
+The pairing and publish prefixes are Access Bypass destinations, edited in a
+dashboard and not in this repository. A failure here means one of them was
+dropped, renamed, or entered without its trailing slash — see
+server/deck-store/README.md, "Setup, in order".`)
+    process.exit(1)
+  }
+  process.exit(0)
+}
+
 const siteDir = process.env.BENTO_SITE_DIR
   ? resolve(process.env.BENTO_SITE_DIR)
   : resolve(root, '..', 'bento-site')

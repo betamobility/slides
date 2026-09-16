@@ -32,6 +32,20 @@
 //   PUT    /api/harness/decks/:id  replace; If-Match REQUIRED (428), stale → 412
 //   PUT    /api/harness/decks/:id/assets/:name
 //                                  upload a scene asset, service token only
+//   GET    /link/:code             the approval page for a pairing
+//   POST   /link/:code/approve     record the consent; same-origin + nonce
+//   POST   /api/grants/:hash/revoke
+//                                  end one of your own grants; same-origin
+//
+// Public, no assertion, verified by THIS WORKER rather than by Access (the
+// agent prefixes; see "the agent prefixes" below):
+//   POST   /api/link/start         begin a pairing → {code, handle, url, expires}
+//   GET    /api/link/:handle       the agent's poll → 202 | 200 + grant | 410
+//   POST   /api/publish/decks      create, as the person who approved
+//   GET    /api/publish/decks/:id  read by id, with `collab` removed
+//   PUT    /api/publish/decks/:id  replace; If-Match REQUIRED, `collab`
+//                                  restored, the shell pinned
+//   PUT    /api/publish/decks/:id/assets/:name    upload a scene asset
 //
 // A person (any @betamobility.io identity) may read, list, create and replace
 // anything; only DELETE is the owner's. A service token (Claude from a file
@@ -42,17 +56,31 @@
 // Plan: docs/plans/2026-09-14-001-feat-runtime-slides-plan.md U1, U2 (KTD5,
 // KTD6).
 //
+// A GRANT is the third identity (one-click publish plan): a bearer a person
+// approved in the browser, good for eight hours, that acts as them on the
+// publish prefix. It reaches create, read, replace and asset upload on any
+// deck by id — never list, never delete — and what it reads carries no
+// `collab` block at all, so it holds no live-session keys. Ownership follows
+// the person, so a deck an agent made is theirs to delete.
+//
 // The worker never reads into a document beyond the shape check on write:
 // one #bento-doc block whose JSON parses and is a bento/slides document or a
 // bento/enc envelope. Serving is a stream of the stored object.
 
 import { verifyAccess } from './access.js'
-import { indexPage, mintDocIntoBlock, newPage } from './pages.js'
+import { rewriteBlock, shellOf, splitShell } from './block.js'
+import {
+  approvePairing, listGrants, readPairing, revokeGrant, verifyGrant,
+} from './grant.js'
+import { empty, flagOn, json, text } from './http.js'
+import { ID_PAT, TOKEN_PAT, mintId } from './ids.js'
+import {
+  formNonce, isAgentPath, linkPoll, linkStart, pageRequest, rateLimited, sameOrigin,
+} from './link.js'
+import { indexPage, linkDonePage, linkPage, mintDocIntoBlock, newPage } from './pages.js'
 
 const MAX_BYTES = 32 * 1024 * 1024
 const KEY = (id) => `decks/${id}.bento.html`
-const ID_RE = /^[0-9A-Za-z]{10}$/
-const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 // Encoded bytes per metadata value. Title, owner, writer and docId share the
 // 2048-byte object budget with the timestamps and kind; 512 each leaves room.
 const META_MAX = 512
@@ -64,6 +92,38 @@ const META_MAX = 512
 // editor compares the generation it booted with against the 412's, and only a
 // match lets a live tab retry. Missing metadata (a deck stored before this) is 0.
 const GEN_HEADER = 'x-bento-service-gen'
+
+// Is this identity an AGENT writing, rather than a person at a keyboard?
+// There are two kinds of agent now — a service token from a file harness and
+// a grant from a paired Cowork session (one-click publish plan, KTD5) — and
+// every place that used to ask `who.kind === 'service'` was really asking
+// this. A shipped editor compares the generation it booted with and reads the
+// 412 body's `writer`, so a grant write that answered "person" there would
+// make a live tab retry over it. One predicate, so a third kind cannot land
+// on the person side of one branch and the agent side of another.
+const agentWrite = (who) => who.kind !== 'user'
+
+/**
+ * What goes in `writer` metadata.
+ *
+ * A grant writes as the PERSON who approved it, with `grant:` in front, so
+ * the index says "alice asked her agent for this" rather than hiding the
+ * agent or hiding alice. `owner` is the bare email, because ownership is what
+ * makes a deck deletable and that has to be hers.
+ */
+const writerOf = (who) => (who.kind === 'grant' ? `grant:${who.id}` : who.id)
+
+/**
+ * Was the version that won written by a person at a keyboard?
+ *
+ * The 412 body's `writer` is `'person' | 'service'` and that enum is FROZEN:
+ * `slides/src/beta/store.ts` on people's disks reads exactly those two words,
+ * and a live tab retries only over a person's write. `verifyAccess` only ever
+ * gives a person an email, so an `@` was the whole test — and a grant's
+ * writer carries an email too, which is why it needs the prefix excluded.
+ */
+const wroteAsPerson = (writer) => writer.includes('@') && !writer.startsWith('grant:')
+
 // The ETag again, under a name Cloudflare leaves alone. On the live host the
 // edge drops a strong `etag` from any response it compresses (every deck is
 // HTML, so every deck read lost it), while custom headers pass untouched.
@@ -154,28 +214,29 @@ async function passThrough(req, env, url) {
 const PLAUSIBLE_URL = 'https://plausible.io/api/event'
 const PLAUSIBLE_DOMAIN = 'betamobility.ai'
 
-/** 10 base62 chars from getRandomValues, rejection-sampled so no char is favoured. */
-function mintId() {
-  let out = ''
-  const buf = new Uint8Array(32)
-  while (out.length < 10) {
-    crypto.getRandomValues(buf)
-    for (const b of buf) {
-      if (b >= 248) continue // 248 = 62 * 4; drop the biased tail
-      out += BASE62[b % 62]
-      if (out.length === 10) break
-    }
-  }
-  return out
+const html = (body, extra = {}) => new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', ...extra } })
+
+// Pages that act on a click: the approval page and the index, which carries
+// the Revoke buttons. A framed one is a clickjacked one, and both actions
+// arrive with the person's Access session attached (KTD13). Belt and braces:
+// `frame-ancestors` is the modern rule, `x-frame-options` the one an older
+// browser honours.
+// Pages that act on a click, hardened against a script on this same origin
+// (a stored deck at /d/:id is first-party HTML here):
+//
+//  · frame-ancestors / x-frame-options — not clickjackable.
+//  · Cross-Origin-Opener-Policy — a popup opened by a deck's script is
+//    severed from its opener, so the script cannot read this page's DOM and
+//    lift the nonce. MEASURED: without it `w.document` reads fine
+//    same-origin; with it the read throws a DOMException.
+//  · Cross-Origin-Resource-Policy — not readable as a subresource either.
+const NO_FRAMING = {
+  'content-security-policy': "frame-ancestors 'none'",
+  'x-frame-options': 'DENY',
+  'cross-origin-opener-policy': 'same-origin',
+  'cross-origin-resource-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
 }
-
-// A wrangler [vars] flag. Vars are strings, so say what counts as on.
-const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
-
-const empty = (status) => new Response(null, { status })
-const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' } })
-const html = (body) => new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } })
 
 // --- write validation (shape only) ------------------------------------------
 
@@ -300,8 +361,8 @@ async function storeBytes(req, env, ctx, who, bytes, evt) {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
-      owner: encMeta(who.id), writer: encMeta(who.id), created: now, updated: now,
-      sg: who.kind === 'service' ? '1' : '0',
+      owner: encMeta(who.id), writer: encMeta(writerOf(who)), created: now, updated: now,
+      sg: agentWrite(who) ? '1' : '0',
     },
   })
   track(ctx, req, evt, 'ok')
@@ -387,55 +448,134 @@ async function putIfMatch(env, key, bytes, opts, etag) {
   }
 }
 
+/**
+ * A grant's upload, with the stored `collab` put back and the shell pinned
+ * (one-click publish plan, KTD7, R12/R20).
+ *
+ * Returns `{ bytes }` to store, or `{ reason }` — one word, the way `inspect`
+ * refuses — for a 400.
+ *
+ * TWO checks, in this order, before anything is stored:
+ *
+ * 1. THE SHELL MUST BE THE STORED ONE, byte for byte. `inspect` looks only
+ *    inside the block, so without this a grant could swap the runtime around
+ *    a deck and have it run first-party on the store's origin for every
+ *    partner who opens it. The block is the agent's to write; the shell is
+ *    not. A create cannot be pinned this way — there is nothing to pin it
+ *    against — and that stays accepted, as it already is for a service token.
+ * 2. THE STORED `collab` GOES BACK IN, because the grant was never shown it.
+ *    A read-modify-write would otherwise destroy the deck's live session,
+ *    which is the exact damage stripping it was meant to prevent. When the
+ *    stored deck has none, the incoming one must not invent one.
+ *
+ * The format may not change either: an encrypted deck stays encrypted and a
+ * readable one stays readable. Encrypting a partner's deck under a password
+ * only the agent knows would be as destructive as deleting it, and a grant
+ * cannot delete.
+ */
+async function restoreIntoUpload(existing, bytes) {
+  const incomingSrc = new TextDecoder().decode(bytes)
+  const storedSrc = await existing.text()
+  const a = splitShell(storedSrc)
+  const b = splitShell(incomingSrc)
+  if (!a || !b) return { reason: 'block' }
+  if (shellOf(a) !== shellOf(b)) return { reason: 'shell' }
+  let stored, incoming
+  try {
+    stored = JSON.parse(a.body)
+    incoming = JSON.parse(b.body)
+  } catch {
+    return { reason: 'json' }
+  }
+  const encStored = stored?.format === 'bento/enc'
+  const encIncoming = incoming?.format === 'bento/enc'
+  if (encStored !== encIncoming) return { reason: 'format' }
+  // Encrypted both ways: nothing to restore, and nothing here can read it.
+  if (encStored) return { bytes }
+  try {
+    const out = rewriteBlock(incomingSrc, (doc) => {
+      if (stored.collab === undefined) delete doc.collab
+      else doc.collab = stored.collab
+      return doc
+    })
+    return { bytes: new TextEncoder().encode(out) }
+  } catch {
+    return { reason: 'block' }
+  }
+}
+
+/**
+ * The 412 both conflict paths answer: the precondition classified up front on
+ * the grant path, and a failed `onlyIf` on the put.
+ *
+ * Who wrote the version that won, and which version it is. The editor uses
+ * both: a tab live-synced with its room already holds a person's edits and may
+ * retry against this ETag; an agent's replace never travels through sync, so
+ * the editor stops. `writer` is the stored identity, and verifyAccess only
+ * ever gives a person an email, so an `@` was the person test — a grant's
+ * writer carries one too, which is what `wroteAsPerson` excludes.
+ */
+async function conflict(env, ctx, req, id) {
+  track(ctx, req, 'deck_save', 'conflict')
+  const current = await env.DECKS.head(KEY(id))
+  const res = json(412, {
+    error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
+    writer: wroteAsPerson(decMeta(current?.customMetadata?.writer)) ? 'person' : 'service',
+  })
+  if (current) {
+    res.headers.set('etag', current.httpEtag)
+    res.headers.set(ETAG_HEADER, current.httpEtag)
+    res.headers.set(GEN_HEADER, String(genOf(current)))
+  }
+  return res
+}
+
 // KTD5. `requireMatch` is the harness route's rule: a replace from a file
 // harness must say which version it read (428 otherwise). The people route
 // honours If-Match when present but cannot require it, because shells already
 // on disk save without one and must keep working.
-async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
-  const existing = await env.DECKS.head(KEY(id))
+async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCollab = false } = {}) {
+  // A `get` rather than a `head` on the grant path: the stored document is
+  // needed, not only its metadata. Everything else reads the same fields.
+  const existing = restoreCollab ? await env.DECKS.get(KEY(id)) : await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
   const etag = ifMatchOf(req)
   if (requireMatch && !etag) {
     track(ctx, req, 'deck_save', 'rejected')
     return json(428, { error: 'if-match-required', message: 'Read the deck first (GET /api/harness/decks/:id) and send its ETag as If-Match.' })
   }
-  const bytes = await readBody(req)
+  let bytes = await readBody(req)
   if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
+  if (restoreCollab) {
+    // THE PRECONDITION IS CLASSIFIED FIRST, before the shell is compared.
+    // Otherwise a person saving between a grant's read and its write — which
+    // legitimately moves the shell, that is how an update lands — surfaces as
+    // `400 shell` instead of `412`. The tool re-reads and retries a 412 and
+    // gives up on a 400, so the wrong one of those two turns an ordinary
+    // conflict into a failed run. `existing` is already the current object, so
+    // this costs no extra read; the `onlyIf` on the put below stays, because
+    // the get-then-put window is still a race and its 412 is the right answer.
+    if (etag && etag !== existing.etag) return conflict(env, ctx, req, id)
+    const restored = await restoreIntoUpload(existing, bytes)
+    if (restored.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, restored.reason) }
+    bytes = restored.bytes
+  }
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
-  // A service write bumps the generation, a person's carries it forward. Read
+  // An agent's write bumps the generation, a person's carries it forward. Read
   // from the head above: with If-Match the put only lands on that same version.
-  const gen = genOf(existing) + (who.kind === 'service' ? 1 : 0)
+  const gen = genOf(existing) + (agentWrite(who) ? 1 : 0)
   const stored = await putIfMatch(env, KEY(id), bytes, {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
-      owner: prev.owner || encMeta(who.id), writer: encMeta(who.id),
+      owner: prev.owner || encMeta(who.id), writer: encMeta(writerOf(who)),
       created: prev.created || new Date().toISOString(), updated: new Date().toISOString(),
       sg: String(gen),
     },
   }, etag)
-  if (!stored) {
-    track(ctx, req, 'deck_save', 'conflict')
-    // Who wrote the version that won, and which version it is. The editor
-    // uses both: a tab live-synced with its room already holds a person's
-    // edits and may retry against this ETag; a service's replace never
-    // travels through sync, so the editor stops. `writer` is the Access
-    // identity, and verifyAccess only ever gives a person an email, so an
-    // `@` is the person test (a service token's id is `<hex>.access`).
-    const current = await env.DECKS.head(KEY(id))
-    const res = json(412, {
-      error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
-      writer: decMeta(current?.customMetadata?.writer).includes('@') ? 'person' : 'service',
-    })
-    if (current) {
-      res.headers.set('etag', current.httpEtag)
-      res.headers.set(ETAG_HEADER, current.httpEtag)
-      res.headers.set(GEN_HEADER, String(genOf(current)))
-    }
-    return res
-  }
+  if (!stored) return conflict(env, ctx, req, id)
   track(ctx, req, 'deck_save', 'ok')
   return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag, [GEN_HEADER]: String(gen) } })
 }
@@ -553,9 +693,30 @@ const CSP = [
   "base-uri 'self'",
 ].join('; ')
 
-const deckHeaders = (obj) => ({
+// `length` is passed explicitly when the body is not the stored object: a
+// grant's read is re-serialised, so `obj.size` would be a lie the client
+// truncates on. The ETag stays the STORED object's, so the If-Match a grant
+// sends back still names a version R2 knows.
+// The ONE policy a served deck gets in enforcing mode, beside the report-only
+// CSP above. A deck is uploaded HTML served first-party on the store's own
+// origin, so a planted script could otherwise submit a form to the store's
+// own control plane — which is exactly how the pairing approval would be
+// forged (a script's form post is indistinguishable from a real click: both
+// arrive same-origin, dest=document, mode=navigate, and even Sec-Fetch-User
+// is ?1 inside a click handler; all measured).
+//
+// Narrow on purpose. `form-action` is the only directive here, so nothing
+// about a deck's scripts, fetches, fonts or media changes and the full policy
+// stays report-only until someone has verified it against real decks. A deck
+// has no forms — MEASURED: with this header a deck still fetches its own
+// assets (200) while its form post is blocked at navigation and never reaches
+// the server at all.
+const DECK_ENFORCED_CSP = "form-action 'none'"
+
+const deckHeaders = (obj, length = obj.size) => ({
   'content-type': 'text/html; charset=utf-8',
-  'content-length': String(obj.size),
+  'content-length': String(length),
+  'content-security-policy': DECK_ENFORCED_CSP,
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
   etag: obj.httpEtag,
@@ -584,10 +745,73 @@ async function serveHead(env, id) {
 
 // `GET /api/harness/decks/:id` (R10). Not owner-scoped, and not tracked: it
 // is a harness's read-before-replace, not a person opening a deck.
-async function harnessRead(env, id) {
+//
+// `stripCollab` is the grant path (KTD6, R11). The WHOLE `collab` block goes,
+// not its three private fields: room plus the symmetric key is exactly what
+// `saveReaderCopy` writes into a read-only copy, so leaving them would hand
+// an eight-hour grant a reader capability on the live session that outlives
+// it. The tool never reads `collab`, so dropping it costs nothing — and the
+// restore on write (see `replace`) is what keeps a read-modify-write from
+// destroying the keys instead.
+async function harnessRead(env, id, { stripCollab = false } = {}) {
   const obj = await env.DECKS.get(KEY(id))
   if (!obj) return empty(404)
-  return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
+  if (!stripCollab) return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
+  const src = await obj.text()
+  let out
+  try {
+    out = rewriteBlock(src, (doc) => {
+      // An encrypted deck is served as it is: its keys are inside the
+      // ciphertext, and there is no document here to strip.
+      if (doc.format === 'bento/enc') return null
+      delete doc.collab
+      return doc
+    })
+  } catch {
+    // Better to refuse than to serve a file whose block could not be rewritten
+    // — the unstripped bytes are exactly what must not leave on this path.
+    return text(502, 'store: this deck could not be prepared for an agent')
+  }
+  const bytes = new TextEncoder().encode(out)
+  return new Response(bytes, { status: 200, headers: deckHeaders(obj, bytes.byteLength) })
+}
+
+/**
+ * Everything under the two Bypass prefixes, and nothing else.
+ *
+ * The pairing routes are public (the agent has no credential yet — that is
+ * what pairing is for) and rate-limited; U3 adds the publish routes, which
+ * take a bearer. Every path that is not an exactly routed method-and-path
+ * falls off the end as 401 with no body.
+ */
+async function agentRoutes(req, env, ctx, url, path, m) {
+  if (path === '/api/link/start' && m === 'POST') {
+    return (await rateLimited(req, env)) || linkStart(req, env, url)
+  }
+  const lp = new RegExp(`^/api/link/(${TOKEN_PAT})$`).exec(path)
+  if (lp && m === 'GET') {
+    return (await rateLimited(req, env)) || linkPoll(env, lp[1])
+  }
+
+  // Everything else under either prefix needs a grant. Verified BEFORE any
+  // storage read, so a bad bearer answers the same for a deck that exists as
+  // for one that does not, and an Access assertion counts for nothing here.
+  const who = await verifyGrant(req, env)
+  if (!who) return empty(401)
+
+  // One-to-one with the harness routes (KTD5): same handlers, same
+  // conditional-write contract, the option flags U8 fills in.
+  if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who)
+  const pd = new RegExp(`^/api/publish/decks/(${ID_PAT})$`).exec(path)
+  if (pd && m === 'GET') return harnessRead(env, pd[1], { stripCollab: true })
+  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true })
+  const pa = new RegExp(`^/api/publish/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
+  if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
+
+  // NOT routed here, deliberately (R9): no list, so a leaked grant cannot
+  // enumerate anyone's work, and no delete, so it cannot destroy a deck it is
+  // only borrowing an identity to write.
+  return empty(401)
 }
 
 // --- router --------------------------------------------------------------------
@@ -622,6 +846,11 @@ export default {
     // so there is no assertion here to verify and nothing to verify it against.
     if (isPublicPath(path) && (m === 'GET' || m === 'HEAD')) return passThrough(req, env, url)
 
+    // The two Bypass prefixes an agent uses, before verifyAccess — which would
+    // answer 401 to every one of them, there being no assertion to verify.
+    // Not a pass-through and not in PUBLIC_PREFIXES: these are handled HERE.
+    if (isAgentPath(path)) return agentRoutes(req, env, ctx, url, path, m)
+
     // Identity next, before any routing of our own: an unknown path without an
     // assertion is 401, not 404, so nothing about the store is enumerable
     // without Access. Enumerability now stops at the allowlist above, and
@@ -631,15 +860,15 @@ export default {
 
     // Harness routes: same handlers, open to any verified identity.
     if (path === '/api/harness/decks' && m === 'POST') return create(req, env, ctx, who)
-    const hm = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+    const hm = new RegExp(`^/api/harness/decks/(${ID_PAT})$`).exec(path)
     if (hm && m === 'GET') return harnessRead(env, hm[1])
     if (hm && m === 'PUT') return replace(req, env, ctx, who, hm[1], { requireMatch: true })
     // The asset upload is the one harness route a person may not use (U2): a
     // person's scenes arrive through the splice tool, never a browser, and an
     // upload route open to every signed-in page is a way to plant files on
     // the store's origin. `(.+)` so a bad name is a 400, not a 404.
-    const am = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
-    if (am && m === 'PUT') return who.kind === 'service' ? putAsset(req, env, am[1], am[2]) : empty(403)
+    const am = new RegExp(`^/api/harness/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
+    if (am && m === 'PUT') return agentWrite(who) ? putAsset(req, env, am[1], am[2]) : empty(403)
 
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
@@ -651,7 +880,56 @@ export default {
     // so both read this.
     const canCreate = flagOn(env.NEW_ENABLED) && (!env.STORE_HOST || url.hostname === env.STORE_HOST)
 
-    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }))
+    // The approval flow (U2). These sit HERE, behind the person gate, and not
+    // with the agent prefixes: the whole point is that Access has already
+    // established who is approving. A service token is refused above.
+    const lm = new RegExp(`^/link/(${ID_PAT})$`).exec(path)
+    if (lm && m === 'GET') {
+      // A script cannot READ this page: its nonce is the second half of the
+      // approval's protection, and a fetch or an iframe from a stored deck is
+      // same-origin for free on this host.
+      if (!pageRequest(req)) return text(403, 'Open this link in a browser tab.')
+      const pairing = await readPairing(env, lm[1])
+      if (!pairing) return text(410, 'This approval link has expired or has already been used.')
+      return html(linkPage(who.id, lm[1], pairing), NO_FRAMING)
+    }
+    const la = new RegExp(`^/link/(${ID_PAT})/approve$`).exec(path)
+    if (la && m === 'POST') {
+      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be approved from the store’s own page.')
+      const nonce = await formNonce(req)
+      // Read once, for the label the done page repeats back.
+      const pairing = await readPairing(env, la[1])
+      let outcome
+      try {
+        outcome = await approvePairing(env, la[1], nonce, who.id)
+      } catch {
+        // The consent may already have been recorded — the state write lands
+        // before the code is deleted — so say so rather than showing a raw
+        // platform error to someone who just clicked Approve.
+        return text(502, 'The store could not finish recording this approval. Check with whoever asked for it before approving again.')
+      }
+      if (outcome === 'nonce') return text(403, 'This approval form is out of date. Open the link again.')
+      if (outcome !== 'ok') return text(410, 'This approval link has expired or has already been used.')
+      return html(linkDonePage(who.id, pairing || {}), NO_FRAMING)
+    }
+
+    // R10: a person ends their own agent access here. A form post, never a
+    // GET — a revoking GET would fire from any image tag anyone could plant —
+    // and same-origin, because Access attaches the session either way (KTD13).
+    const gr = /^\/api\/grants\/([0-9a-f]{64})\/revoke$/.exec(path)
+    if (m === 'POST' && (gr || path.startsWith('/api/grants/'))) {
+      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be revoked from the store’s own page.')
+      // A hash that is not this person's revokes nothing and answers 404: the
+      // page never shows anyone else's, so there is nothing to distinguish.
+      if (!gr || !(await revokeGrant(env, who.id, gr[1]))) return empty(404)
+      return new Response(null, { status: 303, headers: { location: '/', 'cache-control': 'no-store' } })
+    }
+
+    if (path === '/' && m === 'GET') {
+      return html(indexPage(await listDecks(env, url.origin), who.id, {
+        create: canCreate, grants: await listGrants(env, who.id),
+      }), NO_FRAMING)
+    }
     if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: canCreate }))
     if (path === '/new/blank' && m === 'GET') {
       if (!canCreate) return empty(404)
@@ -659,13 +937,13 @@ export default {
     }
     if (path === '/api/decks' && m === 'GET') return json(200, { decks: await listDecks(env, url.origin) })
     if (path === '/api/decks' && m === 'POST') return create(req, env, ctx, who, url.searchParams.get('new') === '1' ? 'deck_new' : 'deck_save')
-    const dm = /^\/api\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+    const dm = new RegExp(`^/api/decks/(${ID_PAT})$`).exec(path)
     if (dm && m === 'PUT') return replace(req, env, ctx, who, dm[1])
     if (dm && m === 'DELETE') return remove(env, who, dm[1])
-    const sm = /^\/d\/([0-9A-Za-z]{10})$/.exec(path)
+    const sm = new RegExp(`^/d/(${ID_PAT})$`).exec(path)
     if (sm && m === 'GET') return serve(env, ctx, req, sm[1])
     if (sm && m === 'HEAD') return serveHead(env, sm[1])
-    const sa = /^\/d\/([0-9A-Za-z]{10})\/assets\/([^/]+)$/.exec(path)
+    const sa = new RegExp(`^/d/(${ID_PAT})/assets/([^/]+)$`).exec(path)
     if (sa && m === 'GET') return serveAsset(req, env, sa[1], sa[2])
 
     return empty(404)

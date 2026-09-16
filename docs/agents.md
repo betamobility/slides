@@ -746,7 +746,13 @@ same bytes; the same name with different bytes is refused before any request.
 - `--create` starts from the published blank template, mints a fresh
   `docId`, adds `deck.json`'s slides and the scenes, posts the deck and then
   uploads its assets.
-- Update reads the deck with `GET /api/harness/decks/<id>` and keeps its
+- `node splice.mjs --read <deckId> [--out <file>]` is how you get the slide
+  and element ids an `edits.json` needs. It writes the deck to a file and
+  prints the inventory, going through whichever way in this session has — the
+  service token, or an approval from `--link` — so it works in a sandbox that
+  has no token, unlike a `curl` carrying `CF_ACCESS_*`.
+- Update reads the deck with `GET /api/harness/decks/<id>` (or
+  `/api/publish/decks/<id>` under an approval) and keeps its
   `ETag`. A scene folder naming a runtime slide replaces it; a duplicated id
   or a native slide stops the run, and the tool never converts a native
   slide. A folder naming no slide in the deck stops the run unless its
@@ -790,11 +796,20 @@ same bytes; the same name with different bytes is refused before any request.
 - A deck that is in a live session while the tool writes is unsupported:
   collaborators are not told the store copy changed.
 
-Cowork cannot run the tool: its sandbox has no way to receive the two
-variables (a cloud session holds only session-scoped credentials, and
-connector tokens never enter the shell), and the token must not be pasted into
-a conversation, because a deck read with it carries that deck's live-session
-keys. Authoring needs no credentials at all, though: `/agents.md`,
-`/templates/` and `/releases/` are public. Build the deck, hand the
-`.bento.html` to the user, and tell them to open it and pick **Share → Save to
-Beta**, which stores it under their own identity and returns the deck's link.
+Cowork cannot hold the two variables — a cloud session has only
+session-scoped credentials, and connector tokens never enter the shell — and
+the token must never be pasted into a conversation, because it runs for a year
+and a deck read with it carries that deck's live-session keys. Pair instead:
+`node splice.mjs --link` prints one URL, the user opens it in a browser they
+are already signed into and clicks **Approve** once, and the tool collects a
+grant that acts as them for 8 hours. Every later command in that session
+publishes as them, against `/api/publish/` rather than `/api/harness/`, with no
+second approval. A grant can create decks and change any deck by its link; it
+cannot list the store, delete a deck, or read a deck's live-session keys, and
+the user can end it from the deck list under **Agent access**. When it lapses
+the tool says so and names `--link`; it never asks for a token. Where the
+sandbox cannot run `node` or reach the store at all, authoring still needs no
+credentials (`/agents.md`, `/templates/` and `/releases/` are public): build
+the deck, hand the `.bento.html` over, and tell the user to open it and pick
+**Share → Save to Beta**, which stores it under their own identity and returns
+the deck's link.

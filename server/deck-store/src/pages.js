@@ -18,6 +18,9 @@
 // inlined: cream surface, charcoal ink, Playfair Display for the one
 // headline, Inter for body, DM Mono for numbers and tags.
 
+import { rewriteBlock } from './block.js'
+import { GRANT_TTL_S } from './grant.js'
+
 export const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -29,26 +32,22 @@ export const esc = (s) => String(s ?? '')
  *
  * It used to be inlined into /new verbatim (via `.toString()`), because the
  * browser did the minting; `GET /new/blank` does it in the worker now and
- * imports this directly. It stays ES5-plain and free of template-literal
- * interpolation anyway: the cost is nil and the constraint is one edit away
- * from mattering again if anything is ever inlined back into a page.
+ * imports this directly.
  *
- * The re-serialized JSON escapes `<` the way every builder in this repo does,
- * and the function refuses rather than emit a block a browser would cut short
- * (AGENTS.md hard rule 1).
+ * The block surgery itself moved to `block.js rewriteBlock` when a grant's
+ * read needed the same rewrite (one-click publish plan, KTD6): one place
+ * escapes `<`, refuses a block a browser would cut short (AGENTS.md hard rule
+ * 1), and keeps the block's own opening tag. If anything is ever inlined back
+ * into a page, it is that function that has to stay ES5-plain.
  */
 export function mintDocIntoBlock(html, docId) {
-  var re = /(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)([\s\S]*?)(<\/script>)/i
-  var m = re.exec(html)
-  if (!m) throw new Error('no #bento-doc block in the template')
-  var doc = JSON.parse(m[2])
-  if (!doc || doc.format !== 'bento/slides') throw new Error('the template is not a bento/slides document')
-  delete doc.template
-  delete doc.collab
-  doc.docId = docId
-  var json = JSON.stringify(doc).replace(/</g, '\\u003c')
-  if (json.indexOf('</scr' + 'ipt') !== -1) throw new Error('a literal closing script tag survived escaping')
-  return html.slice(0, m.index) + m[1] + json + m[3] + html.slice(m.index + m[0].length)
+  return rewriteBlock(html, (doc) => {
+    if (doc.format !== 'bento/slides') throw new Error('the template is not a bento/slides document')
+    delete doc.template
+    delete doc.collab
+    doc.docId = docId
+    return doc
+  })
 }
 
 const PLAUSIBLE = '<script defer data-domain="betamobility.ai" src="https://plausible.io/js/script.js"></script>'
@@ -62,6 +61,13 @@ main{max-width:64rem;margin:0 auto;padding:3rem 1.5rem 4rem}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:2rem}
 .mark{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.02em;color:var(--color-on-surface-muted)}
 h1{font-family:var(--font-serif);font-weight:500;font-size:clamp(1.75rem,4vw,2.625rem);line-height:1.15;margin:.25rem 0 0}
+h2{font-family:var(--font-serif);font-weight:500;font-size:1.375rem;line-height:1.2;margin:3rem 0 .5rem}
+td form{margin:0}
+td button{padding:.3rem .9rem;font-size:.8125rem}
+/* On a phone the grants table would push Revoke out of the scroll container,
+   and that button is the only reason the section exists. When it is Approved
+   or the action, the action wins: Ends is the column that says the same thing. */
+@media (max-width:560px){.grants th:nth-child(2),.grants td:nth-child(2){display:none}}
 .who{font-family:var(--font-mono);font-size:.75rem;color:var(--color-on-surface-muted)}
 p{margin:0 0 1rem;max-width:40rem}
 .muted{color:var(--color-on-surface-muted)}
@@ -96,7 +102,10 @@ button.secondary{background:transparent;color:var(--color-on-surface)}
 footer{margin-top:3rem;font-size:.875rem;color:var(--color-on-surface-subtle)}
 `
 
-const head = (title) => `<!doctype html>
+// `analytics: false` for the pairing pages: their URL carries the pairing
+// code, and a third-party script on the page would send that path to
+// plausible.io. Nothing else about the pages differs.
+const head = (title, { analytics = true } = {}) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -105,7 +114,7 @@ const head = (title) => `<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500&family=Inter:wght@400;500&family=DM+Mono:wght@400&display=swap">
 <style>${CSS}</style>
-${PLAUSIBLE}
+${analytics ? PLAUSIBLE : ''}
 </head>`
 
 function fmtSize(n) {
@@ -131,7 +140,35 @@ function fmtTime(iso) {
  * — that is how you find your own — but they are not the first thing read.
  * `kind` is shown only when it is worth knowing, i.e. not an ordinary deck.
  */
-export function indexPage(decks, who, { create = false } = {}) {
+/**
+ * "Agent access": the live grants of the person reading the page (U4, R10).
+ *
+ * A grant ends by itself after eight hours, so this is not the safety net —
+ * it is how someone SEES that an agent can currently publish as them, which
+ * a background capability has to be. Absent entirely when there are none: an
+ * empty table would be a question nobody asked.
+ *
+ * Each row's Revoke is a form post, same-origin-checked at the worker, not a
+ * link: a GET that revokes would fire from any image tag anyone could plant.
+ */
+function grantsSection(grants) {
+  if (!grants.length) return ''
+  const rows = grants.map((g) => `<tr>
+<td>${g.label ? `&quot;${esc(g.label)}&quot;` : '<span class="muted">unnamed</span>'}</td>
+<td class="time">${esc(fmtTime(g.created))}</td>
+<td class="time">${esc(fmtTime(new Date(g.exp * 1000).toISOString()))}</td>
+<td><form method="post" action="/api/grants/${esc(g.hash)}/revoke"><button class="secondary" type="submit">Revoke</button></form></td>
+</tr>`).join('\n')
+  return `<h2>Agent access</h2>
+<p class="muted">Agents you approved can create decks and change any deck by its link, as you, until these times. They cannot list the store or delete anything.</p>
+<div class="wrap"><table class="grants">
+<thead><tr><th>Asked for by</th><th>Approved</th><th>Ends</th><th></th></tr></thead>
+<tbody>
+${rows}
+</tbody></table></div>`
+}
+
+export function indexPage(decks, who, { create = false, grants = [] } = {}) {
   const rows = decks.map((d) => `<tr>
 <td><a class="deck" href="${esc(d.url)}">${esc(d.title) || '<span class="muted">Untitled</span>'}</a>${
     d.kind && d.kind !== 'deck' ? ` <span class="kind">${esc(d.kind)}</span>` : ''}</td>
@@ -164,6 +201,7 @@ ${rows}
 ${newLink}
 </div>
 ${body}
+${grantsSection(grants)}
 <footer>
 <p>A deck opened from a link saves back here with ⌘S.</p>
 <p>To make decks with Claude Code, install the plugin:</p>
@@ -318,6 +356,77 @@ ${create ? `<script>
   else $('intro').textContent = 'Open this page from a deck: Share panel, Save to Beta.'
 })()
 </script>
+</body>
+</html>
+`
+}
+
+/**
+ * `GET /link/<code>` — the one click (one-click publish plan, KTD11, R2/R3).
+ *
+ * THE PAGE CANNOT KNOW WHO STARTED THE PAIRING and does not pretend to. A
+ * pairing is started with no credential at all, so the only honest things to
+ * show are what a grant reaches, how long it lasts, when this pairing was
+ * started, and what the agent called itself — the last as quoted, escaped
+ * text, because a label is a string a caller chose.
+ *
+ * So the copy is fixed and carries the meaning. "Approve only if you asked an
+ * agent to publish in the last few minutes" is the defence against a phished
+ * approval, together with the start time: the whole flow is a person clicking
+ * seconds after they asked for a deck.
+ *
+ * The form's nonce is the pairing's own, stored beside the code, and the
+ * worker takes the POST only from this origin (KTD13) — an Access session
+ * cookie travels on a cross-site form submission, so same-origin is the check
+ * that makes the click a consent rather than a forgery.
+ */
+export function linkPage(who, code, { label = '', created = '', nonce = '' } = {}) {
+  const hours = Math.round(GRANT_TTL_S / 3600)
+  return `${head('Approve agent access', { analytics: false })}
+<body>
+<main>
+<header>
+<div><div class="mark">beta/slides</div><h1>Approve agent access</h1></div>
+<div class="who">${esc(who)}</div>
+</header>
+<div class="card">
+<p>Whoever started this pairing will be able to publish decks as you for ${hours} hours. Approve only if you asked an agent to publish in the last few minutes.</p>
+<dl>
+<dt>Asked for by</dt><dd>${label ? `&quot;${esc(label)}&quot;` : '<span class="muted">an agent that gave no name</span>'}</dd>
+<dt>Started</dt><dd class="num">${esc(fmtTime(created))}</dd>
+<dt>Can</dt><dd>create decks, and read and change any deck by its link</dd>
+<dt>Cannot</dt><dd>list the store, delete a deck, or read a deck's live-session keys</dd>
+</dl>
+<form method="post" action="/link/${esc(code)}/approve">
+<input type="hidden" name="nonce" value="${esc(nonce)}">
+<div class="row">
+<button type="submit">Approve for ${hours} hours</button>
+<span class="muted">Close this tab to refuse.</span>
+</div>
+</form>
+</div>
+<footer>You can end this access at any time from <a href="/">the deck list</a>.</footer>
+</main>
+</body>
+</html>
+`
+}
+
+/** The page after the click. Nothing to do here, and it says so. */
+export function linkDonePage(who, { label = '' } = {}) {
+  const hours = Math.round(GRANT_TTL_S / 3600)
+  return `${head('Approved', { analytics: false })}
+<body>
+<main>
+<header>
+<div><div class="mark">beta/slides</div><h1>Approved</h1></div>
+<div class="who">${esc(who)}</div>
+</header>
+<div class="card">
+<p>${label ? `&quot;${esc(label)}&quot;` : 'The agent'} can publish decks as you for the next ${hours} hours. Go back to where you asked for the deck; you can close this tab.</p>
+<p class="muted">End this access at any time from <a href="/">the deck list</a>.</p>
+</div>
+</main>
 </body>
 </html>
 `

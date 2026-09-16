@@ -26,6 +26,10 @@ import { existsSync, readFileSync } from 'node:fs'
 // The page's own minting logic, imported from the module the page inlines it
 // from — so what the rig exercises is the code the browser runs, not a copy.
 import { mintDocIntoBlock, indexPage } from '../src/pages.js'
+// The grant store, exercised directly against Miniflare's own KV: mint,
+// verify, list and revoke are worker-side functions with no route of their
+// own, and the routes that use them arrive in U2 and U3.
+import { mintGrant, verifyGrant, listGrants, revokeGrant } from '../src/grant.js'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -90,6 +94,17 @@ function deck(doc, { pad = '' } = {}) {
 const slidesDoc = (title, extra = {}) => ({
   format: 'bento/slides', v: 1, docId: `doc-${title.length}-x`, title, slides: [{ id: 's1', elements: [] }], ...extra,
 })
+/** The document in a file's #bento-doc block. */
+const docOfHtml = (html) => {
+  const m = /<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/i.exec(html)
+  if (!m) throw new Error('no #bento-doc block')
+  return JSON.parse(m[1])
+}
+/** `html` with its block replaced by `doc`, as the splice tool's writeBlock does. */
+const writeBlockInto = (html, doc) => {
+  const json = JSON.stringify(doc).replace(/</g, '\\u003c')
+  return html.replace(/(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, (_m, open, close) => `${open}${json}${close}`)
+}
 const encEnvelope = () => ({ format: 'bento/enc', v: 1, it: 600000, salt: 'c2FsdA==', iv: 'aXZpdml2aXZpdg==', data: 'Y2lwaGVy' })
 
 // ---- rig -----------------------------------------------------------------
@@ -155,11 +170,18 @@ export async function run(Miniflare) {
     modulesRules: [{ type: 'ESModule', include: ['**/*.js'] }],
     compatibilityDate: '2026-07-01',
     r2Buckets: ['DECKS'],
+    // The grants (one-click publish plan, KTD3). KV, not R2: native expiry and
+    // per-key reads are the whole reason a grant does not need a cron sweep.
+    kvNamespaces: ['GRANTS'],
+    // The pairing routes are public, so they are rate-limited (KTD9).
+    // Miniflare implements the binding, so the rig proves the 429 as well as
+    // the body caps; OQ1 is answered yes.
+    ratelimits: { LINK_LIMIT: { namespace_id: '1001', simple: { limit: 10, period: 60 } } },
     bindings: {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
       PAGES_ORIGIN, NEW_ENABLED: 'on',
       STORE_HOST: 'slides.betamobility.ai', OLD_HOST: 'decks.betamobility.ai',
-      REDIRECT_OLD_HOST: 'on',
+      REDIRECT_OLD_HOST: 'on', LINK_LIMIT_REQUIRED: 'on',
     },
     outboundService: async (req) => {
       if (req.url === CERTS_URL) {
@@ -355,7 +377,17 @@ export async function run(Miniflare) {
     eq(r.headers.get('x-content-type-options'), 'nosniff', 'x-content-type-options is nosniff')
     const csp = r.headers.get('content-security-policy-report-only') || ''
     ok(csp.length > 0, 'a report-only CSP ships with the deck')
-    ok(!r.headers.has('content-security-policy'), 'no enforced CSP in v1.1 (KTD9)')
+    // v1.1's KTD9 shipped NO enforcing CSP at all, on purpose: nobody had
+    // verified the full policy against real decks. That still holds for every
+    // directive but one. The one-click publish plan gave this origin a consent
+    // flow (/link/<code>/approve), and a deck is first-party HTML here, so a
+    // planted script could otherwise post an approval as whoever opened it —
+    // measured: a script's form post is indistinguishable from a real click.
+    // `form-action` is therefore enforced, alone, and a deck has no forms.
+    eq(r.headers.get('content-security-policy'), "form-action 'none'",
+      'exactly one enforcing directive, and it is form-action (one-click publish plan)')
+    ok(!/script-src|connect-src|img-src/.test(r.headers.get('content-security-policy') || ''),
+      'nothing else is enforced: the full policy is still report-only (KTD9)')
     for (const frag of ["script-src 'self' 'unsafe-inline' blob:", 'font-src', 'data:', 'img-src', 'media-src', 'connect-src', 'wss://sync.betamobility.ai', 'frame-src https:']) {
       ok(csp.includes(frag), `CSP carries ${frag}`)
     }
@@ -1027,6 +1059,815 @@ export async function run(Miniflare) {
     r = await call('GET', `/d/${second.id}`, { as: 'alice', origin: OLD_ORIGIN })
     eq(r.status, 200, 'and a signed-in deck open still serves the deck')
     await mf.setOptions(mfOptions)
+
+    // --------------------------------------------- the grant store (U1, KTD2/KTD3)
+    //
+    // A grant is an opaque bearer the store never keeps: KV holds sha256 of
+    // it, so a dump between approval and delivery is worthless (AE9). These
+    // checks call the module against Miniflare's real KV namespace, because
+    // the routes that mint and verify grants land in U2 and U3.
+    console.log('\nthe grant store: mint, verify, list, revoke (U1)')
+    // A stub to a runtime object is POISONED by `mf.setOptions()`, so it is
+    // re-acquired after every flag flip rather than held for the whole run
+    // (Miniflare throws "Attempted to use poisoned stub" otherwise).
+    let kv = await mf.getKVNamespace('GRANTS')
+    let grantEnv = { GRANTS: kv }
+    const refreshKv = async () => { kv = await mf.getKVNamespace('GRANTS'); grantEnv = { GRANTS: kv } }
+    const bearer = (token) => ({ authorization: `Bearer ${token}` })
+    const asReq = (headers) => new Request('https://slides.betamobility.ai/api/publish/decks', { headers })
+
+    const g1 = await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')
+    ok(typeof g1.token === 'string' && g1.token.length >= 43, 'a minted grant hands back a token')
+    const id0 = await verifyGrant(asReq(bearer(g1.token)), grantEnv)
+    eq(id0?.kind, 'grant', 'a minted grant verifies as a grant identity')
+    eq(id0?.id, 'alice@betamobility.io', 'and carries the approving person, not a token name')
+    ok(!(await verifyGrant(asReq(bearer(`${g1.token.slice(0, -1)}${g1.token.at(-1) === 'A' ? 'B' : 'A'}`)), grantEnv)),
+      'a bearer with one character changed does not verify')
+    ok(!(await verifyGrant(asReq({ authorization: 'Bearer' }), grantEnv)), 'a malformed Authorization header does not verify')
+    ok(!(await verifyGrant(asReq({ authorization: `Basic ${g1.token}` }), grantEnv)), 'a non-Bearer scheme does not verify')
+    ok(!(await verifyGrant(asReq({}), grantEnv)), 'no Authorization header does not verify')
+    ok(!(await verifyGrant(asReq(bearer(g1.token)), {})), 'an unbound GRANTS namespace fails closed')
+
+    // The raw token is in the caller's hands and nowhere else (R21, AE9).
+    const dump = await kv.list({})
+    let raws = 0
+    for (const k of dump.keys) {
+      const v = await kv.get(k.name)
+      if (v && v.includes(g1.token)) raws++
+    }
+    eq(raws, 0, 'no KV value holds the raw token, only its hash')
+    ok(dump.keys.some((k) => k.name === `grant:${g1.hash}`), 'the grant is keyed by its hash')
+
+    // Expiry is the value's own clock, not only KV's TTL: a grant minted nine
+    // hours ago is dead even while the key survives.
+    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    ok(await kv.get(`grant:${stale.hash}`), 'a stale grant can still be in KV')
+    ok(!(await verifyGrant(asReq(bearer(stale.token)), grantEnv)), 'and does not verify: its stored exp has passed')
+
+    const g2 = await mintGrant(grantEnv, 'alice@betamobility.io', 'second')
+    const gb = await mintGrant(grantEnv, 'bob@betamobility.io', 'bobs')
+    let myGrants = await listGrants(grantEnv, 'alice@betamobility.io')
+    eq(myGrants.filter((x) => x.hash === gb.hash).length, 0, "alice's list does not carry bob's grant")
+    ok(myGrants.some((x) => x.hash === g1.hash) && myGrants.some((x) => x.hash === g2.hash), 'alice sees both of her live grants')
+    ok(myGrants.every((x) => typeof x.label === 'string' && typeof x.created === 'string' && Number.isFinite(x.exp)),
+      'a listed grant carries its label, when it started and when it ends')
+    // A prefix that is a prefix of a real address must not match it.
+    eq((await listGrants(grantEnv, 'alice@')).length, 0, 'alice@ matches nothing: the list prefix ends at the colon')
+
+    ok(await revokeGrant(grantEnv, 'alice@betamobility.io', g2.hash), 'a grant revokes')
+    ok(!(await verifyGrant(asReq(bearer(g2.token)), grantEnv)), 'a revoked grant no longer verifies')
+    myGrants = await listGrants(grantEnv, 'alice@betamobility.io')
+    ok(!myGrants.some((x) => x.hash === g2.hash), 'and is gone from the list')
+    ok(myGrants.some((x) => x.hash === g1.hash), 'while the other one is untouched')
+    ok(!(await revokeGrant(grantEnv, 'bob@betamobility.io', g1.hash)), "bob cannot revoke alice's grant")
+    ok(await verifyGrant(asReq(bearer(g1.token)), grantEnv), 'and it still verifies afterwards')
+    ok(!(await revokeGrant(grantEnv, 'alice@betamobility.io', 'not-a-hash')), 'a hash-shaped nothing revokes nothing')
+
+    // ------------------------------------- the two agent prefixes are fail-closed (U1)
+    //
+    // Access Bypasses /api/link/ and /api/publish/, so nothing verifies them
+    // but this worker. Anything not exactly routed there is 401 with no body —
+    // never 404, which would say whether a deck exists.
+    console.log('\nthe agent prefixes: bearer or nothing, 401 with no body (U1, KTD4)')
+    for (const [m2, p2] of [
+      ['GET', '/api/link/'], ['GET', '/api/link'], ['POST', '/api/link'],
+      ['GET', '/api/publish/'], ['GET', '/api/publish'],
+      ['GET', '/api/publish/nowhere'], ['DELETE', `/api/publish/decks/${second.id}`],
+      ['GET', '/api/publish/decks'], ['GET', '/api/link/start'],
+    ]) {
+      const rr = await call(m2, p2, { body: m2 === 'POST' ? '{}' : undefined })
+      eq(rr.status, 401, `${m2} ${p2} with nothing attached is 401`)
+      eq((await bodyOf(rr)).length, 0, `${m2} ${p2} 401 carries no body`)
+    }
+    // A person's cookie is not a credential here: these prefixes take a bearer.
+    r = await call('GET', `/api/publish/decks/${second.id}`, { as: 'alice' })
+    eq(r.status, 401, "a person's assertion on the publish path is 401: the prefix takes a bearer")
+    r = await call('GET', `/api/publish/decks/${second.id}`)
+    eq(r.status, 401, 'an anonymous read of a deck that exists is 401, the same as one that does not')
+    r = await call('GET', '/api/publish/decks/0123456789')
+    eq(r.status, 401, 'and a deck id that exists nowhere answers identically')
+    // The other direction: a grant is not an identity on the gated routes.
+    r = await call('GET', '/api/decks', { headers: bearer(g1.token) })
+    eq(r.status, 401, 'a bearer on the gated API is 401: only Access speaks there')
+    r = await call('GET', '/api/harness/decks/0123456789', { headers: bearer(g1.token) })
+    eq(r.status, 401, 'and on the harness routes too')
+    const grantEventsBefore = events.length
+    await call('GET', '/api/publish/decks/0123456789', { headers: bearer(g1.token) })
+    eq(events.length, grantEventsBefore, 'a refused agent request sends no analytics event')
+
+    // ------------------------------------------------ pairing (U2, KTD1/KTD2/KTD13)
+    //
+    // The device-authorization flow: the agent starts a pairing with no
+    // credential at all, the person approves it in the browser they are
+    // already signed into, and the agent's poll collects a grant. Two values,
+    // never one: whoever can see the approval URL holds the code, and only the
+    // agent holds the handle the grant is delivered to.
+    console.log('\npairing: start, the approval page, approve, poll (U2)')
+    // Every scenario gets its own client IP: the rate limiter keys on it, so
+    // sharing one would make an unrelated case trip the limit (KTD9).
+    let ipN = 0
+    const fromIp = () => ({ 'cf-connecting-ip': `10.0.0.${++ipN}` })
+    const startPair = (label, { headers = {}, body } = {}) => call('POST', '/api/link/start', {
+      headers: { 'content-type': 'application/json', ...fromIp(), ...headers },
+      body: body !== undefined ? body : JSON.stringify(label === undefined ? {} : { label }),
+    })
+    const pollPair = (handle, extra = {}) => call('GET', `/api/link/${handle}`, { headers: { ...fromIp(), ...extra } })
+    const nonceIn = (page) => (/name="nonce" value="([^"]+)"/.exec(page) || [])[1]
+    // What a real browser sends for a page load and a form post, measured in
+    // Chrome: site=same-origin, mode=navigate, dest=document. The worker now
+    // requires the `dest` too, because a script's fetch of the approval page
+    // (dest=empty) is same-origin for free on a host that serves decks.
+    const sameOrigin = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }
+    const asDocument = { 'sec-fetch-dest': 'document' }
+    // The value's own clock is what expires a pairing, so the rig can retire
+    // one without waiting ten minutes. Only `exp` is touched.
+    const expireKey = async (key) => {
+      const v = JSON.parse(await kv.get(key))
+      v.exp = Math.floor(Date.now() / 1000) - 5
+      await kv.put(key, JSON.stringify(v))
+    }
+
+    r = await startPair('Claude (Cowork)')
+    eq(r.status, 200, 'POST /api/link/start needs no credential of any kind')
+    const pair = await r.json()
+    ok(/^[0-9A-Za-z]{10}$/.test(pair.code), 'start hands back a ten-character code')
+    ok(typeof pair.handle === 'string' && pair.handle.length >= 43, 'and a longer handle, which no person ever types')
+    ok(pair.handle !== pair.code, 'the code and the handle are two different values (KTD1)')
+    eq(pair.url, `${ORIGIN}/link/${pair.code}`, 'the approval URL is the code on the store host')
+    ok(Number.isFinite(Date.parse(pair.expires)), 'and it says when the code dies')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 202, 'a poll before approval is 202')
+    const pollBody = await r.text()
+    // NOT an OR. The previous form (`!/grant/i || !/token-shape/`) could only
+    // fail if BOTH appeared, so it passed on any body — including one that had
+    // started leaking a token. The token shape alone is the property.
+    eq(JSON.parse(pollBody).state, 'pending', 'and says so plainly')
+    ok(!/[A-Za-z0-9_-]{43}/.test(pollBody), 'and carries nothing token-shaped at all')
+
+    console.log('\nthe approval page: what it says, and what it refuses (U2, R3/R19)')
+    r = await call('GET', `/link/${pair.code}`)
+    eq(r.status, 401, 'the approval page is behind Access: no assertion is 401')
+    r = await call('GET', `/link/${pair.code}`, { as: 'service' })
+    eq(r.status, 403, 'and a service token is not a person: 403')
+    r = await call('GET', `/link/${pair.code}`, { as: 'alice', headers: asDocument })
+    eq(r.status, 200, 'a signed-in person gets the page')
+    const approvePage = await r.text()
+    ok(approvePage.includes('publish decks as you'), 'it says what is being granted')
+    ok(approvePage.includes('8 hours'), 'it says for how long')
+    ok(approvePage.includes('Approve only if you asked an agent to publish in the last few minutes.'),
+      'it says when not to approve')
+    ok(approvePage.includes('&quot;Claude (Cowork)&quot;'), "the agent's label is shown as quoted, escaped text")
+    ok(/Started/.test(approvePage), 'it says when the pairing was started')
+    ok(approvePage.includes('alice@betamobility.io'), 'the page shows WHO would be granted: the signed-in identity')
+    ok(!approvePage.includes(pair.handle), 'and never the handle, which is the agent’s alone')
+    ok(!approvePage.includes('plausible.io'), 'no analytics on a page whose URL carries the code')
+    eq(r.headers.get('x-frame-options'), 'DENY', 'the approval page cannot be framed')
+    ok(/frame-ancestors 'none'/.test(r.headers.get('content-security-policy') || ''), 'and says so in CSP too')
+    const nonce = nonceIn(approvePage)
+    ok(!!nonce, 'the form carries a nonce')
+
+    // AE7: a cross-site form carrying the person's session must not approve.
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'approve from another site is 403, even with a valid session')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'and a foreign Origin is 403 as well')
+    r = await pollPair(pair.handle)
+    eq(r.status, 202, 'after a refused cross-site approve the code is still pending')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: 'nonce=wrong',
+    })
+    eq(r.status, 403, 'approve with the wrong nonce is 403')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: '',
+    })
+    eq(r.status, 403, 'and approve with no nonce at all is 403')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 401, 'approve with no assertion is 401')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'service', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'approve with a service token is 403: only a person consents')
+
+    console.log('\napproval, delivery, and the grant that comes out (U2, F1/AE9)')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 200, 'alice approves, same-origin, with the nonce')
+    const donePage = await r.text()
+    ok(/close this tab/i.test(donePage), 'and is told she can close the tab')
+
+    // AE9: approved, not yet polled — the namespace holds nothing usable.
+    const beforeDelivery = await kv.list({})
+    let usable = 0
+    for (const k of beforeDelivery.keys) {
+      const v = (await kv.get(k.name)) || ''
+      for (const cand of v.match(/[A-Za-z0-9_-]{43}/g) || []) {
+        if (await verifyGrant(asReq(bearer(cand)), grantEnv)) usable++
+      }
+    }
+    eq(usable, 0, 'between approval and the first poll, no stored value is a usable grant (AE9)')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 200, 'the first poll after approval is 200')
+    const delivered = await r.json()
+    eq(delivered.owner, 'alice@betamobility.io', 'the grant names the person who approved')
+    ok(Number.isFinite(Date.parse(delivered.expires)), 'and says when it ends')
+    const aliceGrant = await verifyGrant(asReq(bearer(delivered.grant)), grantEnv)
+    eq(aliceGrant?.id, 'alice@betamobility.io', 'the delivered grant verifies as alice')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 200, 'a second poll is still answered, so a dropped connection is not a silent loss')
+    const second2 = await r.json()
+    ok(!second2.grant, 'but it carries no grant: the raw token was never stored (R21)')
+    r = await pollPair(pair.handle)
+    eq(r.status, 410, 'a third poll is 410: the handle is gone')
+    r = await pollPair('x'.repeat(43))
+    eq(r.status, 410, 'an unknown handle is 410')
+
+    console.log('\na pairing is single-use, and short-lived (U2, R4/F4)')
+    r = await call('GET', `/link/${pair.code}`, { as: 'alice' })
+    eq(r.status, 410, 'the code is single-use: its page is gone once approved')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 410, 'and approving it a second time is 410')
+    r = await call('GET', '/link/0000000000', { as: 'alice' })
+    eq(r.status, 410, 'a code nobody minted is 410')
+
+    const stalePair = await (await startPair('stale')).json()
+    await expireKey(`link:${stalePair.code}`)
+    r = await call('GET', `/link/${stalePair.code}`, { as: 'alice' })
+    eq(r.status, 410, 'an expired code has no approval page')
+    await expireKey(`handle:${stalePair.handle}`)
+    r = await pollPair(stalePair.handle)
+    eq(r.status, 410, 'and its handle polls 410, so the agent learns nobody approved (F4)')
+
+    // ------------------- a script on this origin cannot drive the approval (U2)
+    //
+    // The hole a same-origin check alone leaves open, and the reason this is
+    // not theoretical: /d/:id serves uploaded deck HTML as a first-party
+    // document on THIS host, so a script planted in a stored deck is
+    // same-origin for free. Left unguarded it could start its own pairing on
+    // the public route, read the approval page to lift the nonce, post the
+    // approval, and collect a grant acting as whoever opened the deck.
+    //
+    // Sec-Fetch-Dest is what separates a script's READ of the page from a real
+    // navigation, measured in Chrome: a fetch is dest=empty, an iframe is
+    // dest=iframe, a real page load or form post is dest=document. The other
+    // two halves are response headers, asserted below.
+    console.log('\na script on this origin cannot read the nonce or post the approval (U2, R19)')
+    const scripted = await (await startPair('a deck with a script in it')).json()
+    for (const [what, headers] of [
+      ['a fetch', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' }],
+      ['an iframe', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' }],
+    ]) {
+      const rr = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers })
+      eq(rr.status, 403, `${what} of the approval page is refused, so the nonce is unreadable`)
+      ok(!(await rr.text()).includes('nonce'), 'and the refusal carries no nonce')
+    }
+    // The page a person actually opens still works, and the nonce is there.
+    r = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers: asDocument })
+    eq(r.status, 200, 'while a real page load is served')
+    const scriptedNonce = nonceIn(await r.text())
+    ok(!!scriptedNonce, 'with its nonce')
+    // Even holding the nonce, a scripted POST is refused.
+    r = await call('POST', `/link/${scripted.code}/approve`, {
+      as: 'alice',
+      headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${scriptedNonce}`,
+    })
+    eq(r.status, 403, 'a scripted approve is refused even with the right nonce')
+    r = await pollPair(scripted.handle)
+    eq(r.status, 202, 'and the pairing is still pending')
+
+    console.log('\nthe headers that close the rest of that chain (U2)')
+    r = await call('GET', `/link/${scripted.code}`, { as: 'alice', headers: asDocument })
+    eq(r.headers.get('cross-origin-opener-policy'), 'same-origin',
+      'COOP on the approval page: a popup opened by a deck script cannot read its DOM')
+    eq(r.headers.get('cross-origin-resource-policy'), 'same-origin', 'and it is not readable as a subresource')
+    eq(r.headers.get('referrer-policy'), 'no-referrer', 'and the code does not travel in a Referer')
+    r = await call('GET', '/', { as: 'alice' })
+    eq(r.headers.get('cross-origin-opener-policy'), 'same-origin', 'the index, which carries Revoke, is COOP-protected too')
+    // The deck itself: one ENFORCING directive, and only that one, so the
+    // report-only policy is unchanged. A deck has no forms; the approval does.
+    const cspDeck = await call('GET', `/d/${second.id}`, { as: 'alice' })
+    eq(cspDeck.headers.get('content-security-policy'), "form-action 'none'",
+      'a served deck cannot submit a form anywhere, which is how a planted script would post an approval')
+    ok(/script-src/.test(cspDeck.headers.get('content-security-policy-report-only') || ''),
+      'while the full policy stays report-only, unchanged')
+
+    console.log('\na revoke driven by a script is refused too (U4, R19)')
+    const scriptRevoke = await mintGrant(grantEnv, 'alice@betamobility.io', 'for the script test')
+    r = await call('POST', `/api/grants/${scriptRevoke.hash}/revoke`, {
+      as: 'alice', headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' },
+    })
+    eq(r.status, 403, 'a scripted revoke is refused')
+    ok(await verifyGrant(asReq(bearer(scriptRevoke.token)), grantEnv), 'and the grant survives')
+
+    console.log('\nan approval in the pairing\u2019s last seconds is still collectable (U2)')
+    const late = await (await startPair('late clicker')).json()
+    r = await call('GET', `/link/${late.code}`, { as: 'alice', headers: asDocument })
+    const lateNonce = nonceIn(await r.text())
+    // One second of pairing left when the click lands.
+    const lateLink = JSON.parse(await kv.get(`link:${late.code}`))
+    lateLink.exp = Math.floor(Date.now() / 1000) + 1
+    await kv.put(`link:${late.code}`, JSON.stringify(lateLink))
+    const lateHandle = JSON.parse(await kv.get(`handle:${late.handle}`))
+    lateHandle.exp = Math.floor(Date.now() / 1000) + 1
+    await kv.put(`handle:${late.handle}`, JSON.stringify(lateHandle))
+    r = await call('POST', `/link/${late.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${lateNonce}`,
+    })
+    eq(r.status, 200, 'the click is accepted with a second to spare')
+    // The approval carries its OWN clock from here, so a poll two seconds
+    // later still collects it instead of being told nobody approved.
+    await new Promise((res) => setTimeout(res, 2000))
+    r = await pollPair(late.handle)
+    eq(r.status, 200, 'and two seconds later the grant is still delivered, not 410')
+    ok(!!(await r.json()).grant, 'with a real grant in it')
+
+    console.log('\nthe pairing values are not credentials anywhere else (AE4)')
+    const unapproved = await (await startPair('unapproved')).json()
+    for (const cred of [unapproved.code, unapproved.handle]) {
+      const rr = await call('GET', '/api/publish/decks/0123456789', { headers: { authorization: `Bearer ${cred}` } })
+      eq(rr.status, 401, 'a pairing code or handle used as a bearer on the publish path is 401')
+    }
+
+    console.log('\nthe start endpoint is public, so it is capped (U2, R5/KTD9)')
+    r = await startPair(undefined, { body: 'not json' })
+    eq(r.status, 400, 'a body that is not JSON is 400')
+    r = await startPair(undefined, { headers: { 'content-type': 'text/plain' }, body: '{}' })
+    eq(r.status, 400, 'a request that is not application/json is 400')
+    r = await startPair(undefined, { body: JSON.stringify({ label: 'x'.repeat(200) }) })
+    eq(r.status, 400, 'a label over 80 characters is 400')
+    r = await startPair(undefined, { body: JSON.stringify({ label: 'a', pad: 'x'.repeat(2048) }) })
+    eq(r.status, 400, 'a body over 1 KB is 400')
+    r = await startPair(undefined, { body: JSON.stringify({}) })
+    eq(r.status, 200, 'a start with no label at all is fine')
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: JSON.stringify({ label: '<script>alert(1)</script>' }) })
+    const evil = await r.json()
+    r = await call('GET', `/link/${evil.code}`, { as: 'alice' })
+    const evilPage = await r.text()
+    ok(!evilPage.includes('<script>alert(1)</script>'), "a label's markup never reaches the page as markup")
+    ok(evilPage.includes('&lt;script&gt;'), 'it is shown escaped, as what the agent called itself')
+
+    console.log('\nthe rate limiter is required in production (U2, KTD9)')
+    const burstIp = { 'cf-connecting-ip': '198.51.100.7' }
+    let limited = 0
+    for (let i = 0; i < 12; i++) {
+      const rr = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...burstIp }, body: '{}' })
+      if (rr.status === 429) limited++
+    }
+    ok(limited > 0, 'a burst from one address is refused with 429')
+    // A handle of the right SHAPE that names no pairing: the limiter answers
+    // before the lookup, so the poll route is limited on the same key. (A
+    // misshapen handle is the 401 above and never costs a KV read at all.)
+    r = await call('GET', `/api/link/${'n'.repeat(43)}`, { headers: burstIp })
+    eq(r.status, 429, 'and the poll route is limited on the same key')
+
+    await mf.setOptions({ ...mfOptions, ratelimits: undefined })
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: '{}' })
+    eq(r.status, 503, 'with LINK_LIMIT_REQUIRED on and no binding, start is 503 rather than unguarded')
+    await mf.setOptions({ ...mfOptions, ratelimits: undefined, bindings: { ...mfOptions.bindings, LINK_LIMIT_REQUIRED: 'off' } })
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: '{}' })
+    eq(r.status, 200, 'with the flag off (the rig, wrangler dev) it runs without one')
+    await mf.setOptions(mfOptions)
+    await refreshKv()
+
+    console.log('\nthe index cannot be framed either (KTD13)')
+    r = await call('GET', '/', { as: 'alice' })
+    eq(r.headers.get('x-frame-options'), 'DENY', 'the index carries x-frame-options DENY')
+    ok(/frame-ancestors 'none'/.test(r.headers.get('content-security-policy') || ''), 'and frame-ancestors none')
+
+    // -------------------------------------------- what a grant reaches (U3, R8/R9)
+    //
+    // The reach of a signed-in partner, minus list and delete: create, read,
+    // replace and asset upload, on any deck by id. Every "is this an agent
+    // writing" branch must take the agent side, or a shipped editor — which
+    // compares x-bento-service-gen and reads the 412 body's `writer` — would
+    // retry over a grant's write.
+    console.log('\nthe publish path: a grant acts as the person (U3)')
+    const aliceTok = (await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')).token
+    const bobTok = (await mintGrant(grantEnv, 'bob@betamobility.io', 'Claude (Cowork)')).token
+    const asGrant = (token, extra = {}) => ({ authorization: `Bearer ${token}`, ...extra })
+    const publish = (method, path, opts = {}) => call(method, path, opts)
+
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(aliceTok), body: deck(slidesDoc('Fra Cowork')) })
+    eq(r.status, 201, 'a grant creates a deck')
+    const grantMade = await r.json()
+    ok(/^[0-9A-Za-z]{10}$/.test(grantMade.id), 'and gets an id back')
+    eq(grantMade.url, `${ORIGIN}/d/${grantMade.id}`, 'with the deck link')
+
+    // AE2: the deck is the approving person's, on the index and in the API.
+    r = await call('GET', '/api/decks', { as: 'alice' })
+    const grantRow = (await r.json()).decks.find((d) => d.id === grantMade.id)
+    eq(grantRow?.owner, 'alice@betamobility.io', 'the deck is owned by the person who approved, not by a token')
+    eq(grantRow?.writer, 'grant:alice@betamobility.io', 'and the last writer says it was her agent')
+    r = await call('GET', `/d/${grantMade.id}`, { as: 'alice' })
+    eq(r.status, 200, 'she can open it in the browser')
+    eq(r.headers.get('x-bento-service-gen'), '1', 'a grant create counts as a service generation')
+
+    // R13: ownership is what makes a deck deletable, and the grant is not it.
+    r = await call('DELETE', `/api/decks/${grantMade.id}`, { as: 'bob' })
+    eq(r.status, 403, 'bob cannot delete a deck alice asked for')
+    r = await call('DELETE', `/api/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'and the grant itself cannot delete it: the prefix never reaches DELETE (AE5)')
+    r = await call('GET', '/api/decks', { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'nor list the store (AE5)')
+    r = await call('GET', '/api/publish/decks', { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'and there is no list route under the publish prefix either')
+
+    console.log('\na grant reads and replaces any deck by id (U3, R8)')
+    // A deck bob made in the browser, which alice's agent may still change:
+    // four partners with equal access, from every surface.
+    r = await call('POST', '/api/decks', { as: 'bob', body: deck(slidesDoc('Bobs deck')) })
+    const bobs = await r.json()
+    r = await publish('GET', `/api/publish/decks/${bobs.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, "alice's grant reads a deck bob created")
+    const bobsEtag = r.headers.get('x-bento-etag')
+    ok(!!bobsEtag, 'the read carries x-bento-etag, which is how a conditional write is possible')
+    eq(r.headers.get('etag'), bobsEtag, 'and the plain etag beside it')
+    const bobsRead = await r.text()
+    r = await publish('PUT', `/api/publish/decks/${bobs.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': bobsEtag }), body: bobsRead,
+    })
+    eq(r.status, 200, 'and replaces it')
+    eq(r.headers.get('x-bento-service-gen'), '1', 'bumping the service generation')
+    r = await call('GET', '/api/decks', { as: 'bob' })
+    const bobsRow = (await r.json()).decks.find((d) => d.id === bobs.id)
+    eq(bobsRow?.owner, 'bob@betamobility.io', 'the deck stays bobs: a replace never moves ownership')
+    eq(bobsRow?.writer, 'grant:alice@betamobility.io', "while the last writer is alice's agent")
+
+    console.log('\nthe conditional-write contract is the harness one (U3, KTD8)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok), body: deck(slidesDoc('No match')) })
+    eq(r.status, 428, 'a grant replace without If-Match is 428, as on the harness route')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': '"nonsense"' }), body: deck(slidesDoc('Stale')),
+    })
+    eq(r.status, 412, 'a stale If-Match is 412')
+    const conflict = await r.json()
+    eq(conflict.writer, 'service', "and names the writer with the enum a shipped editor reads: a grant write is a 'service' write")
+    ok(!!r.headers.get('x-bento-service-gen'), 'the 412 carries the generation header')
+    ok(!!r.headers.get('x-bento-etag'), 'and the current etag')
+
+    // The other direction: a person's save must still read as a person's.
+    r = await call('GET', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
+    const madeEtag = r.headers.get('x-bento-etag')
+    const madeRead = await r.text()
+    // Her save must CHANGE the bytes: an R2 etag is a hash of the content, so
+    // re-storing the same file would leave the version indistinguishable and
+    // the conditional write below would pass for the wrong reason.
+    r = await call('PUT', `/api/decks/${grantMade.id}`, { as: 'alice', body: deck(slidesDoc('Alice endret den')) })
+    eq(r.status, 200, "a person's save after a grant write still needs no If-Match")
+    eq(r.headers.get('x-bento-service-gen'), '1', 'and carries the generation forward rather than bumping it')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': madeEtag }), body: madeRead,
+    })
+    eq(r.status, 412, "a person's save between a grant's read and its write makes the write 412")
+    const raced = await r.json()
+    eq(raced.writer, 'person', 'and that 412 names a person, because a person wrote the version that won')
+
+    console.log('\nscene assets: a grant uploads, a person still may not (U3)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/points.json`, {
+      headers: asGrant(aliceTok, { 'content-type': 'application/json' }), body: '[1,2,3]',
+    })
+    eq(r.status, 200, 'a grant uploads a scene asset')
+    r = await call('PUT', `/api/publish/decks/${grantMade.id}/assets/points.json`, {
+      as: 'alice', headers: { 'content-type': 'application/json' }, body: '[1,2,3]',
+    })
+    eq(r.status, 401, "a person's assertion is not a credential on the publish prefix")
+    r = await call('PUT', `/api/harness/decks/${grantMade.id}/assets/points.json`, {
+      as: 'alice', headers: { 'content-type': 'application/json' }, body: '[1,2,3]',
+    })
+    eq(r.status, 403, 'and the harness asset route still refuses a person (unchanged)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/map.svg`, {
+      headers: asGrant(aliceTok, { 'content-type': 'image/svg+xml' }),
+      body: '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/decks")</script><rect/></svg>',
+    })
+    eq(r.status, 200, 'an svg uploads')
+    r = await call('GET', `/d/${grantMade.id}/assets/map.svg`, { as: 'alice' })
+    const svgOut = await r.text()
+    ok(!/<script/i.test(svgOut), 'and the active parts are still stripped out of it')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/bad name.json`, {
+      headers: asGrant(aliceTok, { 'content-type': 'application/json' }), body: '[]',
+    })
+    eq(r.status, 400, 'a bad asset name is still a 400, not a 404')
+
+    console.log('\na dead grant is refused, and the bearer never comes back out (U3, F3/R21)')
+    const deadGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'deadGrant')
+    await revokeGrant(grantEnv, 'alice@betamobility.io', deadGrant.hash)
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(deadGrant.token), body: deck(slidesDoc('Revoked')) })
+    eq(r.status, 401, 'a revoked grant cannot create')
+    eq((await bodyOf(r)).length, 0, 'and the refusal carries no body')
+    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(expiredGrant.token), body: deck(slidesDoc('Expired')) })
+    eq(r.status, 401, 'an expired grant cannot create either (F3)')
+
+    const leakCheck = [...events].map((e) => JSON.stringify(e)).join('\n')
+    ok(!leakCheck.includes(aliceTok), 'no analytics event carries the bearer')
+    r = await publish('PUT', `/api/publish/decks/0123456789`, { headers: asGrant(aliceTok, { 'if-match': 'x' }), body: deck(slidesDoc('Nope')) })
+    eq(r.status, 404, 'a grant write to a deck that is not there is 404: the bearer verified, the deck did not exist')
+    ok(!(await r.text()).includes(aliceTok), 'and no response body repeats the bearer')
+
+    // ------------------------------- the block rewrite: strip, restore, pin (U8)
+    //
+    // The store's posture is "stream the stored bytes", and this is its ONE
+    // exception: a grant's read is re-serialised with `collab` deleted, and a
+    // grant's write has the stored `collab` put back before anything is
+    // stored. The whole block, not the three private fields: room plus the
+    // symmetric key is what `saveReaderCopy` writes, a reader capability that
+    // would outlive the grant it came from.
+    console.log('\ncollab is stripped on a grant read and restored on its write (U8, AE3)')
+    const liveCollab = {
+      on: true, room: 'w0123456789abcdef', key: 'c3ltbWV0cmljLWtleS1oZXJl',
+      writerPub: 'cHViCg==', writerPriv: 'cHJpdgo=', ownerPriv: 'b3duZXItcHJpdgo=',
+      invite: { pub: 'aW52aXRlLXB1Ygo=', priv: 'aW52aXRlLXByaXYK' },
+      sync: { v: 2, regs: {} },
+    }
+    const withText = (title, text, extra = {}) => ({
+      format: 'bento/slides', v: 1, docId: 'doc-collab-x', title,
+      slides: [{ id: 's1', elements: [{ id: 't-01', type: 'text', x: 10, y: 10, w: 100, h: 20, html: text }] }],
+      ...extra,
+    })
+    const liveBytes = deck(withText('Levende dekk', 'før', { collab: liveCollab }), { pad: 'shell-marker' })
+    r = await call('POST', '/api/decks', { as: 'bob', body: liveBytes })
+    const live = await r.json()
+
+    r = await publish('GET', `/api/publish/decks/${live.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, 'a grant reads the deck')
+    const strippedEtag = r.headers.get('x-bento-etag')
+    const strippedSrc = await r.text()
+    const strippedDoc = docOfHtml(strippedSrc)
+    ok(!('collab' in strippedDoc), 'the document it receives has no collab key at all')
+    eq(strippedDoc.slides[0].elements[0].html, 'før', 'the content is all there, æøå included')
+    ok(Buffer.byteLength(strippedSrc) !== Buffer.byteLength(liveBytes), 'and is a different length from the stored object, because the block was rewritten')
+    // The served body is WHOLE: `content-length` is computed from the
+    // rewritten bytes rather than `obj.size`, and a stale length would
+    // truncate a real client here. The header itself cannot be asserted from
+    // this rig — MEASURED: workerd answers `transfer-encoding: chunked`
+    // locally and drops content-length from every response, explicit or not —
+    // so completeness is what is checked here and the header is checked over
+    // real HTTP by scripts/check-store-live.mjs.
+    ok(strippedSrc.trimEnd().endsWith('</html>'), 'the served file is complete, not truncated to the stored length')
+
+    // Only the block may differ. Everything around it is the shell a browser
+    // runs, and it is byte-identical.
+    const shellOfHtml = (html) => html.replace(/(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, '$1$2')
+    eq(shellOfHtml(strippedSrc), shellOfHtml(liveBytes), 'the served bytes differ from the stored ones only inside the #bento-doc block')
+
+    // A person's read is untouched: the exception is the grant path only.
+    r = await call('GET', `/d/${live.id}`, { as: 'bob' })
+    eq(await r.text(), liveBytes, "a person's read of the same deck is byte-identical to the upload")
+    r = await call('GET', `/api/harness/decks/${live.id}`, { as: 'service' })
+    ok((await r.text()).includes('ownerPriv'), 'and a service token still reads the whole file, unchanged')
+
+    // AE3, the other half: the write back restores what was stripped.
+    const grantEdited = writeBlockInto(strippedSrc, { ...strippedDoc, slides: [{ id: 's1', elements: [{ ...strippedDoc.slides[0].elements[0], html: 'etter' }] }] })
+    r = await publish('PUT', `/api/publish/decks/${live.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': strippedEtag }), body: grantEdited,
+    })
+    eq(r.status, 200, 'and writes it back with one text element changed')
+    r = await call('GET', `/d/${live.id}`, { as: 'bob' })
+    const storedAfter = docOfHtml(await r.text())
+    eq(storedAfter.slides[0].elements[0].html, 'etter', 'the change is stored')
+    eq(JSON.stringify(storedAfter.collab), JSON.stringify(liveCollab),
+      'and the collab block is back, value for value: room, key, both private keys, the invite and the sync state')
+
+    console.log('\na deck with no live session never grows one (U8)')
+    const bareBytes = deck(withText('Uten collab', 'a'))
+    r = await call('POST', '/api/decks', { as: 'bob', body: bareBytes })
+    const bare = await r.json()
+    r = await publish('GET', `/api/publish/decks/${bare.id}`, { headers: asGrant(aliceTok) })
+    const bareEtag = r.headers.get('x-bento-etag')
+    const bareSrc = await r.text()
+    ok(!('collab' in docOfHtml(bareSrc)), 'a grant read of a deck with no collab has none')
+    r = await publish('PUT', `/api/publish/decks/${bare.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': bareEtag }), body: bareSrc,
+    })
+    eq(r.status, 200, 'the write back succeeds')
+    r = await call('GET', `/d/${bare.id}`, { as: 'bob' })
+    ok(!('collab' in docOfHtml(await r.text())), 'and no collab key was invented')
+
+    console.log('\nthe shell is pinned: a grant changes the block and nothing else (U8, AE8)')
+    r = await publish('GET', `/api/publish/decks/${live.id}`, { headers: asGrant(aliceTok) })
+    const pinEtag = r.headers.get('x-bento-etag')
+    const pinSrc = await r.text()
+    const storedBefore = await (await call('GET', `/d/${live.id}`, { as: 'bob' })).text()
+    for (const [what, body] of [
+      ['one byte outside the block', pinSrc.replace('shell-marker', 'shell-markeR')],
+      ['an added script', pinSrc.replace('</body>', '<script>fetch("/api/decks")</script></body>')],
+      ['a changed title tag', pinSrc.replace('<title>t</title>', '<title>x</title>')],
+    ]) {
+      const rr = await publish('PUT', `/api/publish/decks/${live.id}`, {
+        headers: asGrant(aliceTok, { 'if-match': pinEtag }), body,
+      })
+      eq(rr.status, 400, `a grant replace with ${what} is refused`)
+      eq(await rr.text(), 'shell', 'with the one-word reason `shell`')
+    }
+    eq(await (await call('GET', `/d/${live.id}`, { as: 'bob' })).text(), storedBefore, 'and the stored bytes are untouched')
+    // A person may still change the shell: that is how an update lands.
+    r = await call('PUT', `/api/decks/${live.id}`, { as: 'bob', body: pinSrc.replace('shell-marker', 'a-new-shell') })
+    eq(r.status, 200, "a person's save is not pinned: a shell update is what ⌘S after an update is")
+
+    console.log('\na person\u2019s save between a grant\u2019s read and its write is a 412, not a shell refusal (U8)')
+    {
+      // The case the rig could not previously produce: its deck() helper emits
+      // a byte-identical shell every time, so the 412-race case never also
+      // moved the shell. A real person's save DOES move it — that is how a
+      // shell update lands — and the pin ran before the precondition, so a
+      // routine conflict came back as `400 shell`. The tool retries a 412 and
+      // gives up on a 400, so the wrong one turns a conflict into a failed run.
+      const raced = deck(withText('Kappl\u00f8p', 'a', { collab: liveCollab }), { pad: 'first-shell' })
+      r = await call('POST', '/api/decks', { as: 'bob', body: raced })
+      const id = (await r.json()).id
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const readEtag = r.headers.get('x-bento-etag')
+      const readSrc = await r.text()
+      // Bob saves, and his save changes the shell as well as the block.
+      r = await call('PUT', `/api/decks/${id}`, {
+        as: 'bob', body: deck(withText('Kappl\u00f8p', 'b', { collab: liveCollab }), { pad: 'a-newer-shell' }),
+      })
+      eq(r.status, 200, "bob's save lands first")
+      // Now the grant writes what it read.
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': readEtag }), body: readSrc,
+      })
+      eq(r.status, 412, 'the grant write is a 412: re-read and try again')
+      const body = await r.json()
+      eq(body.error, 'changed', 'with the conflict body the tool already understands')
+      eq(body.writer, 'person', 'naming the person who won')
+      ok(!!r.headers.get('x-bento-etag'), 'and the current etag to retry against')
+      // And the retry, against the fresh version, succeeds.
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const freshEtag = r.headers.get('x-bento-etag')
+      const freshSrc = await r.text()
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': freshEtag }), body: freshSrc,
+      })
+      eq(r.status, 200, 'the re-derived write then succeeds')
+      // The shell pin still refuses a shell the grant made up itself.
+      r = await publish('GET', `/api/publish/decks/${id}`, { headers: asGrant(aliceTok) })
+      const pinEtag2 = r.headers.get('x-bento-etag')
+      const pinSrc2 = await r.text()
+      r = await publish('PUT', `/api/publish/decks/${id}`, {
+        headers: asGrant(aliceTok, { 'if-match': pinEtag2 }), body: pinSrc2.replace('a-newer-shell', 'agent-made-this'),
+      })
+      eq(r.status, 400, 'while an invented shell is still refused')
+      eq(await r.text(), 'shell', 'with the reason `shell`')
+    }
+
+    console.log('\nan encrypted deck is served and stored as it is (U8)')
+    const encBytes = deck(encEnvelope())
+    r = await call('POST', '/api/decks', { as: 'bob', body: encBytes })
+    const encDeck = await r.json()
+    r = await publish('GET', `/api/publish/decks/${encDeck.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, 'a grant may read an encrypted deck')
+    const encEtag = r.headers.get('x-bento-etag')
+    eq(await r.text(), encBytes, 'and gets the stored bytes unchanged: its keys are inside the ciphertext')
+    r = await publish('PUT', `/api/publish/decks/${encDeck.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': encEtag }),
+      body: deck({ ...encEnvelope(), data: 'Y2lwaGVyMg==' }),
+    })
+    eq(r.status, 200, 'and may replace one with another envelope, with nothing parsed or restored')
+    // The format may not change under a grant: encrypting someone else's deck
+    // would be as destructive as deleting it, which a grant cannot do either.
+    r = await publish('GET', `/api/publish/decks/${bare.id}`, { headers: asGrant(aliceTok) })
+    const flipEtag = r.headers.get('x-bento-etag')
+    const flipSrc = await r.text()
+    r = await publish('PUT', `/api/publish/decks/${bare.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': flipEtag }), body: shellOfHtml(flipSrc).replace(/(id=["']?bento-doc["']?[^>]*>)/i, `$1${JSON.stringify(encEnvelope()).replace(/</g, '\\u003c')}`),
+    })
+    eq(r.status, 400, 'a grant cannot turn a readable deck into an encrypted one')
+
+    // ------------------------------------- the person's own grants, on the index (U4)
+    //
+    // R10: a grant expires by itself, but a person must be able to end one
+    // early, and must be able to see that one exists at all. The index is
+    // where that lives; there is no revoke flag on the tool (deferred).
+    console.log('\nagent access on the index: seen and revocable (U4, R10/R19)')
+    // A clean namespace for this section: earlier sections left grants of
+    // alice's lying around, and the counting below should be about these two.
+    for (const k of (await kv.list({ prefix: 'person:' })).keys) await kv.delete(k.name)
+    const showA = await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')
+    const showB = await mintGrant(grantEnv, 'alice@betamobility.io', 'Terminal agent')
+    const bobsGrant = await mintGrant(grantEnv, 'bob@betamobility.io', 'Bobs agent')
+
+    r = await call('GET', '/', { as: 'alice' })
+    const idx = await r.text()
+    ok(idx.includes('Agent access'), 'the index grows an Agent access section when she has grants')
+    ok(idx.includes('Claude (Cowork)') && idx.includes('Terminal agent'), 'both labels are listed')
+    ok((idx.match(/\/revoke"/g) || []).length === 2, 'with one Revoke form each')
+    ok(!idx.includes('Bobs agent'), "and not bob's grant")
+    r = await call('GET', '/', { as: 'bob' })
+    const bobIdx = await r.text()
+    ok(!bobIdx.includes('Claude (Cowork)'), "bob does not see alice's grants")
+    ok(bobIdx.includes('Bobs agent'), 'he sees his own')
+
+    const revoke = (hash, { as = 'alice', headers = {} } = {}) => call('POST', `/api/grants/${hash}/revoke`, {
+      as, headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded', ...headers },
+    })
+    // 404, where the plan's U4 scenario said 403: a hash nobody's page ever
+    // showed bob is indistinguishable from a hash that does not exist, and
+    // telling the two apart would confirm that someone else holds it. The
+    // requirement is that it is refused and the grant survives.
+    r = await revoke(showB.hash, { as: 'bob' })
+    eq(r.status, 404, "bob cannot revoke alice's grant, and is told nothing about it")
+    ok(await verifyGrant(asReq(bearer(showB.token)), grantEnv), 'and it still verifies afterwards')
+    r = await revoke(showB.hash, { headers: { 'sec-fetch-site': 'cross-site' } })
+    eq(r.status, 403, 'nor can a cross-site request carrying her own session (R19)')
+    ok(await verifyGrant(asReq(bearer(showB.token)), grantEnv), 'that grant survives too')
+    r = await call('POST', `/api/grants/${showB.hash}/revoke`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    eq(r.status, 401, 'and an anonymous revoke is 401')
+
+    r = await revoke(showB.hash)
+    eq(r.status, 303, 'alice revokes her own, and is sent back to the index')
+    eq(r.headers.get('location'), '/', 'which is where the list is')
+    ok(!(await verifyGrant(asReq(bearer(showB.token)), grantEnv)), 'the revoked grant no longer verifies')
+    r = await call('GET', '/api/publish/decks/0123456789', { headers: bearer(showB.token) })
+    eq(r.status, 401, 'and the publish path refuses its bearer')
+    ok(await verifyGrant(asReq(bearer(showA.token)), grantEnv), 'the other one is untouched')
+    r = await call('GET', '/', { as: 'alice' })
+    const idx2 = await r.text()
+    ok(idx2.includes('Claude (Cowork)') && !idx2.includes('Terminal agent'), 'and the list now shows one')
+
+    r = await revoke(showB.hash)
+    eq(r.status, 404, 'revoking a grant that is already gone is 404')
+    r = await revoke('not-a-hash')
+    eq(r.status, 404, 'and a hash-shaped nothing is 404, never a 500')
+
+    // The empty state says nothing at all, rather than an empty table.
+    for (const k of (await kv.list({ prefix: 'person:' })).keys) await kv.delete(k.name)
+    r = await call('GET', '/', { as: 'alice' })
+    ok(!(await r.text()).includes('Agent access'), 'with no grants there is no section')
+    ok(!!bobsGrant.hash, 'sanity: the fixture existed')
+
+    // ------------------------- the defensive branches, and the mint ordering
+    console.log('\nwhat happens when the parts underneath misbehave (U1/U2/U8)')
+
+    // The revocation index is written BEFORE the credential, so a failure
+    // between the two leaves something listable and inert rather than a live
+    // grant nobody can see or end. Asserted by watching the write order.
+    {
+      const order = []
+      const realPut = kv.put.bind(kv)
+      const probe = {
+        put: (key, value, opts) => { order.push(String(key).split(':')[0]); return realPut(key, value, opts) },
+        get: kv.get.bind(kv), list: kv.list.bind(kv), delete: kv.delete.bind(kv),
+      }
+      const g = await mintGrant({ GRANTS: probe }, 'alice@betamobility.io', 'ordering')
+      eq(order.join(' then '), 'person then grant', 'the revocation index is written before the credential')
+      ok(await verifyGrant(asReq(bearer(g.token)), grantEnv), 'and the grant still works')
+      await revokeGrant(grantEnv, 'alice@betamobility.io', g.hash)
+    }
+
+    // A stored deck whose block cannot be rewritten: a grant read must refuse
+    // rather than fall back to serving the bytes it was supposed to strip.
+    {
+      const broken = 'brokenblok'
+      const twoBlocks = `<!doctype html><html><body>`
+        + `<script type="application/json" id="bento-doc">{"format":"bento/slides","v":1,"slides":[]}</script>`
+        + `<script type="application/json" id="bento-doc">{"format":"bento/slides","v":1,"slides":[]}</script>`
+        + `</body></html>`
+      // Straight into R2, past `inspect`, which would have refused it.
+      const r2 = await mf.getR2Bucket('DECKS')
+      await r2.put(`decks/${broken}.bento.html`, twoBlocks, {
+        httpMetadata: { contentType: 'text/html; charset=utf-8' },
+        customMetadata: { title: 'broken', docId: '', kind: 'deck', owner: encodeURIComponent('bob@betamobility.io'), writer: encodeURIComponent('bob@betamobility.io'), created: new Date().toISOString(), updated: new Date().toISOString(), sg: '0' },
+      })
+      const rr = await call('GET', `/api/publish/decks/${broken}`, { headers: bearer(aliceTok) })
+      eq(rr.status, 502, 'a grant read of an unrewritable deck refuses')
+      ok(!(await rr.text()).includes('bento-doc'), 'and does not hand back the bytes it could not strip')
+      const person = await call('GET', `/d/${broken}`, { as: 'bob' })
+      eq(person.status, 200, "while a person's read of the same deck is unaffected")
+    }
+
+    // A grant write whose shell matches but whose block no longer parses.
+    {
+      const rr0 = await call('GET', `/api/publish/decks/${bare.id}`, { headers: bearer(aliceTok) })
+      const etag0 = rr0.headers.get('x-bento-etag')
+      const src0 = await rr0.text()
+      const corrupt = src0.replace(/(id=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, '$1{not json$2')
+      const rr = await call('PUT', `/api/publish/decks/${bare.id}`, {
+        headers: { ...bearer(aliceTok), 'if-match': etag0 }, body: corrupt,
+      })
+      eq(rr.status, 400, 'a grant write whose block does not parse is refused')
+      eq(await rr.text(), 'json', 'with the one-word reason `json`')
+    }
+
+    // NOT TESTED HERE, deliberately: a limiter binding that THROWS rather than
+    // one that is absent. Miniflare offers no way to make its ratelimits
+    // binding fail, and the alternatives were a stub that proves nothing or an
+    // assertion that cannot fail. The absent-binding case above covers the same
+    // two-line branch (503 with the flag on, pass-through with it off).
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

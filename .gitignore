@@ -98,3 +98,7 @@ home/android/*/build/
 # itself ships none, so anything here is a working copy, not a shared contract.
 .claude/agents
 .claude/commands/team
+
+# The splice tool's fallback location for a pairing grant, when no home
+# directory resolves. It holds a live bearer; never commit one.
+.bento-grant.json
