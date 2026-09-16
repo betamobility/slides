@@ -43,19 +43,13 @@ bucket_name = "beta-decks"
 #   env -u CLOUDFLARE_API_TOKEN npx wrangler kv namespace create GRANTS
 # and put the id it prints here.
 #
-# `id` is a PLACEHOLDER until the maintainer does that (U7 of the plan). That
-# deliberately fails a `wrangler deploy` rather than deploying a worker whose
-# grant store silently does not exist; `wrangler dev` and the rig use local KV
-# and do not read it. Do not invent an id to make the deploy go through.
+# Created 2026-09-16. A namespace id is not a secret (it names a resource this
+# account owns and grants no access to it), so it lives here with the AUDs and
+# the hostnames rather than in a secret store.
 [[kv_namespaces]]
 binding = "GRANTS"
-id = "REPLACE_WITH_GRANTS_NAMESPACE_ID"
+id = "46cef5d2d9b141d4a41768086d17afc9"
 
-# Access configuration, read by src/access.js. See README.md, "Access
-# applications, in this order" — the ordering is not cosmetic.
-# Both values are public to anyone holding a token, and the JWKS is public, so
-# they are vars and not secrets. The worker fails closed while either is empty
-# or still a placeholder.
 # The rate limit on the pairing routes (one-click publish plan, KTD9).
 # `POST /api/link/start` is the host's first PUBLIC non-GET endpoint, so it is
 # guarded by request count per client address as well as by a 1 KB body cap.
@@ -73,6 +67,11 @@ type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 }
 
+# Access configuration, read by src/access.js. See README.md, "Access
+# applications, in this order" — the ordering is not cosmetic. Both values are
+# public to anyone holding a token, and the JWKS is public, so they are vars
+# and not secrets. The worker fails closed while either is empty or still a
+# placeholder.
 [vars]
 ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
 # With this on, a missing LINK_LIMIT binding makes the public pairing routes

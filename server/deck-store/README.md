@@ -141,7 +141,7 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
    env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket create beta-decks
    ```
 
-2. **Create the `GRANTS` KV namespace** and put the id it prints into `wrangler.toml`. It ships with a placeholder, which fails a deploy on purpose rather than deploying a worker whose grant store does not exist:
+2. **The `GRANTS` KV namespace.** Done on 2026-09-16 — `46cef5d2d9b141d4a41768086d17afc9`, already in `wrangler.toml`. On a fresh account, create it and put the id there:
 
    ```sh
    cd server/deck-store
