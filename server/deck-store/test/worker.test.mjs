@@ -1598,6 +1598,68 @@ export async function run(Miniflare) {
     })
     eq(r.status, 400, 'a grant cannot turn a readable deck into an encrypted one')
 
+    // ------------------------------------- the person's own grants, on the index (U4)
+    //
+    // R10: a grant expires by itself, but a person must be able to end one
+    // early, and must be able to see that one exists at all. The index is
+    // where that lives; there is no revoke flag on the tool (deferred).
+    console.log('\nagent access on the index: seen and revocable (U4, R10/R19)')
+    // A clean namespace for this section: earlier sections left grants of
+    // alice's lying around, and the counting below should be about these two.
+    for (const k of (await kv.list({ prefix: 'person:' })).keys) await kv.delete(k.name)
+    const showA = await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')
+    const showB = await mintGrant(grantEnv, 'alice@betamobility.io', 'Terminal agent')
+    const bobsGrant = await mintGrant(grantEnv, 'bob@betamobility.io', 'Bobs agent')
+
+    r = await call('GET', '/', { as: 'alice' })
+    const idx = await r.text()
+    ok(idx.includes('Agent access'), 'the index grows an Agent access section when she has grants')
+    ok(idx.includes('Claude (Cowork)') && idx.includes('Terminal agent'), 'both labels are listed')
+    ok((idx.match(/\/revoke"/g) || []).length === 2, 'with one Revoke form each')
+    ok(!idx.includes('Bobs agent'), "and not bob's grant")
+    r = await call('GET', '/', { as: 'bob' })
+    const bobIdx = await r.text()
+    ok(!bobIdx.includes('Claude (Cowork)'), "bob does not see alice's grants")
+    ok(bobIdx.includes('Bobs agent'), 'he sees his own')
+
+    const revoke = (hash, { as = 'alice', headers = {} } = {}) => call('POST', `/api/grants/${hash}/revoke`, {
+      as, headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded', ...headers },
+    })
+    // 404, where the plan's U4 scenario said 403: a hash nobody's page ever
+    // showed bob is indistinguishable from a hash that does not exist, and
+    // telling the two apart would confirm that someone else holds it. The
+    // requirement is that it is refused and the grant survives.
+    r = await revoke(showB.hash, { as: 'bob' })
+    eq(r.status, 404, "bob cannot revoke alice's grant, and is told nothing about it")
+    ok(await verifyGrant(asReq(bearer(showB.token)), grantEnv), 'and it still verifies afterwards')
+    r = await revoke(showB.hash, { headers: { 'sec-fetch-site': 'cross-site' } })
+    eq(r.status, 403, 'nor can a cross-site request carrying her own session (R19)')
+    ok(await verifyGrant(asReq(bearer(showB.token)), grantEnv), 'that grant survives too')
+    r = await call('POST', `/api/grants/${showB.hash}/revoke`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    eq(r.status, 401, 'and an anonymous revoke is 401')
+
+    r = await revoke(showB.hash)
+    eq(r.status, 303, 'alice revokes her own, and is sent back to the index')
+    eq(r.headers.get('location'), '/', 'which is where the list is')
+    ok(!(await verifyGrant(asReq(bearer(showB.token)), grantEnv)), 'the revoked grant no longer verifies')
+    r = await call('GET', '/api/publish/decks/0123456789', { headers: bearer(showB.token) })
+    eq(r.status, 401, 'and the publish path refuses its bearer')
+    ok(await verifyGrant(asReq(bearer(showA.token)), grantEnv), 'the other one is untouched')
+    r = await call('GET', '/', { as: 'alice' })
+    const idx2 = await r.text()
+    ok(idx2.includes('Claude (Cowork)') && !idx2.includes('Terminal agent'), 'and the list now shows one')
+
+    r = await revoke(showB.hash)
+    eq(r.status, 404, 'revoking a grant that is already gone is 404')
+    r = await revoke('not-a-hash')
+    eq(r.status, 404, 'and a hash-shaped nothing is 404, never a 500')
+
+    // The empty state says nothing at all, rather than an empty table.
+    for (const k of (await kv.list({ prefix: 'person:' })).keys) await kv.delete(k.name)
+    r = await call('GET', '/', { as: 'alice' })
+    ok(!(await r.text()).includes('Agent access'), 'with no grants there is no section')
+    ok(!!bobsGrant.hash, 'sanity: the fixture existed')
+
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
     eq(r.status, 404, 'an unknown path with a valid assertion is 404')

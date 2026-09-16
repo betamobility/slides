@@ -61,6 +61,9 @@ main{max-width:64rem;margin:0 auto;padding:3rem 1.5rem 4rem}
 header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:2rem}
 .mark{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.02em;color:var(--color-on-surface-muted)}
 h1{font-family:var(--font-serif);font-weight:500;font-size:clamp(1.75rem,4vw,2.625rem);line-height:1.15;margin:.25rem 0 0}
+h2{font-family:var(--font-serif);font-weight:500;font-size:1.375rem;line-height:1.2;margin:3rem 0 .5rem}
+td form{margin:0}
+td button{padding:.3rem .9rem;font-size:.8125rem}
 .who{font-family:var(--font-mono);font-size:.75rem;color:var(--color-on-surface-muted)}
 p{margin:0 0 1rem;max-width:40rem}
 .muted{color:var(--color-on-surface-muted)}
@@ -133,7 +136,35 @@ function fmtTime(iso) {
  * — that is how you find your own — but they are not the first thing read.
  * `kind` is shown only when it is worth knowing, i.e. not an ordinary deck.
  */
-export function indexPage(decks, who, { create = false } = {}) {
+/**
+ * "Agent access": the live grants of the person reading the page (U4, R10).
+ *
+ * A grant ends by itself after eight hours, so this is not the safety net —
+ * it is how someone SEES that an agent can currently publish as them, which
+ * a background capability has to be. Absent entirely when there are none: an
+ * empty table would be a question nobody asked.
+ *
+ * Each row's Revoke is a form post, same-origin-checked at the worker, not a
+ * link: a GET that revokes would fire from any image tag anyone could plant.
+ */
+function grantsSection(grants) {
+  if (!grants.length) return ''
+  const rows = grants.map((g) => `<tr>
+<td>${g.label ? `&quot;${esc(g.label)}&quot;` : '<span class="muted">unnamed</span>'}</td>
+<td class="time">${esc(fmtTime(g.created))}</td>
+<td class="time">${esc(fmtTime(new Date(g.exp * 1000).toISOString()))}</td>
+<td><form method="post" action="/api/grants/${esc(g.hash)}/revoke"><button class="secondary" type="submit">Revoke</button></form></td>
+</tr>`).join('\n')
+  return `<h2>Agent access</h2>
+<p class="muted">Agents you approved can create decks and change any deck by its link, as you, until these times. They cannot list the store or delete anything.</p>
+<div class="wrap"><table>
+<thead><tr><th>Asked for by</th><th>Approved</th><th>Ends</th><th></th></tr></thead>
+<tbody>
+${rows}
+</tbody></table></div>`
+}
+
+export function indexPage(decks, who, { create = false, grants = [] } = {}) {
   const rows = decks.map((d) => `<tr>
 <td><a class="deck" href="${esc(d.url)}">${esc(d.title) || '<span class="muted">Untitled</span>'}</a>${
     d.kind && d.kind !== 'deck' ? ` <span class="kind">${esc(d.kind)}</span>` : ''}</td>
@@ -166,6 +197,7 @@ ${rows}
 ${newLink}
 </div>
 ${body}
+${grantsSection(grants)}
 <footer>
 <p>A deck opened from a link saves back here with ⌘S.</p>
 <p>To make decks with Claude Code, install the plugin:</p>

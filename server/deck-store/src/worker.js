@@ -49,7 +49,8 @@
 import { verifyAccess } from './access.js'
 import { rewriteBlock, shellOf, splitShell } from './block.js'
 import {
-  CODE_RE, HANDLE_RE, approvePairing, pollPairing, readPairing, startPairing, verifyGrant,
+  CODE_RE, HANDLE_RE, approvePairing, listGrants, pollPairing, readPairing, revokeGrant, startPairing,
+  verifyGrant,
 } from './grant.js'
 import { indexPage, linkDonePage, linkPage, mintDocIntoBlock, newPage } from './pages.js'
 
@@ -990,7 +991,23 @@ export default {
       return html(linkDonePage(who.id, pairing || {}), NO_FRAMING)
     }
 
-    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }), NO_FRAMING)
+    // R10: a person ends their own agent access here. A form post, never a
+    // GET — a revoking GET would fire from any image tag anyone could plant —
+    // and same-origin, because Access attaches the session either way (KTD13).
+    const gr = /^\/api\/grants\/([0-9a-f]{64})\/revoke$/.exec(path)
+    if (m === 'POST' && (gr || path.startsWith('/api/grants/'))) {
+      if (!sameOrigin(req, url)) return text(403, 'This has to be revoked from the store’s own page.')
+      // A hash that is not this person's revokes nothing and answers 404: the
+      // page never shows anyone else's, so there is nothing to distinguish.
+      if (!gr || !(await revokeGrant(env, who.id, gr[1]))) return empty(404)
+      return new Response(null, { status: 303, headers: { location: '/', 'cache-control': 'no-store' } })
+    }
+
+    if (path === '/' && m === 'GET') {
+      return html(indexPage(await listDecks(env, url.origin), who.id, {
+        create: canCreate, grants: await listGrants(env, who.id),
+      }), NO_FRAMING)
+    }
     if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: canCreate }))
     if (path === '/new/blank' && m === 'GET') {
       if (!canCreate) return empty(404)
