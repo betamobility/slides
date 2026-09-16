@@ -458,7 +458,7 @@ U1 (grant store) and U2 (pairing) are the foundation and can be built together. 
 - `docs/agents.md` (same, one paragraph)
 - `server/deck-store/README.md` (routes table with the fail-closed prefixes, bindings and flags, "Setup, in order" steps for the KV namespace, the two Bypass destinations and the cookie check, verification curls)
 - `docs/DECISIONS.md` (entry superseding KTD13)
-- `scripts/check-store-live.mjs` (a `--routes` pass: `POST /api/link/start` answers without a login; bare `/api/link` and a bad bearer on `/api/publish/decks` are `401`; `/link/x` is a login redirect; the frame headers are present on `/`)
+- `scripts/check-store-live.mjs` (a `--routes` pass: `POST /api/link/start` answers without a login; a bad bearer on `/api/publish/decks` is `401`; bare `/api/link` and `/link/x` are login redirects, because both sit outside the Bypass prefixes and Access answers before the worker; the frame headers are present on `/`)
 - `scripts/test-beta-skill.mjs` (assertions for the new text)
 
 **Approach:** The skill's recipe is four lines: run `--link`, relay the printed line to the user, wait, run `--create`. It states that an expired approval means running `--link` again, that the tool never asks for a token, and what the approval page will say so the agent can tell the user what to expect. The README's setup step names the destinations exactly as `wrangler.toml` and the worker spell them.
