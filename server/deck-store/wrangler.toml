@@ -62,6 +62,11 @@ id = "REPLACE_WITH_GRANTS_NAMESPACE_ID"
 # Ten per minute is far above one person pairing and far below anything worth
 # calling traffic. The namespace id is local to this worker, not an account
 # resource, so there is nothing to create in the dashboard for it.
+#
+# `[[unsafe.bindings]]` is how Cloudflare documents this binding, so
+# `wrangler deploy` warns that unsafe fields are experimental. That warning is
+# EXPECTED — verified with `wrangler deploy --dry-run` (4.132.0), which
+# resolves it as env.LINK_LIMIT. There is no stable form to move to yet.
 [[unsafe.bindings]]
 name = "LINK_LIMIT"
 type = "ratelimit"

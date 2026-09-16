@@ -22,6 +22,8 @@
 // that fails closed. There is no secret and no signing key anywhere here: the
 // hash is the whole mechanism, so `wrangler.toml` stays `[vars]` only.
 
+import { ID_RE, TOKEN_RE, mintId, mintToken } from './ids.js'
+
 // Eight hours, the lifetime Johan set on 2026-09-16 and the number the
 // approval page tells the person out loud. One place, so the page and the
 // grant cannot disagree.
@@ -32,46 +34,18 @@ export const LABEL_MAX = 80
 // prints while it waits. A code nobody clicks costs nothing when it lapses.
 export const PAIRING_TTL_S = 10 * 60
 
-const TOKEN_BYTES = 32
-const CODE_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-export const CODE_RE = /^[0-9A-Za-z]{10}$/
-export const HANDLE_RE = /^[A-Za-z0-9_-]{43}$/
-// 32 bytes base64url, unpadded: exactly 43 characters. Shape-checked before
+// A pairing code is a deck-id shape (ten base62 characters, short enough to
+// read off a URL); a handle, a nonce and a grant token are opaque 32-byte
+// ones. Both minters and both shape tests come from ids.js, so the worker has
+// one rejection-sampling loop rather than two. Shapes are checked before
 // anything is hashed or read, so garbage never costs a KV lookup.
-const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/
+const CODE_RE = ID_RE
+const HANDLE_RE = TOKEN_RE
 const HASH_RE = /^[0-9a-f]{64}$/
 
 const grantKey = (hash) => `grant:${hash}`
 const personKey = (email, hash) => `person:${email}:${hash}`
 const personPrefix = (email) => `person:${email}:`
-
-const b64u = (bytes) => {
-  let s = ''
-  for (const b of bytes) s += String.fromCharCode(b)
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/** A fresh opaque token: 32 random bytes as 43 base64url characters. */
-function mintToken() {
-  const buf = new Uint8Array(TOKEN_BYTES)
-  crypto.getRandomValues(buf)
-  return b64u(buf)
-}
-
-/** A ten-character base62 code, the one value a person reads off a URL. */
-function mintCode() {
-  let out = ''
-  const buf = new Uint8Array(32)
-  while (out.length < 10) {
-    crypto.getRandomValues(buf)
-    for (const b of buf) {
-      if (b >= 248) continue // 248 = 62 * 4; drop the biased tail
-      out += CODE_CHARS[b % 62]
-      if (out.length === 10) break
-    }
-  }
-  return out
-}
 
 /** sha256 of a token, lowercase hex — the only form the store keeps. */
 export async function hashToken(token) {
@@ -201,7 +175,7 @@ async function readJson(env, key) {
  */
 export async function startPairing(env, label, { now = Date.now() } = {}) {
   if (!env?.GRANTS) throw new Error('grant: the GRANTS namespace is not bound')
-  const code = mintCode()
+  const code = mintId()
   const handle = mintToken()
   const nonce = mintToken()
   const exp = Math.floor(now / 1000) + PAIRING_TTL_S

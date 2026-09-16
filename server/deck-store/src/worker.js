@@ -49,15 +49,13 @@
 import { verifyAccess } from './access.js'
 import { rewriteBlock, shellOf, splitShell } from './block.js'
 import {
-  CODE_RE, HANDLE_RE, approvePairing, listGrants, pollPairing, readPairing, revokeGrant, startPairing,
-  verifyGrant,
+  LABEL_MAX, approvePairing, listGrants, pollPairing, readPairing, revokeGrant, startPairing, verifyGrant,
 } from './grant.js'
+import { ID_PAT, TOKEN_PAT, mintId } from './ids.js'
 import { indexPage, linkDonePage, linkPage, mintDocIntoBlock, newPage } from './pages.js'
 
 const MAX_BYTES = 32 * 1024 * 1024
 const KEY = (id) => `decks/${id}.bento.html`
-const ID_RE = /^[0-9A-Za-z]{10}$/
-const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 // Encoded bytes per metadata value. Title, owner, writer and docId share the
 // 2048-byte object budget with the timestamps and kind; 512 each leaves room.
 const META_MAX = 512
@@ -190,21 +188,6 @@ async function passThrough(req, env, url) {
 
 const PLAUSIBLE_URL = 'https://plausible.io/api/event'
 const PLAUSIBLE_DOMAIN = 'betamobility.ai'
-
-/** 10 base62 chars from getRandomValues, rejection-sampled so no char is favoured. */
-function mintId() {
-  let out = ''
-  const buf = new Uint8Array(32)
-  while (out.length < 10) {
-    crypto.getRandomValues(buf)
-    for (const b of buf) {
-      if (b >= 248) continue // 248 = 62 * 4; drop the biased tail
-      out += BASE62[b % 62]
-      if (out.length === 10) break
-    }
-  }
-  return out
-}
 
 // A wrangler [vars] flag. Vars are strings, so say what counts as on.
 const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
@@ -759,7 +742,6 @@ const isAgentPath = (path) => AGENT_PREFIXES.some((p) => path.startsWith(p))
 // only public non-GET endpoint on the host, and the 32 MB deck cap has no
 // business being its limit.
 const LINK_BODY_MAX = 1024
-const LABEL_MAX = 80
 
 /**
  * The rate limit on the public pairing routes (KTD9).
@@ -868,7 +850,7 @@ async function agentRoutes(req, env, ctx, url, path, m) {
   if (path === '/api/link/start' && m === 'POST') {
     return (await rateLimited(req, env)) || linkStart(req, env, url)
   }
-  const lp = /^\/api\/link\/([A-Za-z0-9_-]{43})$/.exec(path)
+  const lp = new RegExp(`^/api/link/(${TOKEN_PAT})$`).exec(path)
   if (lp && m === 'GET') {
     return (await rateLimited(req, env)) || linkPoll(env, lp[1])
   }
@@ -882,10 +864,10 @@ async function agentRoutes(req, env, ctx, url, path, m) {
   // One-to-one with the harness routes (KTD5): same handlers, same
   // conditional-write contract, the option flags U8 fills in.
   if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who)
-  const pd = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+  const pd = new RegExp(`^/api/publish/decks/(${ID_PAT})$`).exec(path)
   if (pd && m === 'GET') return harnessRead(env, pd[1], { stripCollab: true })
   if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true })
-  const pa = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
+  const pa = new RegExp(`^/api/publish/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
   if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
 
   // NOT routed here, deliberately (R9): no list, so a leaked grant cannot
@@ -973,13 +955,13 @@ export default {
     // The approval flow (U2). These sit HERE, behind the person gate, and not
     // with the agent prefixes: the whole point is that Access has already
     // established who is approving. A service token is refused above.
-    const lm = /^\/link\/([0-9A-Za-z]{10})$/.exec(path)
+    const lm = new RegExp(`^/link/(${ID_PAT})$`).exec(path)
     if (lm && m === 'GET') {
       const pairing = await readPairing(env, lm[1])
       if (!pairing) return text(410, 'This approval link has expired or has already been used.')
       return html(linkPage(who.id, lm[1], pairing), NO_FRAMING)
     }
-    const la = /^\/link\/([0-9A-Za-z]{10})\/approve$/.exec(path)
+    const la = new RegExp(`^/link/(${ID_PAT})/approve$`).exec(path)
     if (la && m === 'POST') {
       if (!sameOrigin(req, url)) return text(403, 'This has to be approved from the store’s own page.')
       const nonce = await formNonce(req)
