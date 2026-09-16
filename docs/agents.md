@@ -790,11 +790,20 @@ same bytes; the same name with different bytes is refused before any request.
 - A deck that is in a live session while the tool writes is unsupported:
   collaborators are not told the store copy changed.
 
-Cowork cannot run the tool: its sandbox has no way to receive the two
-variables (a cloud session holds only session-scoped credentials, and
-connector tokens never enter the shell), and the token must not be pasted into
-a conversation, because a deck read with it carries that deck's live-session
-keys. Authoring needs no credentials at all, though: `/agents.md`,
-`/templates/` and `/releases/` are public. Build the deck, hand the
-`.bento.html` to the user, and tell them to open it and pick **Share → Save to
-Beta**, which stores it under their own identity and returns the deck's link.
+Cowork cannot hold the two variables — a cloud session has only
+session-scoped credentials, and connector tokens never enter the shell — and
+the token must never be pasted into a conversation, because it runs for a year
+and a deck read with it carries that deck's live-session keys. Pair instead:
+`node splice.mjs --link` prints one URL, the user opens it in a browser they
+are already signed into and clicks **Approve** once, and the tool collects a
+grant that acts as them for 8 hours. Every later command in that session
+publishes as them, against `/api/publish/` rather than `/api/harness/`, with no
+second approval. A grant can create decks and change any deck by its link; it
+cannot list the store, delete a deck, or read a deck's live-session keys, and
+the user can end it from the deck list under **Agent access**. When it lapses
+the tool says so and names `--link`; it never asks for a token. Where the
+sandbox cannot run `node` or reach the store at all, authoring still needs no
+credentials (`/agents.md`, `/templates/` and `/releases/` are public): build
+the deck, hand the `.bento.html` over, and tell the user to open it and pick
+**Share → Save to Beta**, which stores it under their own identity and returns
+the deck's link.

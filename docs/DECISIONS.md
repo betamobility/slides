@@ -6605,3 +6605,62 @@ deploy, with no shell release attached.
 Operational note unchanged from 2026-07-25: the relay is deployed before any
 client that depends on the blob endpoints. Here the client shipped first and
 degraded, which is the safe order of the two.
+
+## 2026-09-16 — BETA FORK: an agent publishes by pairing, not by holding a token
+
+Supersedes the runtime-slides plan's KTD13, which recorded that Cowork would
+get its own Access service token and that "the worker needs no change". It
+cannot: a cloud sandbox holds only session-scoped credentials, and connector
+tokens are handled server-side and never reach the shell. So half of all decks
+ended at a file the person had to open and publish themselves.
+
+**An agent borrows the person's session; it never holds a credential of its
+own.** `POST /api/link/start` (Access Bypass, rate-limited, 1 KB) starts a
+pairing and hands back two values: a `code` for the URL a person opens and a
+`handle` only the agent has. The person clicks Approve at `/link/<code>`,
+behind the existing human application — which is how the store learns who
+approved without implementing a login of its own — and the agent's poll turns
+that consent into an eight-hour grant that acts as them on `/api/publish/`.
+Nobody handles a secret at any point, and no administrator is in the loop.
+
+Decisions taken while building it, beyond what the plan settled:
+
+1. **A dropped delivery cannot re-collect its grant.** The plan's KTD2 wanted
+   the second poll to repeat the token so a lost answer could be recovered;
+   R21 — the raw grant is never stored, only its sha256 — is the Product
+   Contract and wins. The second poll answers `200 {state:'collected'}` with no
+   grant, which is enough for the agent to say the approval went through and
+   its answer was lost, rather than reading a bare `410` and blaming the
+   person. A third is `410`.
+
+2. **A grant may not change a deck's format.** `bento/slides` to `bento/enc`,
+   or back, is `400 format`. Encrypting a partner's deck under a password only
+   the agent knows is as destructive as deleting it, and a grant cannot delete.
+
+3. **Revoking a grant that is not yours is `404`, not `403`.** A hash no page
+   ever showed you is indistinguishable from one that never existed; `403`
+   would confirm that another partner holds it.
+
+4. **A grant read drops the whole `collab` block**, not its three private
+   fields. Room plus symmetric key is precisely what `saveReaderCopy` writes
+   into a read-only copy: a reader capability that would outlive the eight
+   hours. The restore on write is what stops a read-modify-write from
+   destroying the live session instead, and the bytes outside the `#bento-doc`
+   block are pinned to the stored ones, because a swapped shell would run
+   first-party on the store origin for every partner who opens the deck.
+
+5. **The two Bypass prefixes are the worker's to guard.** Access answers
+   nothing there, so the worker does what Access does elsewhere: assertions
+   ignored, anything not exactly routed `401` with no body, the bearer verified
+   before any storage read. The trailing slash is part of each prefix in both
+   places; `check-store-live.mjs --routes` asserts that a bare `/api/link` is
+   still gated while `/api/link/start` is not, which is the one failure mode a
+   dashboard edit can introduce silently.
+
+Measured along the way: Miniflare implements the `ratelimits` binding (so the
+rig proves the `429`, not only the body caps), and workerd answers
+`transfer-encoding: chunked` locally and drops `content-length` from every
+response — a header a grant's re-serialised read does depend on, and one only a
+real HTTP client can observe.
+
+Plan of record: `docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md`.

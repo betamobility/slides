@@ -2,7 +2,7 @@
 
 A Cloudflare Worker at `https://slides.betamobility.ai` that keeps `bento/slides` files in R2 and serves them unchanged behind Cloudflare Access. A deck saved here has a link; a colleague opens the link behind the same login, edits, and saves back in place. The worker never rewrites, indexes or decrypts a deck: on write it checks only that the file carries one `#bento-doc` block holding a `bento/slides` document or a `bento/enc` envelope, and on read it streams the stored bytes.
 
-The same worker also answers the **public release channel** on that host, by passing those paths through to the Pages project unread. So one hostname carries two surfaces with opposite postures — everything below is written to keep them apart.
+The same worker also answers the **public release channel** on that host, by passing those paths through to the Pages project unread, and the **agent prefixes** `/api/link/` and `/api/publish/`, which Access bypasses and the worker guards itself. So one hostname carries three surfaces with different postures — everything below is written to keep them apart.
 
 `decks.betamobility.ai` is the store's former address. It answers `301` for a grace period and is then deleted.
 
@@ -60,6 +60,41 @@ Scene assets are the heavy files a runtime slide's scene needs. The shell on thi
 
 Analytics: the worker posts `deck_open`, `deck_save` and `deck_new` to Plausible's events API for the `betamobility.ai` site with `surface: deck-store` and an `outcome`, and nothing else. No id, title, email, path or content leaves the worker. A Plausible failure never fails the response. Public pass-through fetches are **not** tracked: they are anonymous machine requests from shipped files, and they would add volume without insight.
 
+### The agent prefixes — Access bypasses them, the worker guards them
+
+`/api/link/` and `/api/publish/` are Access **Bypass** destinations, like the release channel: a request arrives with no assertion at all. They exist because an agent in a cloud sandbox (Cowork) can hold no credential — pairing is how it gets one, and it cannot present a cookie to ask for it. Plan: `docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md`.
+
+| Route | Who | Answer |
+|---|---|---|
+| `POST /api/link/start` | anyone, no credential | `{code, handle, url, expires}`. `application/json`, at most 1 KB, optional `label` of at most 80 characters (`400` otherwise); rate-limited per client address (`429`), and `503` when the limiter binding is missing and `LINK_LIMIT_REQUIRED` is on |
+| `GET /api/link/<handle>` | the agent that started it | `202` while nobody has approved; `200 {grant, owner, expires}` once, on the first poll after approval; `200 {state:'collected'}` on the next poll (the raw grant is never stored, so it cannot be repeated); `410` when unknown, expired or collected |
+| `POST /api/publish/decks` | grant | as `POST /api/harness/decks`, with `owner` = the approving person and `writer` = `grant:<email>` |
+| `GET /api/publish/decks/:id` | grant | the deck **with its whole `collab` block removed**, re-serialised, `content-length` computed from the served bytes, and the stored object's `ETag` |
+| `PUT /api/publish/decks/:id` | grant | the replace handler with `If-Match` **required**, the stored `collab` block restored over whatever the body carried, and the bytes outside the `#bento-doc` block pinned to the stored ones (`400 shell`). The block's format may not change either (`400 format`) |
+| `PUT /api/publish/decks/:id/assets/:name` | grant | as the harness asset route |
+
+There is **no list route and no delete route** under `/api/publish/`: a leaked grant can neither enumerate the store nor destroy a deck.
+
+The two prefixes are **fail-closed in every direction**. An Access assertion is ignored there, so a person's cookie with no bearer is `401` — otherwise a page on this origin could publish as its reader. Anything that is not an exactly routed method and path is `401` **with no body**, never `404`. The bearer is verified before any R2 read, so a refusal costs the same and says the same for a real deck id as for a made-up one. Neither prefix joins `PUBLIC_PREFIXES`, which is pass-through to Pages.
+
+The trailing slash is part of each prefix, in the worker and in the Access destination. A bare `/api/link` matches neither and falls through to the gated routes, which is why the pairing routes live *under* `/api/link/` rather than at it. `check-store-live.mjs --routes` asserts both halves of that.
+
+### The person's side of a pairing, and their grants
+
+| Route | Who | Answer |
+|---|---|---|
+| `GET /link/<code>` | person | the approval page: what a grant reaches, for how long, when the pairing started, and the agent's label as quoted escaped text. `410` when the code is unknown, expired or used |
+| `POST /link/<code>/approve` | person | records consent and answers the done page. Requires `Sec-Fetch-Site: same-origin` (or an `Origin` equal to this one) **and** the page's nonce, else `403`; `410` when the code is gone |
+| `POST /api/grants/<hash>/revoke` | person, own grants | `303` to `/`. Same-origin required (`403`); a hash that is not theirs is `404`, which is also what a hash that never existed answers |
+
+These sit behind the human application, not the Bypass prefixes: the whole point is that Access has already established who is approving. A service token gets `403`.
+
+Approve and revoke are **same-origin form posts, never GETs**. Access attaches the session assertion to a cross-site auto-submitting form as readily as to our own page, so the header check is what makes the click a consent rather than a forgery; and `/link/*` and `/` carry `content-security-policy: frame-ancestors 'none'` with `x-frame-options: DENY`, because both pages act on a click.
+
+A grant is 32 random bytes. **The store keeps only `sha256` of it**, under `grant:<hash>` and `person:<email>:<hash>` in the `GRANTS` KV namespace, with an eight-hour `expirationTtl` and the same expiry checked against the value's own clock on every verify (KV is eventually consistent; the clock in the value is what fails closed). So a namespace dump between an approval and its delivery holds nothing usable, and the raw token exists in the open exactly once — in the answer to the poll that minted it. There is no signing key and no secret anywhere in the flow.
+
+A grant read drops the **whole** `collab` block, not its private keys only: room plus symmetric key is what a read-only copy carries, a reader capability that would outlive the eight hours. The restore on write is what keeps a read-modify-write from destroying the live session instead. An encrypted deck (`bento/enc`) is served and stored unchanged — its keys are inside the ciphertext.
+
 ### The retired host
 
 With `REDIRECT_OLD_HOST` on, every request to `decks.betamobility.ai` answers `301` to the same path and query on `slides.betamobility.ai` — **except `GET /new` and `POST /api/decks`**, which keep working there.
@@ -78,9 +113,12 @@ The branch runs **before** the worker's own Access check, so a signed-out person
 | `STORE_HOST` | `slides.betamobility.ai`. The canonical origin a created deck's link points at, whichever hostname was called |
 | `OLD_HOST` | `decks.betamobility.ai`, the host that redirects |
 | `REDIRECT_OLD_HOST` | `on` from cutover step 4. Off until the new host actually answers as the store |
+| `LINK_LIMIT_REQUIRED` | `on` in production: a missing `LINK_LIMIT` binding makes the public pairing routes answer `503` rather than run unguarded. `off` for `wrangler dev` and the rigs, which have no limiter |
 | `NEW_ENABLED` | `on` from cutover step 9, after release v2026.9.3. It gates the blank-deck create only — the index's button, `/new`'s no-opener redirect and `/new/blank` itself, which `404`s when off. `/new` keeps answering a shipped deck's handoff throughout |
 
-None of these are secrets: an AUD tag is public to anyone holding a token, and the JWKS is public. The worker fails closed while the Access vars are empty or still placeholders.
+Bindings, beside the vars: `DECKS` (the R2 bucket), `GRANTS` (the KV namespace holding pairings and grant hashes) and `LINK_LIMIT` (the rate limiter, declared as `[[unsafe.bindings]]`, which is how Cloudflare documents it — `wrangler deploy` warns that unsafe fields are experimental, and that warning is expected).
+
+None of these are secrets: an AUD tag is public to anyone holding a token, the JWKS is public, and a grant's store-side form is a hash. The worker fails closed while the Access vars are empty or still placeholders.
 
 ## Setup, in order
 
@@ -93,9 +131,16 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
    env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket create beta-decks
    ```
 
-2. **SSL/TLS mode Full (Strict)** on the `betamobility.ai` zone before the hostname is proxied. Proxying puts the zone's SSL mode in the request path, and Flexible in front of an HTTPS origin loops with `ERR_TOO_MANY_REDIRECTS` that only authenticated users see (`Docs/auth-setup.md`).
+2. **Create the `GRANTS` KV namespace** and put the id it prints into `wrangler.toml`. It ships with a placeholder, which fails a deploy on purpose rather than deploying a worker whose grant store does not exist:
 
-3. **Free the hostname, then deploy.** A Worker Custom Domain cannot be created on a hostname that already has a CNAME, and the Pages custom domain is one — so detach `slides.betamobility.ai` from the Pages project first, then deploy. **Do not delete the Pages project:** it still serves the release channel through `PAGES_ORIGIN`, and re-attaching its custom domain is the rollback.
+   ```sh
+   cd server/deck-store
+   env -u CLOUDFLARE_API_TOKEN npx wrangler kv namespace create GRANTS
+   ```
+
+3. **SSL/TLS mode Full (Strict)** on the `betamobility.ai` zone before the hostname is proxied. Proxying puts the zone's SSL mode in the request path, and Flexible in front of an HTTPS origin loops with `ERR_TOO_MANY_REDIRECTS` that only authenticated users see (`Docs/auth-setup.md`).
+
+4. **Free the hostname, then deploy.** A Worker Custom Domain cannot be created on a hostname that already has a CNAME, and the Pages custom domain is one — so detach `slides.betamobility.ai` from the Pages project first, then deploy. **Do not delete the Pages project:** it still serves the release channel through `PAGES_ORIGIN`, and re-attaching its custom domain is the rollback.
 
    ```sh
    env -u CLOUDFLARE_API_TOKEN npx wrangler deploy
@@ -105,9 +150,11 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
 
    The hostname has no origin between detaching it from Pages and the worker's certificate being issued. Poll the worker's domain status rather than probing the hostname — a probe can poison the local resolver for the negative TTL. What breaks in that window: shipped decks' update checks (they retry on next launch, and a failed check is silent by design), `/plugin marketplace add`, and the skill's downloads. Nothing is corrupted and nothing needs repair afterwards.
 
-4. **Access applications, in this order** (Zero Trust, Access, Applications, Self-hosted). Order matters: create the Bypass applications *first*, or the machine paths are gated for however long the gap lasts, and every shipped deck's update check gets a login page instead of a manifest — silently, with no user seeing an error.
+5. **Access applications, in this order** (Zero Trust, Access, Applications, Self-hosted). Order matters: create the Bypass applications *first*, or the machine paths are gated for however long the gap lasts, and every shipped deck's update check gets a login page instead of a manifest — silently, with no user seeing an error.
 
-   1. **One Bypass application carrying every public destination** on `slides.betamobility.ai`: `/releases/`, `/templates/`, `/skills/`, `/logo/`, `/agents.md`, `/slides/agents.md`, `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE`. One Bypass policy (`Everyone`) covers them all. Its AUD stays **out** of `ACCESS_AUDS`.
+   1. **One Bypass application carrying every public destination** on `slides.betamobility.ai`: `/releases/`, `/templates/`, `/skills/`, `/logo/`, `/agents.md`, `/slides/agents.md`, `/robots.txt`, `/sitemap.xml`, `/404.html`, `/LICENSE`, **`/api/link/` and `/api/publish/`**. One Bypass policy (`Everyone`) covers them all. Its AUD stays **out** of `ACCESS_AUDS`.
+
+      The two agent prefixes are the one place where a bypassed path is not a read of already-public bytes: the worker verifies a bearer there itself and refuses everything else with a flat `401`. Enter them **with the trailing slash**, exactly as written — `/api/link` without it would bypass the gated routes underneath and leave `/api/link/start` gated, which is the failure `--routes` exists to catch. Confirm afterwards that a bare prefix matches what is beneath it: `POST /api/link/start` must answer without a login.
 
       A self-hosted application takes up to **fifty destinations**, and Access matches on the most specific *destination* across applications — so ten destinations in one application behave exactly like ten single-destination applications, and are a tenth of the work. (An earlier draft of the plan said one application per prefix; this is the same thing, said shorter.)
 
@@ -121,11 +168,13 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
 
    4. **On the old host**, delete the domain-wide application — otherwise Access answers before the worker and the `301` never fires for the signed-out person it exists for. Replace it with two path-scoped Allow applications on `decks.betamobility.ai`, one for `/new` and one for `/api/decks`, so the two exempted handoff paths still arrive carrying an assertion. Keep the old host's AUD in `ACCESS_AUDS` until the host is deleted.
 
+   5. **Check the human application's session cookie attributes** (Zero Trust, Access, the application's settings): a `SameSite=None` session cookie travels on a cross-site form post, which is exactly the shape a forged approval takes. The worker's same-origin check is required regardless and does not depend on the answer — this is about knowing which layer is carrying the weight.
+
    App edits through the API need `PUT` with the whole object, not `PATCH` (`10405`).
 
-5. **Fill `ACCESS_AUDS`** with the human and service-token AUDs (and the old host's, for now), leave the Bypass AUDs out, and redeploy with `REDIRECT_OLD_HOST = "on"`.
+6. **Fill `ACCESS_AUDS`** with the human and service-token AUDs (and the old host's, for now), leave the Bypass AUDs out, and redeploy with `REDIRECT_OLD_HOST = "on"`.
 
-6. **Verify as an authenticated user, as a token, and as nobody.**
+7. **Verify as an authenticated user, as a token, as an agent, and as nobody.**
 
    ```sh
    # every published path still reachable with no login — the inverted sweep
@@ -147,7 +196,26 @@ Everything here is the maintainer's: it needs the Cloudflare dashboard or an Acc
 
    curl -si https://decks.betamobility.ai/d/<id>           # 301 to the new host
    curl -si https://decks.betamobility.ai/new              # 200-or-login, never a 301
+
+   # the agent prefixes, both halves of the asymmetry, in one command
+   node scripts/check-store-live.mjs --routes
+
+   # the same by hand: a pairing starts with no credential at all …
+   curl -si -X POST -H 'content-type: application/json' -d '{"label":"setup check"}' \
+        https://slides.betamobility.ai/api/link/start      # 200 {code,handle,url,expires}
+   # … while the page a person clicks is still behind Access …
+   curl -si https://slides.betamobility.ai/link/<that code>  # login redirect, never the page
+   # … the bare prefix is still gated …
+   curl -si https://slides.betamobility.ai/api/link        # login redirect
+   # … a dead bearer is a flat 401 with no body …
+   curl -si -H "authorization: Bearer $(printf 'x%.0s' {1..43})" \
+        https://slides.betamobility.ai/api/publish/decks/0123456789
+   # … and a cross-site approve is refused even with a real session
+   curl -si -X POST -H 'origin: https://evil.example' -H 'sec-fetch-site: cross-site' \
+        -d 'nonce=whatever' https://slides.betamobility.ai/link/<code>/approve   # 403
    ```
+
+   Then pair once from a terminal: `node plugins/beta-slides/scripts/splice.mjs --link` (with `CF_ACCESS_*` unset), click Approve in the browser, and check that `--create` publishes and that the grant shows up on the index under **Agent access** with a working Revoke.
 
    Then open `https://slides.betamobility.ai/` in a browser signed in with a Beta account: the index lists the decks, New deck lands you in the editor on `/d/<id>`, a title and ⌘S survive a reload. Re-run the byte-fidelity check **after** the release too — the shell it tested is the one the release replaces.
 
@@ -172,4 +240,6 @@ node ../scripts/check-store-live.mjs --selftest
 
 `scripts/test-beta-store.ts` runs `test/worker.test.mjs` under Miniflare (a devDependency of `slides/`, the `@gfx/zopfli` precedent): a local R2 bucket, RSA keys minted at run time, a stub JWKS the worker's outbound fetch is routed to, a stub Pages origin that records every subrequest, and a stub Plausible endpoint that records events. It pins the route contract, the Access refusals (missing, expired, wrong audience, wrong issuer, wrong email domain, unknown key id after one refresh, bad signature, service token off its routes), the public pass-through (anonymous, byte-identical, from `PAGES_ORIGIN`, carrying none of our credentials), the write validation, the harness read and the `If-Match` preconditions (`412`, `428`, `ETag` on every read and write, `HEAD /d/:id`, the service generation), the asset route (types, names, size, the SVG strip, the sandbox headers, revalidation with `304`, the delete cascade), byte-identical serving with the KTD9 headers, both `/new` branches, the old-host redirect and its two exemptions, and the analytics payload.
 
-`scripts/check-store-live.mjs` needs the network and the live host, so it is **not** a `test-*` rig and does not run in CI — only its own three cases do (`--selftest`). Run the live sweep after any Access change: Bypassed requests are not logged, so drift there is otherwise silent.
+The rig also pins the pairing flow (start, the approval page's copy and refusals, approve, poll, single use, expiry, the body caps and the `429`), the grant store (mint, verify, list, revoke, expiry, and that no stored value is ever a usable token), what a grant reaches and does not, the `collab` strip and restore, the shell pin, and the index's Agent access section.
+
+`scripts/check-store-live.mjs` needs the network and the live host, so it is **not** a `test-*` rig and does not run in CI — only its own cases do (`--selftest`). Run the live sweep after any Access change: Bypassed requests are not logged, so drift there is otherwise silent. `--routes` is the second half of that and the only thing that notices if an agent prefix's Bypass destination is dropped or entered without its trailing slash.

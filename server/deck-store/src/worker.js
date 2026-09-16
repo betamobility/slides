@@ -32,6 +32,20 @@
 //   PUT    /api/harness/decks/:id  replace; If-Match REQUIRED (428), stale → 412
 //   PUT    /api/harness/decks/:id/assets/:name
 //                                  upload a scene asset, service token only
+//   GET    /link/:code             the approval page for a pairing
+//   POST   /link/:code/approve     record the consent; same-origin + nonce
+//   POST   /api/grants/:hash/revoke
+//                                  end one of your own grants; same-origin
+//
+// Public, no assertion, verified by THIS WORKER rather than by Access (the
+// agent prefixes; see "the agent prefixes" below):
+//   POST   /api/link/start         begin a pairing → {code, handle, url, expires}
+//   GET    /api/link/:handle       the agent's poll → 202 | 200 + grant | 410
+//   POST   /api/publish/decks      create, as the person who approved
+//   GET    /api/publish/decks/:id  read by id, with `collab` removed
+//   PUT    /api/publish/decks/:id  replace; If-Match REQUIRED, `collab`
+//                                  restored, the shell pinned
+//   PUT    /api/publish/decks/:id/assets/:name    upload a scene asset
 //
 // A person (any @betamobility.io identity) may read, list, create and replace
 // anything; only DELETE is the owner's. A service token (Claude from a file
@@ -41,6 +55,13 @@
 // over the whole file, including the deck's live-session owner keys.
 // Plan: docs/plans/2026-09-14-001-feat-runtime-slides-plan.md U1, U2 (KTD5,
 // KTD6).
+//
+// A GRANT is the third identity (one-click publish plan): a bearer a person
+// approved in the browser, good for eight hours, that acts as them on the
+// publish prefix. It reaches create, read, replace and asset upload on any
+// deck by id — never list, never delete — and what it reads carries no
+// `collab` block at all, so it holds no live-session keys. Ownership follows
+// the person, so a deck an agent made is theirs to delete.
 //
 // The worker never reads into a document beyond the shape check on write:
 // one #bento-doc block whose JSON parses and is a bento/slides document or a

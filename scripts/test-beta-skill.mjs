@@ -159,6 +159,36 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(/elements\s+other\s+than\s+its\s+still/.test(text), `${name} documents the extra-elements refusal`)
   ok(/same\s+(asset\s+)?name[^.]*different\s+bytes/.test(text), `${name} documents the cross-scene asset name rule`)
 }
+console.log('\npublishing from a sandbox that holds no token (one-click publish plan, U6)')
+// The whole point of the pairing flow is that nobody handles a secret. These
+// assertions exist because the previous text told Cowork to hand the file back
+// as its PRIMARY path, and an agent reading that would not discover --link.
+const splicePairs = /--link/.test(read('plugins/beta-slides/scripts/splice.mjs'))
+for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+  ok(splicePairs && /splice\.mjs --link/.test(text), `${name} gives the pairing command`)
+  ok(/8 hours/.test(text), `${name} says how long one approval lasts`)
+  ok(/Approve/.test(text), `${name} says the person clicks Approve`)
+  ok(/Agent access/.test(text), `${name} says where the person can end it`)
+  ok(/never (ask|be pasted)|must never be pasted|Never ask/i.test(text), `${name} forbids asking for a pasted token`)
+}
+// The fallback is still documented, and is no longer the first answer: the
+// pairing command must come BEFORE Save to Beta in the Cowork section.
+{
+  const section = skill.slice(skill.indexOf('### Publishing without a service token'))
+  const linkAt = section.indexOf('--link')
+  const saveAt = section.indexOf('Save to Beta')
+  ok(linkAt >= 0 && saveAt >= 0 && linkAt < saveAt, 'the skill offers pairing before the hand-the-file-back fallback')
+  ok(/cannot run `node`|cannot run node/.test(section), 'and keeps that fallback for a sandbox that cannot run the tool')
+}
+// The lifetime is a number in three places; the worker is the authority.
+{
+  const grant = read('server/deck-store/src/grant.js')
+  const m = /GRANT_TTL_S = (\d+) \* 60 \* 60/.exec(grant)
+  const hours = m ? Number(m[1]) : NaN
+  ok(hours === 8 && /8 hours/.test(skill) && /8 hours/.test(guide),
+    `the grant lifetime is ${hours} hours in grant.js, the skill and the guide`)
+}
+
 // The replace recipe U1 wrote is gone: splice.mjs is the only way to change a
 // deck in the store. [^`] keeps each match inside one code block.
 ok(!/curl\b[^`]*?-X\s*PUT[^`]*?\/api\/harness\/decks\/<id>/.test(skill), 'the skill has no bare curl -X PUT to /api/harness/decks/<id>')
