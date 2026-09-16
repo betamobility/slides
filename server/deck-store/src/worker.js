@@ -77,6 +77,28 @@ const GEN_HEADER = 'x-bento-service-gen'
 // make a live tab retry over it. One predicate, so a third kind cannot land
 // on the person side of one branch and the agent side of another.
 const agentWrite = (who) => who.kind !== 'user'
+
+/**
+ * What goes in `writer` metadata.
+ *
+ * A grant writes as the PERSON who approved it, with `grant:` in front, so
+ * the index says "alice asked her agent for this" rather than hiding the
+ * agent or hiding alice. `owner` is the bare email, because ownership is what
+ * makes a deck deletable and that has to be hers.
+ */
+const writerOf = (who) => (who.kind === 'grant' ? `grant:${who.id}` : who.id)
+
+/**
+ * Was the version that won written by a person at a keyboard?
+ *
+ * The 412 body's `writer` is `'person' | 'service'` and that enum is FROZEN:
+ * `slides/src/beta/store.ts` on people's disks reads exactly those two words,
+ * and a live tab retries only over a person's write. `verifyAccess` only ever
+ * gives a person an email, so an `@` was the whole test — and a grant's
+ * writer carries an email too, which is why it needs the prefix excluded.
+ */
+const wroteAsPerson = (writer) => writer.includes('@') && !writer.startsWith('grant:')
+
 // The ETag again, under a name Cloudflare leaves alone. On the live host the
 // edge drops a strong `etag` from any response it compresses (every deck is
 // HTML, so every deck read lost it), while custom headers pass untouched.
@@ -323,7 +345,7 @@ async function storeBytes(req, env, ctx, who, bytes, evt) {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
-      owner: encMeta(who.id), writer: encMeta(who.id), created: now, updated: now,
+      owner: encMeta(who.id), writer: encMeta(writerOf(who)), created: now, updated: now,
       sg: agentWrite(who) ? '1' : '0',
     },
   })
@@ -434,7 +456,7 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
-      owner: prev.owner || encMeta(who.id), writer: encMeta(who.id),
+      owner: prev.owner || encMeta(who.id), writer: encMeta(writerOf(who)),
       created: prev.created || new Date().toISOString(), updated: new Date().toISOString(),
       sg: String(gen),
     },
@@ -450,7 +472,7 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
     const current = await env.DECKS.head(KEY(id))
     const res = json(412, {
       error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
-      writer: decMeta(current?.customMetadata?.writer).includes('@') ? 'person' : 'service',
+      writer: wroteAsPerson(decMeta(current?.customMetadata?.writer)) ? 'person' : 'service',
     })
     if (current) {
       res.headers.set('etag', current.httpEtag)
@@ -756,6 +778,25 @@ async function agentRoutes(req, env, ctx, url, path, m) {
   if (lp && m === 'GET') {
     return (await rateLimited(req, env)) || linkPoll(env, lp[1])
   }
+
+  // Everything else under either prefix needs a grant. Verified BEFORE any
+  // storage read, so a bad bearer answers the same for a deck that exists as
+  // for one that does not, and an Access assertion counts for nothing here.
+  const who = await verifyGrant(req, env)
+  if (!who) return empty(401)
+
+  // One-to-one with the harness routes (KTD5): same handlers, same
+  // conditional-write contract, the option flags U8 fills in.
+  if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who)
+  const pd = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})$/.exec(path)
+  if (pd && m === 'GET') return harnessRead(env, pd[1])
+  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true })
+  const pa = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
+  if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
+
+  // NOT routed here, deliberately (R9): no list, so a leaked grant cannot
+  // enumerate anyone's work, and no delete, so it cannot destroy a deck it is
+  // only borrowing an identity to write.
   return empty(401)
 }
 

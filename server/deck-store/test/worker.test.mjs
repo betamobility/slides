@@ -1046,8 +1046,12 @@ export async function run(Miniflare) {
     // checks call the module against Miniflare's real KV namespace, because
     // the routes that mint and verify grants land in U2 and U3.
     console.log('\nthe grant store: mint, verify, list, revoke (U1)')
-    const kv = await mf.getKVNamespace('GRANTS')
-    const grantEnv = { GRANTS: kv }
+    // A stub to a runtime object is POISONED by `mf.setOptions()`, so it is
+    // re-acquired after every flag flip rather than held for the whole run
+    // (Miniflare throws "Attempted to use poisoned stub" otherwise).
+    let kv = await mf.getKVNamespace('GRANTS')
+    let grantEnv = { GRANTS: kv }
+    const refreshKv = async () => { kv = await mf.getKVNamespace('GRANTS'); grantEnv = { GRANTS: kv } }
     const bearer = (token) => ({ authorization: `Bearer ${token}` })
     const asReq = (headers) => new Request('https://slides.betamobility.ai/api/publish/decks', { headers })
 
@@ -1323,11 +1327,142 @@ export async function run(Miniflare) {
     r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: '{}' })
     eq(r.status, 200, 'with the flag off (the rig, wrangler dev) it runs without one')
     await mf.setOptions(mfOptions)
+    await refreshKv()
 
     console.log('\nthe index cannot be framed either (KTD13)')
     r = await call('GET', '/', { as: 'alice' })
     eq(r.headers.get('x-frame-options'), 'DENY', 'the index carries x-frame-options DENY')
     ok(/frame-ancestors 'none'/.test(r.headers.get('content-security-policy') || ''), 'and frame-ancestors none')
+
+    // -------------------------------------------- what a grant reaches (U3, R8/R9)
+    //
+    // The reach of a signed-in partner, minus list and delete: create, read,
+    // replace and asset upload, on any deck by id. Every "is this an agent
+    // writing" branch must take the agent side, or a shipped editor — which
+    // compares x-bento-service-gen and reads the 412 body's `writer` — would
+    // retry over a grant's write.
+    console.log('\nthe publish path: a grant acts as the person (U3)')
+    const aliceTok = (await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')).token
+    const bobTok = (await mintGrant(grantEnv, 'bob@betamobility.io', 'Claude (Cowork)')).token
+    const asGrant = (token, extra = {}) => ({ authorization: `Bearer ${token}`, ...extra })
+    const publish = (method, path, opts = {}) => call(method, path, opts)
+
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(aliceTok), body: deck(slidesDoc('Fra Cowork')) })
+    eq(r.status, 201, 'a grant creates a deck')
+    const grantMade = await r.json()
+    ok(/^[0-9A-Za-z]{10}$/.test(grantMade.id), 'and gets an id back')
+    eq(grantMade.url, `${ORIGIN}/d/${grantMade.id}`, 'with the deck link')
+
+    // AE2: the deck is the approving person's, on the index and in the API.
+    r = await call('GET', '/api/decks', { as: 'alice' })
+    const grantRow = (await r.json()).decks.find((d) => d.id === grantMade.id)
+    eq(grantRow?.owner, 'alice@betamobility.io', 'the deck is owned by the person who approved, not by a token')
+    eq(grantRow?.writer, 'grant:alice@betamobility.io', 'and the last writer says it was her agent')
+    r = await call('GET', `/d/${grantMade.id}`, { as: 'alice' })
+    eq(r.status, 200, 'she can open it in the browser')
+    eq(r.headers.get('x-bento-service-gen'), '1', 'a grant create counts as a service generation')
+
+    // R13: ownership is what makes a deck deletable, and the grant is not it.
+    r = await call('DELETE', `/api/decks/${grantMade.id}`, { as: 'bob' })
+    eq(r.status, 403, 'bob cannot delete a deck alice asked for')
+    r = await call('DELETE', `/api/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'and the grant itself cannot delete it: the prefix never reaches DELETE (AE5)')
+    r = await call('GET', '/api/decks', { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'nor list the store (AE5)')
+    r = await call('GET', '/api/publish/decks', { headers: asGrant(aliceTok) })
+    eq(r.status, 401, 'and there is no list route under the publish prefix either')
+
+    console.log('\na grant reads and replaces any deck by id (U3, R8)')
+    // A deck bob made in the browser, which alice's agent may still change:
+    // four partners with equal access, from every surface.
+    r = await call('POST', '/api/decks', { as: 'bob', body: deck(slidesDoc('Bobs deck')) })
+    const bobs = await r.json()
+    r = await publish('GET', `/api/publish/decks/${bobs.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, "alice's grant reads a deck bob created")
+    const bobsEtag = r.headers.get('x-bento-etag')
+    ok(!!bobsEtag, 'the read carries x-bento-etag, which is how a conditional write is possible')
+    eq(r.headers.get('etag'), bobsEtag, 'and the plain etag beside it')
+    const bobsRead = await r.text()
+    r = await publish('PUT', `/api/publish/decks/${bobs.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': bobsEtag }), body: bobsRead,
+    })
+    eq(r.status, 200, 'and replaces it')
+    eq(r.headers.get('x-bento-service-gen'), '1', 'bumping the service generation')
+    r = await call('GET', '/api/decks', { as: 'bob' })
+    const bobsRow = (await r.json()).decks.find((d) => d.id === bobs.id)
+    eq(bobsRow?.owner, 'bob@betamobility.io', 'the deck stays bobs: a replace never moves ownership')
+    eq(bobsRow?.writer, 'grant:alice@betamobility.io', "while the last writer is alice's agent")
+
+    console.log('\nthe conditional-write contract is the harness one (U3, KTD8)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok), body: deck(slidesDoc('No match')) })
+    eq(r.status, 428, 'a grant replace without If-Match is 428, as on the harness route')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': '"nonsense"' }), body: deck(slidesDoc('Stale')),
+    })
+    eq(r.status, 412, 'a stale If-Match is 412')
+    const conflict = await r.json()
+    eq(conflict.writer, 'service', "and names the writer with the enum a shipped editor reads: a grant write is a 'service' write")
+    ok(!!r.headers.get('x-bento-service-gen'), 'the 412 carries the generation header')
+    ok(!!r.headers.get('x-bento-etag'), 'and the current etag')
+
+    // The other direction: a person's save must still read as a person's.
+    r = await call('GET', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
+    const madeEtag = r.headers.get('x-bento-etag')
+    const madeRead = await r.text()
+    // Her save must CHANGE the bytes: an R2 etag is a hash of the content, so
+    // re-storing the same file would leave the version indistinguishable and
+    // the conditional write below would pass for the wrong reason.
+    r = await call('PUT', `/api/decks/${grantMade.id}`, { as: 'alice', body: deck(slidesDoc('Alice endret den')) })
+    eq(r.status, 200, "a person's save after a grant write still needs no If-Match")
+    eq(r.headers.get('x-bento-service-gen'), '1', 'and carries the generation forward rather than bumping it')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': madeEtag }), body: madeRead,
+    })
+    eq(r.status, 412, "a person's save between a grant's read and its write makes the write 412")
+    const raced = await r.json()
+    eq(raced.writer, 'person', 'and that 412 names a person, because a person wrote the version that won')
+
+    console.log('\nscene assets: a grant uploads, a person still may not (U3)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/points.json`, {
+      headers: asGrant(aliceTok, { 'content-type': 'application/json' }), body: '[1,2,3]',
+    })
+    eq(r.status, 200, 'a grant uploads a scene asset')
+    r = await call('PUT', `/api/publish/decks/${grantMade.id}/assets/points.json`, {
+      as: 'alice', headers: { 'content-type': 'application/json' }, body: '[1,2,3]',
+    })
+    eq(r.status, 401, "a person's assertion is not a credential on the publish prefix")
+    r = await call('PUT', `/api/harness/decks/${grantMade.id}/assets/points.json`, {
+      as: 'alice', headers: { 'content-type': 'application/json' }, body: '[1,2,3]',
+    })
+    eq(r.status, 403, 'and the harness asset route still refuses a person (unchanged)')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/map.svg`, {
+      headers: asGrant(aliceTok, { 'content-type': 'image/svg+xml' }),
+      body: '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/decks")</script><rect/></svg>',
+    })
+    eq(r.status, 200, 'an svg uploads')
+    r = await call('GET', `/d/${grantMade.id}/assets/map.svg`, { as: 'alice' })
+    const svgOut = await r.text()
+    ok(!/<script/i.test(svgOut), 'and the active parts are still stripped out of it')
+    r = await publish('PUT', `/api/publish/decks/${grantMade.id}/assets/bad name.json`, {
+      headers: asGrant(aliceTok, { 'content-type': 'application/json' }), body: '[]',
+    })
+    eq(r.status, 400, 'a bad asset name is still a 400, not a 404')
+
+    console.log('\na dead grant is refused, and the bearer never comes back out (U3, F3/R21)')
+    const deadGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'deadGrant')
+    await revokeGrant(grantEnv, 'alice@betamobility.io', deadGrant.hash)
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(deadGrant.token), body: deck(slidesDoc('Revoked')) })
+    eq(r.status, 401, 'a revoked grant cannot create')
+    eq((await bodyOf(r)).length, 0, 'and the refusal carries no body')
+    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    r = await publish('POST', '/api/publish/decks', { headers: asGrant(expiredGrant.token), body: deck(slidesDoc('Expired')) })
+    eq(r.status, 401, 'an expired grant cannot create either (F3)')
+
+    const leakCheck = [...events].map((e) => JSON.stringify(e)).join('\n')
+    ok(!leakCheck.includes(aliceTok), 'no analytics event carries the bearer')
+    r = await publish('PUT', `/api/publish/decks/0123456789`, { headers: asGrant(aliceTok, { 'if-match': 'x' }), body: deck(slidesDoc('Nope')) })
+    eq(r.status, 404, 'a grant write to a deck that is not there is 404: the bearer verified, the deck did not exist')
+    ok(!(await r.text()).includes(aliceTok), 'and no response body repeats the bearer')
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
