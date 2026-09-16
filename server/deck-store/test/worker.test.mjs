@@ -26,6 +26,10 @@ import { existsSync, readFileSync } from 'node:fs'
 // The page's own minting logic, imported from the module the page inlines it
 // from — so what the rig exercises is the code the browser runs, not a copy.
 import { mintDocIntoBlock, indexPage } from '../src/pages.js'
+// The grant store, exercised directly against Miniflare's own KV: mint,
+// verify, list and revoke are worker-side functions with no route of their
+// own, and the routes that use them arrive in U2 and U3.
+import { mintGrant, verifyGrant, listGrants, revokeGrant } from '../src/grant.js'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -155,6 +159,9 @@ export async function run(Miniflare) {
     modulesRules: [{ type: 'ESModule', include: ['**/*.js'] }],
     compatibilityDate: '2026-07-01',
     r2Buckets: ['DECKS'],
+    // The grants (one-click publish plan, KTD3). KV, not R2: native expiry and
+    // per-key reads are the whole reason a grant does not need a cron sweep.
+    kvNamespaces: ['GRANTS'],
     bindings: {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
       PAGES_ORIGIN, NEW_ENABLED: 'on',
@@ -1027,6 +1034,97 @@ export async function run(Miniflare) {
     r = await call('GET', `/d/${second.id}`, { as: 'alice', origin: OLD_ORIGIN })
     eq(r.status, 200, 'and a signed-in deck open still serves the deck')
     await mf.setOptions(mfOptions)
+
+    // --------------------------------------------- the grant store (U1, KTD2/KTD3)
+    //
+    // A grant is an opaque bearer the store never keeps: KV holds sha256 of
+    // it, so a dump between approval and delivery is worthless (AE9). These
+    // checks call the module against Miniflare's real KV namespace, because
+    // the routes that mint and verify grants land in U2 and U3.
+    console.log('\nthe grant store: mint, verify, list, revoke (U1)')
+    const kv = await mf.getKVNamespace('GRANTS')
+    const grantEnv = { GRANTS: kv }
+    const bearer = (token) => ({ authorization: `Bearer ${token}` })
+    const asReq = (headers) => new Request('https://slides.betamobility.ai/api/publish/decks', { headers })
+
+    const g1 = await mintGrant(grantEnv, 'alice@betamobility.io', 'Claude (Cowork)')
+    ok(typeof g1.token === 'string' && g1.token.length >= 43, 'a minted grant hands back a token')
+    const id0 = await verifyGrant(asReq(bearer(g1.token)), grantEnv)
+    eq(id0?.kind, 'grant', 'a minted grant verifies as a grant identity')
+    eq(id0?.id, 'alice@betamobility.io', 'and carries the approving person, not a token name')
+    ok(!(await verifyGrant(asReq(bearer(`${g1.token.slice(0, -1)}${g1.token.at(-1) === 'A' ? 'B' : 'A'}`)), grantEnv)),
+      'a bearer with one character changed does not verify')
+    ok(!(await verifyGrant(asReq({ authorization: 'Bearer' }), grantEnv)), 'a malformed Authorization header does not verify')
+    ok(!(await verifyGrant(asReq({ authorization: `Basic ${g1.token}` }), grantEnv)), 'a non-Bearer scheme does not verify')
+    ok(!(await verifyGrant(asReq({}), grantEnv)), 'no Authorization header does not verify')
+    ok(!(await verifyGrant(asReq(bearer(g1.token)), {})), 'an unbound GRANTS namespace fails closed')
+
+    // The raw token is in the caller's hands and nowhere else (R21, AE9).
+    const dump = await kv.list({})
+    let raws = 0
+    for (const k of dump.keys) {
+      const v = await kv.get(k.name)
+      if (v && v.includes(g1.token)) raws++
+    }
+    eq(raws, 0, 'no KV value holds the raw token, only its hash')
+    ok(dump.keys.some((k) => k.name === `grant:${g1.hash}`), 'the grant is keyed by its hash')
+
+    // Expiry is the value's own clock, not only KV's TTL: a grant minted nine
+    // hours ago is dead even while the key survives.
+    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    ok(await kv.get(`grant:${stale.hash}`), 'a stale grant can still be in KV')
+    ok(!(await verifyGrant(asReq(bearer(stale.token)), grantEnv)), 'and does not verify: its stored exp has passed')
+
+    const g2 = await mintGrant(grantEnv, 'alice@betamobility.io', 'second')
+    const gb = await mintGrant(grantEnv, 'bob@betamobility.io', 'bobs')
+    let myGrants = await listGrants(grantEnv, 'alice@betamobility.io')
+    eq(myGrants.filter((x) => x.hash === gb.hash).length, 0, "alice's list does not carry bob's grant")
+    ok(myGrants.some((x) => x.hash === g1.hash) && myGrants.some((x) => x.hash === g2.hash), 'alice sees both of her live grants')
+    ok(myGrants.every((x) => typeof x.label === 'string' && typeof x.created === 'string' && Number.isFinite(x.exp)),
+      'a listed grant carries its label, when it started and when it ends')
+    // A prefix that is a prefix of a real address must not match it.
+    eq((await listGrants(grantEnv, 'alice@')).length, 0, 'alice@ matches nothing: the list prefix ends at the colon')
+
+    ok(await revokeGrant(grantEnv, 'alice@betamobility.io', g2.hash), 'a grant revokes')
+    ok(!(await verifyGrant(asReq(bearer(g2.token)), grantEnv)), 'a revoked grant no longer verifies')
+    myGrants = await listGrants(grantEnv, 'alice@betamobility.io')
+    ok(!myGrants.some((x) => x.hash === g2.hash), 'and is gone from the list')
+    ok(myGrants.some((x) => x.hash === g1.hash), 'while the other one is untouched')
+    ok(!(await revokeGrant(grantEnv, 'bob@betamobility.io', g1.hash)), "bob cannot revoke alice's grant")
+    ok(await verifyGrant(asReq(bearer(g1.token)), grantEnv), 'and it still verifies afterwards')
+    ok(!(await revokeGrant(grantEnv, 'alice@betamobility.io', 'not-a-hash')), 'a hash-shaped nothing revokes nothing')
+
+    // ------------------------------------- the two agent prefixes are fail-closed (U1)
+    //
+    // Access Bypasses /api/link/ and /api/publish/, so nothing verifies them
+    // but this worker. Anything not exactly routed there is 401 with no body —
+    // never 404, which would say whether a deck exists.
+    console.log('\nthe agent prefixes: bearer or nothing, 401 with no body (U1, KTD4)')
+    for (const [m2, p2] of [
+      ['GET', '/api/link/'], ['GET', '/api/link'], ['POST', '/api/link'],
+      ['GET', '/api/publish/'], ['GET', '/api/publish'],
+      ['GET', '/api/publish/nowhere'], ['DELETE', `/api/publish/decks/${second.id}`],
+      ['GET', '/api/publish/decks'], ['GET', '/api/link/start'],
+    ]) {
+      const rr = await call(m2, p2, { body: m2 === 'POST' ? '{}' : undefined })
+      eq(rr.status, 401, `${m2} ${p2} with nothing attached is 401`)
+      eq((await bodyOf(rr)).length, 0, `${m2} ${p2} 401 carries no body`)
+    }
+    // A person's cookie is not a credential here: these prefixes take a bearer.
+    r = await call('GET', `/api/publish/decks/${second.id}`, { as: 'alice' })
+    eq(r.status, 401, "a person's assertion on the publish path is 401: the prefix takes a bearer")
+    r = await call('GET', `/api/publish/decks/${second.id}`)
+    eq(r.status, 401, 'an anonymous read of a deck that exists is 401, the same as one that does not')
+    r = await call('GET', '/api/publish/decks/0123456789')
+    eq(r.status, 401, 'and a deck id that exists nowhere answers identically')
+    // The other direction: a grant is not an identity on the gated routes.
+    r = await call('GET', '/api/decks', { headers: bearer(g1.token) })
+    eq(r.status, 401, 'a bearer on the gated API is 401: only Access speaks there')
+    r = await call('GET', '/api/harness/decks/0123456789', { headers: bearer(g1.token) })
+    eq(r.status, 401, 'and on the harness routes too')
+    const grantEventsBefore = events.length
+    await call('GET', '/api/publish/decks/0123456789', { headers: bearer(g1.token) })
+    eq(events.length, grantEventsBefore, 'a refused agent request sends no analytics event')
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

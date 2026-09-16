@@ -36,6 +36,21 @@ routes = [
 binding = "DECKS"
 bucket_name = "beta-decks"
 
+# The grants an agent publishes with (one-click publish plan, KTD3). KV rather
+# than R2 because KV has native expiry and per-key reads, and the deck
+# bucket's customMetadata budget is already full. This is the account's FIRST
+# KV namespace; create it once with
+#   env -u CLOUDFLARE_API_TOKEN npx wrangler kv namespace create GRANTS
+# and put the id it prints here.
+#
+# `id` is a PLACEHOLDER until the maintainer does that (U7 of the plan). That
+# deliberately fails a `wrangler deploy` rather than deploying a worker whose
+# grant store silently does not exist; `wrangler dev` and the rig use local KV
+# and do not read it. Do not invent an id to make the deploy go through.
+[[kv_namespaces]]
+binding = "GRANTS"
+id = "REPLACE_WITH_GRANTS_NAMESPACE_ID"
+
 # Access configuration, read by src/access.js. See README.md, "Access
 # applications, in this order" — the ordering is not cosmetic.
 # Both values are public to anyone holding a token, and the JWKS is public, so

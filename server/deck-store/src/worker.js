@@ -47,6 +47,7 @@
 // bento/enc envelope. Serving is a stream of the stored object.
 
 import { verifyAccess } from './access.js'
+import { verifyGrant } from './grant.js'
 import { indexPage, mintDocIntoBlock, newPage } from './pages.js'
 
 const MAX_BYTES = 32 * 1024 * 1024
@@ -64,6 +65,16 @@ const META_MAX = 512
 // editor compares the generation it booted with against the 412's, and only a
 // match lets a live tab retry. Missing metadata (a deck stored before this) is 0.
 const GEN_HEADER = 'x-bento-service-gen'
+
+// Is this identity an AGENT writing, rather than a person at a keyboard?
+// There are two kinds of agent now — a service token from a file harness and
+// a grant from a paired Cowork session (one-click publish plan, KTD5) — and
+// every place that used to ask `who.kind === 'service'` was really asking
+// this. A shipped editor compares the generation it booted with and reads the
+// 412 body's `writer`, so a grant write that answered "person" there would
+// make a live tab retry over it. One predicate, so a third kind cannot land
+// on the person side of one branch and the agent side of another.
+const agentWrite = (who) => who.kind !== 'user'
 // The ETag again, under a name Cloudflare leaves alone. On the live host the
 // edge drops a strong `etag` from any response it compresses (every deck is
 // HTML, so every deck read lost it), while custom headers pass untouched.
@@ -301,7 +312,7 @@ async function storeBytes(req, env, ctx, who, bytes, evt) {
     customMetadata: {
       title: encMeta(meta.title), docId: encMeta(meta.docId), kind: meta.kind,
       owner: encMeta(who.id), writer: encMeta(who.id), created: now, updated: now,
-      sg: who.kind === 'service' ? '1' : '0',
+      sg: agentWrite(who) ? '1' : '0',
     },
   })
   track(ctx, req, evt, 'ok')
@@ -404,9 +415,9 @@ async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
-  // A service write bumps the generation, a person's carries it forward. Read
+  // An agent's write bumps the generation, a person's carries it forward. Read
   // from the head above: with If-Match the put only lands on that same version.
-  const gen = genOf(existing) + (who.kind === 'service' ? 1 : 0)
+  const gen = genOf(existing) + (agentWrite(who) ? 1 : 0)
   const stored = await putIfMatch(env, KEY(id), bytes, {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
@@ -590,6 +601,39 @@ async function harnessRead(env, id) {
   return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
 }
 
+// --- the agent prefixes (one-click publish plan, KTD4) -------------------------
+//
+// Two prefixes Access BYPASSES, the way it bypasses the release channel, so a
+// request arrives here with no assertion at all:
+//
+//   /api/link/     the pairing handshake. Public by necessity: the agent has
+//                  no credential yet, which is the whole point of pairing.
+//   /api/publish/  what a grant reaches, verified by a bearer.
+//
+// Nothing but this worker guards them, so this is where the worker does what
+// Access does elsewhere, and it fails closed in every direction:
+//
+//  · an Access assertion here is IGNORED. A person's cookie with no bearer is
+//    401 — otherwise a page on this origin could publish as its reader.
+//  · anything not an exactly routed method and path is 401 WITH NO BODY,
+//    never 404, so nothing under these prefixes says whether a deck exists.
+//  · the bearer is verified before any R2 read, so a refusal costs the same
+//    and says the same for a real deck id as for a made-up one.
+//
+// The trailing slash is part of each prefix: a bare `/api/link` matches
+// neither this nor an Access Bypass destination, and falls through to the
+// gated routes — which is why the pairing routes live UNDER `/api/link/`
+// rather than at it.
+const AGENT_PREFIXES = ['/api/link/', '/api/publish/']
+const isAgentPath = (path) => AGENT_PREFIXES.some((p) => path.startsWith(p))
+
+async function agentRoutes(req, env, ctx, url, path, m) {
+  // U2 adds the pairing routes here (public, rate-limited) and U3 the publish
+  // routes behind `verifyGrant`. Until then every path under both prefixes
+  // takes the one answer this whole block exists to guarantee.
+  return empty(401)
+}
+
 // --- router --------------------------------------------------------------------
 
 export default {
@@ -622,6 +666,11 @@ export default {
     // so there is no assertion here to verify and nothing to verify it against.
     if (isPublicPath(path) && (m === 'GET' || m === 'HEAD')) return passThrough(req, env, url)
 
+    // The two Bypass prefixes an agent uses, before verifyAccess — which would
+    // answer 401 to every one of them, there being no assertion to verify.
+    // Not a pass-through and not in PUBLIC_PREFIXES: these are handled HERE.
+    if (isAgentPath(path)) return agentRoutes(req, env, ctx, url, path, m)
+
     // Identity next, before any routing of our own: an unknown path without an
     // assertion is 401, not 404, so nothing about the store is enumerable
     // without Access. Enumerability now stops at the allowlist above, and
@@ -639,7 +688,7 @@ export default {
     // upload route open to every signed-in page is a way to plant files on
     // the store's origin. `(.+)` so a bad name is a 400, not a 404.
     const am = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
-    if (am && m === 'PUT') return who.kind === 'service' ? putAsset(req, env, am[1], am[2]) : empty(403)
+    if (am && m === 'PUT') return agentWrite(who) ? putAsset(req, env, am[1], am[2]) : empty(403)
 
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
