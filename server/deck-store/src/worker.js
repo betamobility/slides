@@ -47,6 +47,7 @@
 // bento/enc envelope. Serving is a stream of the stored object.
 
 import { verifyAccess } from './access.js'
+import { rewriteBlock, shellOf, splitShell } from './block.js'
 import {
   CODE_RE, HANDLE_RE, approvePairing, pollPairing, readPairing, startPairing, verifyGrant,
 } from './grant.js'
@@ -432,20 +433,83 @@ async function putIfMatch(env, key, bytes, opts, etag) {
   }
 }
 
+/**
+ * A grant's upload, with the stored `collab` put back and the shell pinned
+ * (one-click publish plan, KTD7, R12/R20).
+ *
+ * Returns `{ bytes }` to store, or `{ reason }` — one word, the way `inspect`
+ * refuses — for a 400.
+ *
+ * TWO checks, in this order, before anything is stored:
+ *
+ * 1. THE SHELL MUST BE THE STORED ONE, byte for byte. `inspect` looks only
+ *    inside the block, so without this a grant could swap the runtime around
+ *    a deck and have it run first-party on the store's origin for every
+ *    partner who opens it. The block is the agent's to write; the shell is
+ *    not. A create cannot be pinned this way — there is nothing to pin it
+ *    against — and that stays accepted, as it already is for a service token.
+ * 2. THE STORED `collab` GOES BACK IN, because the grant was never shown it.
+ *    A read-modify-write would otherwise destroy the deck's live session,
+ *    which is the exact damage stripping it was meant to prevent. When the
+ *    stored deck has none, the incoming one must not invent one.
+ *
+ * The format may not change either: an encrypted deck stays encrypted and a
+ * readable one stays readable. Encrypting a partner's deck under a password
+ * only the agent knows would be as destructive as deleting it, and a grant
+ * cannot delete.
+ */
+async function restoreIntoUpload(existing, bytes) {
+  const incomingSrc = new TextDecoder().decode(bytes)
+  const storedSrc = await existing.text()
+  const a = splitShell(storedSrc)
+  const b = splitShell(incomingSrc)
+  if (!a || !b) return { reason: 'block' }
+  if (shellOf(a) !== shellOf(b)) return { reason: 'shell' }
+  let stored, incoming
+  try {
+    stored = JSON.parse(a.body)
+    incoming = JSON.parse(b.body)
+  } catch {
+    return { reason: 'json' }
+  }
+  const encStored = stored?.format === 'bento/enc'
+  const encIncoming = incoming?.format === 'bento/enc'
+  if (encStored !== encIncoming) return { reason: 'format' }
+  // Encrypted both ways: nothing to restore, and nothing here can read it.
+  if (encStored) return { bytes }
+  try {
+    const out = rewriteBlock(incomingSrc, (doc) => {
+      if (stored.collab === undefined) delete doc.collab
+      else doc.collab = stored.collab
+      return doc
+    })
+    return { bytes: new TextEncoder().encode(out) }
+  } catch {
+    return { reason: 'block' }
+  }
+}
+
 // KTD5. `requireMatch` is the harness route's rule: a replace from a file
 // harness must say which version it read (428 otherwise). The people route
 // honours If-Match when present but cannot require it, because shells already
 // on disk save without one and must keep working.
-async function replace(req, env, ctx, who, id, { requireMatch = false } = {}) {
-  const existing = await env.DECKS.head(KEY(id))
+async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCollab = false } = {}) {
+  // A `get` rather than a `head` on the grant path: the stored document is
+  // needed, not only its metadata. Everything else reads the same fields.
+  const existing = restoreCollab ? await env.DECKS.get(KEY(id)) : await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
   const etag = ifMatchOf(req)
   if (requireMatch && !etag) {
     track(ctx, req, 'deck_save', 'rejected')
     return json(428, { error: 'if-match-required', message: 'Read the deck first (GET /api/harness/decks/:id) and send its ETag as If-Match.' })
   }
-  const bytes = await readBody(req)
+  let bytes = await readBody(req)
   if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
+  if (restoreCollab) {
+    const restored = await restoreIntoUpload(existing, bytes)
+    if (restored.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, restored.reason) }
+    bytes = restored.bytes
+  }
   const meta = inspect(bytes)
   if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
@@ -598,9 +662,13 @@ const CSP = [
   "base-uri 'self'",
 ].join('; ')
 
-const deckHeaders = (obj) => ({
+// `length` is passed explicitly when the body is not the stored object: a
+// grant's read is re-serialised, so `obj.size` would be a lie the client
+// truncates on. The ETag stays the STORED object's, so the If-Match a grant
+// sends back still names a version R2 knows.
+const deckHeaders = (obj, length = obj.size) => ({
   'content-type': 'text/html; charset=utf-8',
-  'content-length': String(obj.size),
+  'content-length': String(length),
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
   etag: obj.httpEtag,
@@ -629,10 +697,35 @@ async function serveHead(env, id) {
 
 // `GET /api/harness/decks/:id` (R10). Not owner-scoped, and not tracked: it
 // is a harness's read-before-replace, not a person opening a deck.
-async function harnessRead(env, id) {
+//
+// `stripCollab` is the grant path (KTD6, R11). The WHOLE `collab` block goes,
+// not its three private fields: room plus the symmetric key is exactly what
+// `saveReaderCopy` writes into a read-only copy, so leaving them would hand
+// an eight-hour grant a reader capability on the live session that outlives
+// it. The tool never reads `collab`, so dropping it costs nothing — and the
+// restore on write (see `replace`) is what keeps a read-modify-write from
+// destroying the keys instead.
+async function harnessRead(env, id, { stripCollab = false } = {}) {
   const obj = await env.DECKS.get(KEY(id))
   if (!obj) return empty(404)
-  return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
+  if (!stripCollab) return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
+  const src = await obj.text()
+  let out
+  try {
+    out = rewriteBlock(src, (doc) => {
+      // An encrypted deck is served as it is: its keys are inside the
+      // ciphertext, and there is no document here to strip.
+      if (doc.format === 'bento/enc') return null
+      delete doc.collab
+      return doc
+    })
+  } catch {
+    // Better to refuse than to serve a file whose block could not be rewritten
+    // — the unstripped bytes are exactly what must not leave on this path.
+    return text(502, 'store: this deck could not be prepared for an agent')
+  }
+  const bytes = new TextEncoder().encode(out)
+  return new Response(bytes, { status: 200, headers: deckHeaders(obj, bytes.byteLength) })
 }
 
 // --- the agent prefixes (one-click publish plan, KTD4) -------------------------
@@ -789,8 +882,8 @@ async function agentRoutes(req, env, ctx, url, path, m) {
   // conditional-write contract, the option flags U8 fills in.
   if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who)
   const pd = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})$/.exec(path)
-  if (pd && m === 'GET') return harnessRead(env, pd[1])
-  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true })
+  if (pd && m === 'GET') return harnessRead(env, pd[1], { stripCollab: true })
+  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true })
   const pa = /^\/api\/publish\/decks\/([0-9A-Za-z]{10})\/assets\/(.+)$/.exec(path)
   if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
 

@@ -18,6 +18,7 @@
 // inlined: cream surface, charcoal ink, Playfair Display for the one
 // headline, Inter for body, DM Mono for numbers and tags.
 
+import { rewriteBlock } from './block.js'
 import { GRANT_TTL_S } from './grant.js'
 
 export const esc = (s) => String(s ?? '')
@@ -31,26 +32,22 @@ export const esc = (s) => String(s ?? '')
  *
  * It used to be inlined into /new verbatim (via `.toString()`), because the
  * browser did the minting; `GET /new/blank` does it in the worker now and
- * imports this directly. It stays ES5-plain and free of template-literal
- * interpolation anyway: the cost is nil and the constraint is one edit away
- * from mattering again if anything is ever inlined back into a page.
+ * imports this directly.
  *
- * The re-serialized JSON escapes `<` the way every builder in this repo does,
- * and the function refuses rather than emit a block a browser would cut short
- * (AGENTS.md hard rule 1).
+ * The block surgery itself moved to `block.js rewriteBlock` when a grant's
+ * read needed the same rewrite (one-click publish plan, KTD6): one place
+ * escapes `<`, refuses a block a browser would cut short (AGENTS.md hard rule
+ * 1), and keeps the block's own opening tag. If anything is ever inlined back
+ * into a page, it is that function that has to stay ES5-plain.
  */
 export function mintDocIntoBlock(html, docId) {
-  var re = /(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)([\s\S]*?)(<\/script>)/i
-  var m = re.exec(html)
-  if (!m) throw new Error('no #bento-doc block in the template')
-  var doc = JSON.parse(m[2])
-  if (!doc || doc.format !== 'bento/slides') throw new Error('the template is not a bento/slides document')
-  delete doc.template
-  delete doc.collab
-  doc.docId = docId
-  var json = JSON.stringify(doc).replace(/</g, '\\u003c')
-  if (json.indexOf('</scr' + 'ipt') !== -1) throw new Error('a literal closing script tag survived escaping')
-  return html.slice(0, m.index) + m[1] + json + m[3] + html.slice(m.index + m[0].length)
+  return rewriteBlock(html, (doc) => {
+    if (doc.format !== 'bento/slides') throw new Error('the template is not a bento/slides document')
+    delete doc.template
+    delete doc.collab
+    doc.docId = docId
+    return doc
+  })
 }
 
 const PLAUSIBLE = '<script defer data-domain="betamobility.ai" src="https://plausible.io/js/script.js"></script>'

@@ -94,6 +94,17 @@ function deck(doc, { pad = '' } = {}) {
 const slidesDoc = (title, extra = {}) => ({
   format: 'bento/slides', v: 1, docId: `doc-${title.length}-x`, title, slides: [{ id: 's1', elements: [] }], ...extra,
 })
+/** The document in a file's #bento-doc block. */
+const docOfHtml = (html) => {
+  const m = /<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/i.exec(html)
+  if (!m) throw new Error('no #bento-doc block')
+  return JSON.parse(m[1])
+}
+/** `html` with its block replaced by `doc`, as the splice tool's writeBlock does. */
+const writeBlockInto = (html, doc) => {
+  const json = JSON.stringify(doc).replace(/</g, '\\u003c')
+  return html.replace(/(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, (_m, open, close) => `${open}${json}${close}`)
+}
 const encEnvelope = () => ({ format: 'bento/enc', v: 1, it: 600000, salt: 'c2FsdA==', iv: 'aXZpdml2aXZpdg==', data: 'Y2lwaGVy' })
 
 // ---- rig -----------------------------------------------------------------
@@ -1463,6 +1474,129 @@ export async function run(Miniflare) {
     r = await publish('PUT', `/api/publish/decks/0123456789`, { headers: asGrant(aliceTok, { 'if-match': 'x' }), body: deck(slidesDoc('Nope')) })
     eq(r.status, 404, 'a grant write to a deck that is not there is 404: the bearer verified, the deck did not exist')
     ok(!(await r.text()).includes(aliceTok), 'and no response body repeats the bearer')
+
+    // ------------------------------- the block rewrite: strip, restore, pin (U8)
+    //
+    // The store's posture is "stream the stored bytes", and this is its ONE
+    // exception: a grant's read is re-serialised with `collab` deleted, and a
+    // grant's write has the stored `collab` put back before anything is
+    // stored. The whole block, not the three private fields: room plus the
+    // symmetric key is what `saveReaderCopy` writes, a reader capability that
+    // would outlive the grant it came from.
+    console.log('\ncollab is stripped on a grant read and restored on its write (U8, AE3)')
+    const liveCollab = {
+      on: true, room: 'w0123456789abcdef', key: 'c3ltbWV0cmljLWtleS1oZXJl',
+      writerPub: 'cHViCg==', writerPriv: 'cHJpdgo=', ownerPriv: 'b3duZXItcHJpdgo=',
+      invite: { pub: 'aW52aXRlLXB1Ygo=', priv: 'aW52aXRlLXByaXYK' },
+      sync: { v: 2, regs: {} },
+    }
+    const withText = (title, text, extra = {}) => ({
+      format: 'bento/slides', v: 1, docId: 'doc-collab-x', title,
+      slides: [{ id: 's1', elements: [{ id: 't-01', type: 'text', x: 10, y: 10, w: 100, h: 20, html: text }] }],
+      ...extra,
+    })
+    const liveBytes = deck(withText('Levende dekk', 'før', { collab: liveCollab }), { pad: 'shell-marker' })
+    r = await call('POST', '/api/decks', { as: 'bob', body: liveBytes })
+    const live = await r.json()
+
+    r = await publish('GET', `/api/publish/decks/${live.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, 'a grant reads the deck')
+    const strippedEtag = r.headers.get('x-bento-etag')
+    const strippedSrc = await r.text()
+    const strippedDoc = docOfHtml(strippedSrc)
+    ok(!('collab' in strippedDoc), 'the document it receives has no collab key at all')
+    eq(strippedDoc.slides[0].elements[0].html, 'før', 'the content is all there, æøå included')
+    ok(Buffer.byteLength(strippedSrc) !== Buffer.byteLength(liveBytes), 'and is a different length from the stored object, because the block was rewritten')
+    // The served body is WHOLE: `content-length` is computed from the
+    // rewritten bytes rather than `obj.size`, and a stale length would
+    // truncate a real client here. The header itself cannot be asserted from
+    // this rig — MEASURED: workerd answers `transfer-encoding: chunked`
+    // locally and drops content-length from every response, explicit or not —
+    // so completeness is what is checked here and the header is checked over
+    // real HTTP by scripts/check-store-live.mjs.
+    ok(strippedSrc.trimEnd().endsWith('</html>'), 'the served file is complete, not truncated to the stored length')
+
+    // Only the block may differ. Everything around it is the shell a browser
+    // runs, and it is byte-identical.
+    const shellOfHtml = (html) => html.replace(/(<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>)[\s\S]*?(<\/script>)/i, '$1$2')
+    eq(shellOfHtml(strippedSrc), shellOfHtml(liveBytes), 'the served bytes differ from the stored ones only inside the #bento-doc block')
+
+    // A person's read is untouched: the exception is the grant path only.
+    r = await call('GET', `/d/${live.id}`, { as: 'bob' })
+    eq(await r.text(), liveBytes, "a person's read of the same deck is byte-identical to the upload")
+    r = await call('GET', `/api/harness/decks/${live.id}`, { as: 'service' })
+    ok((await r.text()).includes('ownerPriv'), 'and a service token still reads the whole file, unchanged')
+
+    // AE3, the other half: the write back restores what was stripped.
+    const grantEdited = writeBlockInto(strippedSrc, { ...strippedDoc, slides: [{ id: 's1', elements: [{ ...strippedDoc.slides[0].elements[0], html: 'etter' }] }] })
+    r = await publish('PUT', `/api/publish/decks/${live.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': strippedEtag }), body: grantEdited,
+    })
+    eq(r.status, 200, 'and writes it back with one text element changed')
+    r = await call('GET', `/d/${live.id}`, { as: 'bob' })
+    const storedAfter = docOfHtml(await r.text())
+    eq(storedAfter.slides[0].elements[0].html, 'etter', 'the change is stored')
+    eq(JSON.stringify(storedAfter.collab), JSON.stringify(liveCollab),
+      'and the collab block is back, value for value: room, key, both private keys, the invite and the sync state')
+
+    console.log('\na deck with no live session never grows one (U8)')
+    const bareBytes = deck(withText('Uten collab', 'a'))
+    r = await call('POST', '/api/decks', { as: 'bob', body: bareBytes })
+    const bare = await r.json()
+    r = await publish('GET', `/api/publish/decks/${bare.id}`, { headers: asGrant(aliceTok) })
+    const bareEtag = r.headers.get('x-bento-etag')
+    const bareSrc = await r.text()
+    ok(!('collab' in docOfHtml(bareSrc)), 'a grant read of a deck with no collab has none')
+    r = await publish('PUT', `/api/publish/decks/${bare.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': bareEtag }), body: bareSrc,
+    })
+    eq(r.status, 200, 'the write back succeeds')
+    r = await call('GET', `/d/${bare.id}`, { as: 'bob' })
+    ok(!('collab' in docOfHtml(await r.text())), 'and no collab key was invented')
+
+    console.log('\nthe shell is pinned: a grant changes the block and nothing else (U8, AE8)')
+    r = await publish('GET', `/api/publish/decks/${live.id}`, { headers: asGrant(aliceTok) })
+    const pinEtag = r.headers.get('x-bento-etag')
+    const pinSrc = await r.text()
+    const storedBefore = await (await call('GET', `/d/${live.id}`, { as: 'bob' })).text()
+    for (const [what, body] of [
+      ['one byte outside the block', pinSrc.replace('shell-marker', 'shell-markeR')],
+      ['an added script', pinSrc.replace('</body>', '<script>fetch("/api/decks")</script></body>')],
+      ['a changed title tag', pinSrc.replace('<title>t</title>', '<title>x</title>')],
+    ]) {
+      const rr = await publish('PUT', `/api/publish/decks/${live.id}`, {
+        headers: asGrant(aliceTok, { 'if-match': pinEtag }), body,
+      })
+      eq(rr.status, 400, `a grant replace with ${what} is refused`)
+      eq(await rr.text(), 'shell', 'with the one-word reason `shell`')
+    }
+    eq(await (await call('GET', `/d/${live.id}`, { as: 'bob' })).text(), storedBefore, 'and the stored bytes are untouched')
+    // A person may still change the shell: that is how an update lands.
+    r = await call('PUT', `/api/decks/${live.id}`, { as: 'bob', body: pinSrc.replace('shell-marker', 'a-new-shell') })
+    eq(r.status, 200, "a person's save is not pinned: a shell update is what ⌘S after an update is")
+
+    console.log('\nan encrypted deck is served and stored as it is (U8)')
+    const encBytes = deck(encEnvelope())
+    r = await call('POST', '/api/decks', { as: 'bob', body: encBytes })
+    const encDeck = await r.json()
+    r = await publish('GET', `/api/publish/decks/${encDeck.id}`, { headers: asGrant(aliceTok) })
+    eq(r.status, 200, 'a grant may read an encrypted deck')
+    const encEtag = r.headers.get('x-bento-etag')
+    eq(await r.text(), encBytes, 'and gets the stored bytes unchanged: its keys are inside the ciphertext')
+    r = await publish('PUT', `/api/publish/decks/${encDeck.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': encEtag }),
+      body: deck({ ...encEnvelope(), data: 'Y2lwaGVyMg==' }),
+    })
+    eq(r.status, 200, 'and may replace one with another envelope, with nothing parsed or restored')
+    // The format may not change under a grant: encrypting someone else's deck
+    // would be as destructive as deleting it, which a grant cannot do either.
+    r = await publish('GET', `/api/publish/decks/${bare.id}`, { headers: asGrant(aliceTok) })
+    const flipEtag = r.headers.get('x-bento-etag')
+    const flipSrc = await r.text()
+    r = await publish('PUT', `/api/publish/decks/${bare.id}`, {
+      headers: asGrant(aliceTok, { 'if-match': flipEtag }), body: shellOfHtml(flipSrc).replace(/(id=["']?bento-doc["']?[^>]*>)/i, `$1${JSON.stringify(encEnvelope()).replace(/</g, '\\u003c')}`),
+    })
+    eq(r.status, 400, 'a grant cannot turn a readable deck into an encrypted one')
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
