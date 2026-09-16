@@ -56,8 +56,24 @@ id = "REPLACE_WITH_GRANTS_NAMESPACE_ID"
 # Both values are public to anyone holding a token, and the JWKS is public, so
 # they are vars and not secrets. The worker fails closed while either is empty
 # or still a placeholder.
+# The rate limit on the pairing routes (one-click publish plan, KTD9).
+# `POST /api/link/start` is the host's first PUBLIC non-GET endpoint, so it is
+# guarded by request count per client address as well as by a 1 KB body cap.
+# Ten per minute is far above one person pairing and far below anything worth
+# calling traffic. The namespace id is local to this worker, not an account
+# resource, so there is nothing to create in the dashboard for it.
+[[unsafe.bindings]]
+name = "LINK_LIMIT"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
 [vars]
 ACCESS_TEAM_DOMAIN = "round-smoke-5856.cloudflareaccess.com"
+# With this on, a missing LINK_LIMIT binding makes the public pairing routes
+# answer 503 rather than run unguarded. Off only for `wrangler dev` and the
+# rigs, which have no limiter and need none.
+LINK_LIMIT_REQUIRED = "on"
 
 # The Pages project that holds the release channel, the templates, the skill
 # and the site's static furniture. slides.betamobility.ai serves both surfaces

@@ -47,8 +47,10 @@
 // bento/enc envelope. Serving is a stream of the stored object.
 
 import { verifyAccess } from './access.js'
-import { verifyGrant } from './grant.js'
-import { indexPage, mintDocIntoBlock, newPage } from './pages.js'
+import {
+  CODE_RE, HANDLE_RE, approvePairing, pollPairing, readPairing, startPairing, verifyGrant,
+} from './grant.js'
+import { indexPage, linkDonePage, linkPage, mintDocIntoBlock, newPage } from './pages.js'
 
 const MAX_BYTES = 32 * 1024 * 1024
 const KEY = (id) => `decks/${id}.bento.html`
@@ -186,7 +188,17 @@ const flagOn = (v) => v === 'on' || v === 'true' || v === '1'
 const empty = (status) => new Response(null, { status })
 const text = (status, body) => new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, no-store' } })
-const html = (body) => new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } })
+const html = (body, extra = {}) => new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', ...extra } })
+
+// Pages that act on a click: the approval page and the index, which carries
+// the Revoke buttons. A framed one is a clickjacked one, and both actions
+// arrive with the person's Access session attached (KTD13). Belt and braces:
+// `frame-ancestors` is the modern rule, `x-frame-options` the one an older
+// browser honours.
+const NO_FRAMING = {
+  'content-security-policy': "frame-ancestors 'none'",
+  'x-frame-options': 'DENY',
+}
 
 // --- write validation (shape only) ------------------------------------------
 
@@ -627,11 +639,134 @@ async function harnessRead(env, id) {
 const AGENT_PREFIXES = ['/api/link/', '/api/publish/']
 const isAgentPath = (path) => AGENT_PREFIXES.some((p) => path.startsWith(p))
 
+// The pairing-start body. One kilobyte and an 80-character label: this is the
+// only public non-GET endpoint on the host, and the 32 MB deck cap has no
+// business being its limit.
+const LINK_BODY_MAX = 1024
+const LABEL_MAX = 80
+
+/**
+ * The rate limit on the public pairing routes (KTD9).
+ *
+ * `LINK_LIMIT_REQUIRED` exists because the binding is the only thing standing
+ * between a public POST and whoever finds it: in production a missing binding
+ * must be a 503, not an unguarded endpoint. The rig and `wrangler dev` turn
+ * the flag off and run without one.
+ *
+ * Returns null when the request may proceed, else the response to send.
+ */
+async function rateLimited(req, env) {
+  const limiter = env.LINK_LIMIT
+  if (!limiter?.limit) {
+    return flagOn(env.LINK_LIMIT_REQUIRED) ? text(503, 'store: the pairing rate limiter is not configured') : null
+  }
+  // Per-location and eventually consistent, which is what a limiter on an
+  // anonymous endpoint can be. `cf-connecting-ip` is set by the edge on every
+  // real request; the fallback keeps a local run working.
+  const key = req.headers.get('cf-connecting-ip') || 'anon'
+  try {
+    const { success } = await limiter.limit({ key })
+    return success ? null : text(429, 'store: too many pairing requests; wait a minute')
+  } catch {
+    return flagOn(env.LINK_LIMIT_REQUIRED) ? text(503, 'store: the pairing rate limiter did not answer') : null
+  }
+}
+
+/** `POST /api/link/start` — begin a pairing. No credential, by design (R1). */
+async function linkStart(req, env, url) {
+  if (!(req.headers.get('content-type') || '').toLowerCase().includes('application/json')) return text(400, 'content-type')
+  const declared = Number(req.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > LINK_BODY_MAX) return text(400, 'size')
+  const raw = await req.text()
+  if (raw.length > LINK_BODY_MAX) return text(400, 'size')
+  let body
+  try {
+    body = raw.trim() ? JSON.parse(raw) : {}
+  } catch {
+    return text(400, 'json')
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return text(400, 'json')
+  const label = body.label === undefined ? '' : body.label
+  if (typeof label !== 'string' || label.length > LABEL_MAX) return text(400, 'label')
+  const { code, handle, exp } = await startPairing(env, label)
+  // The URL is on the origin that was called, the way a deck link is: a
+  // person opens what the agent printed.
+  return json(200, {
+    code, handle,
+    url: `${url.origin}/link/${code}`,
+    expires: new Date(exp * 1000).toISOString(),
+  })
+}
+
+/**
+ * `GET /api/link/<handle>` — the agent's poll (R1).
+ *
+ * 202 while nobody has approved, 200 with the grant once, 200 without one for
+ * the poll after that (the raw token is never stored, so it cannot be
+ * repeated — see `pollPairing`), and 410 when the pairing is gone.
+ */
+async function linkPoll(env, handle) {
+  const res = await pollPairing(env, handle)
+  if (res.state === 'pending') return json(202, { state: 'pending' })
+  if (res.state === 'delivered') {
+    return json(200, {
+      state: 'delivered', grant: res.token, owner: res.owner,
+      expires: new Date(res.exp * 1000).toISOString(),
+    })
+  }
+  if (res.state === 'done') {
+    return json(200, {
+      state: 'collected',
+      message: 'This approval was already collected. If you did not receive the grant, start a new pairing.',
+    })
+  }
+  return json(410, { state: 'gone', message: 'This pairing is no longer open. Start a new one.' })
+}
+
+/**
+ * Is this POST from our own page? (KTD13.)
+ *
+ * The approval and revoke pages sit behind the human Access application, so
+ * Access attaches the assertion to ANY request carrying the session cookie —
+ * including a cross-site auto-submitting form on someone else's site. A
+ * browser sets `Sec-Fetch-Site` itself and a page cannot forge it, so that is
+ * the primary check; `Origin` covers a client that omits it. A request with
+ * neither header is not a browser form post and is refused.
+ */
+function sameOrigin(req, url) {
+  const site = (req.headers.get('sec-fetch-site') || '').toLowerCase()
+  if (site) return site === 'same-origin'
+  const origin = req.headers.get('origin')
+  return !!origin && origin === url.origin
+}
+
+/**
+ * Everything under the two Bypass prefixes, and nothing else.
+ *
+ * The pairing routes are public (the agent has no credential yet — that is
+ * what pairing is for) and rate-limited; U3 adds the publish routes, which
+ * take a bearer. Every path that is not an exactly routed method-and-path
+ * falls off the end as 401 with no body.
+ */
 async function agentRoutes(req, env, ctx, url, path, m) {
-  // U2 adds the pairing routes here (public, rate-limited) and U3 the publish
-  // routes behind `verifyGrant`. Until then every path under both prefixes
-  // takes the one answer this whole block exists to guarantee.
+  if (path === '/api/link/start' && m === 'POST') {
+    return (await rateLimited(req, env)) || linkStart(req, env, url)
+  }
+  const lp = /^\/api\/link\/([A-Za-z0-9_-]{43})$/.exec(path)
+  if (lp && m === 'GET') {
+    return (await rateLimited(req, env)) || linkPoll(env, lp[1])
+  }
   return empty(401)
+}
+
+/** The nonce out of an approval form's body. */
+async function formNonce(req) {
+  const raw = await req.text()
+  try {
+    return new URLSearchParams(raw).get('nonce') || ''
+  } catch {
+    return ''
+  }
 }
 
 // --- router --------------------------------------------------------------------
@@ -700,7 +835,28 @@ export default {
     // so both read this.
     const canCreate = flagOn(env.NEW_ENABLED) && (!env.STORE_HOST || url.hostname === env.STORE_HOST)
 
-    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }))
+    // The approval flow (U2). These sit HERE, behind the person gate, and not
+    // with the agent prefixes: the whole point is that Access has already
+    // established who is approving. A service token is refused above.
+    const lm = /^\/link\/([0-9A-Za-z]{10})$/.exec(path)
+    if (lm && m === 'GET') {
+      const pairing = await readPairing(env, lm[1])
+      if (!pairing) return text(410, 'This approval link has expired or has already been used.')
+      return html(linkPage(who.id, lm[1], pairing), NO_FRAMING)
+    }
+    const la = /^\/link\/([0-9A-Za-z]{10})\/approve$/.exec(path)
+    if (la && m === 'POST') {
+      if (!sameOrigin(req, url)) return text(403, 'This has to be approved from the store’s own page.')
+      const nonce = await formNonce(req)
+      // Read once, for the label the done page repeats back.
+      const pairing = await readPairing(env, la[1])
+      const outcome = await approvePairing(env, la[1], nonce, who.id)
+      if (outcome === 'nonce') return text(403, 'This approval form is out of date. Open the link again.')
+      if (outcome !== 'ok') return text(410, 'This approval link has expired or has already been used.')
+      return html(linkDonePage(who.id, pairing || {}), NO_FRAMING)
+    }
+
+    if (path === '/' && m === 'GET') return html(indexPage(await listDecks(env, url.origin), who.id, { create: canCreate }), NO_FRAMING)
     if (path === '/new' && m === 'GET') return html(newPage(who.id, { create: canCreate }))
     if (path === '/new/blank' && m === 'GET') {
       if (!canCreate) return empty(404)

@@ -162,11 +162,15 @@ export async function run(Miniflare) {
     // The grants (one-click publish plan, KTD3). KV, not R2: native expiry and
     // per-key reads are the whole reason a grant does not need a cron sweep.
     kvNamespaces: ['GRANTS'],
+    // The pairing routes are public, so they are rate-limited (KTD9).
+    // Miniflare implements the binding, so the rig proves the 429 as well as
+    // the body caps; OQ1 is answered yes.
+    ratelimits: { LINK_LIMIT: { namespace_id: '1001', simple: { limit: 10, period: 60 } } },
     bindings: {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN, ACCESS_AUDS: `${HUMAN_AUD},${SERVICE_AUD}`,
       PAGES_ORIGIN, NEW_ENABLED: 'on',
       STORE_HOST: 'slides.betamobility.ai', OLD_HOST: 'decks.betamobility.ai',
-      REDIRECT_OLD_HOST: 'on',
+      REDIRECT_OLD_HOST: 'on', LINK_LIMIT_REQUIRED: 'on',
     },
     outboundService: async (req) => {
       if (req.url === CERTS_URL) {
@@ -1125,6 +1129,205 @@ export async function run(Miniflare) {
     const grantEventsBefore = events.length
     await call('GET', '/api/publish/decks/0123456789', { headers: bearer(g1.token) })
     eq(events.length, grantEventsBefore, 'a refused agent request sends no analytics event')
+
+    // ------------------------------------------------ pairing (U2, KTD1/KTD2/KTD13)
+    //
+    // The device-authorization flow: the agent starts a pairing with no
+    // credential at all, the person approves it in the browser they are
+    // already signed into, and the agent's poll collects a grant. Two values,
+    // never one: whoever can see the approval URL holds the code, and only the
+    // agent holds the handle the grant is delivered to.
+    console.log('\npairing: start, the approval page, approve, poll (U2)')
+    // Every scenario gets its own client IP: the rate limiter keys on it, so
+    // sharing one would make an unrelated case trip the limit (KTD9).
+    let ipN = 0
+    const fromIp = () => ({ 'cf-connecting-ip': `10.0.0.${++ipN}` })
+    const startPair = (label, { headers = {}, body } = {}) => call('POST', '/api/link/start', {
+      headers: { 'content-type': 'application/json', ...fromIp(), ...headers },
+      body: body !== undefined ? body : JSON.stringify(label === undefined ? {} : { label }),
+    })
+    const pollPair = (handle, extra = {}) => call('GET', `/api/link/${handle}`, { headers: { ...fromIp(), ...extra } })
+    const nonceIn = (page) => (/name="nonce" value="([^"]+)"/.exec(page) || [])[1]
+    const sameOrigin = { 'sec-fetch-site': 'same-origin' }
+    // The value's own clock is what expires a pairing, so the rig can retire
+    // one without waiting ten minutes. Only `exp` is touched.
+    const expireKey = async (key) => {
+      const v = JSON.parse(await kv.get(key))
+      v.exp = Math.floor(Date.now() / 1000) - 5
+      await kv.put(key, JSON.stringify(v))
+    }
+
+    r = await startPair('Claude (Cowork)')
+    eq(r.status, 200, 'POST /api/link/start needs no credential of any kind')
+    const pair = await r.json()
+    ok(/^[0-9A-Za-z]{10}$/.test(pair.code), 'start hands back a ten-character code')
+    ok(typeof pair.handle === 'string' && pair.handle.length >= 43, 'and a longer handle, which no person ever types')
+    ok(pair.handle !== pair.code, 'the code and the handle are two different values (KTD1)')
+    eq(pair.url, `${ORIGIN}/link/${pair.code}`, 'the approval URL is the code on the store host')
+    ok(Number.isFinite(Date.parse(pair.expires)), 'and it says when the code dies')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 202, 'a poll before approval is 202')
+    let pollBody = await r.text()
+    ok(!/grant/i.test(pollBody) || !/[A-Za-z0-9_-]{43}/.test(pollBody), 'and carries no grant material')
+
+    console.log('\nthe approval page: what it says, and what it refuses (U2, R3/R19)')
+    r = await call('GET', `/link/${pair.code}`)
+    eq(r.status, 401, 'the approval page is behind Access: no assertion is 401')
+    r = await call('GET', `/link/${pair.code}`, { as: 'service' })
+    eq(r.status, 403, 'and a service token is not a person: 403')
+    r = await call('GET', `/link/${pair.code}`, { as: 'alice' })
+    eq(r.status, 200, 'a signed-in person gets the page')
+    const approvePage = await r.text()
+    ok(approvePage.includes('publish decks as you'), 'it says what is being granted')
+    ok(approvePage.includes('8 hours'), 'it says for how long')
+    ok(approvePage.includes('Approve only if you asked an agent to publish in the last few minutes.'),
+      'it says when not to approve')
+    ok(approvePage.includes('&quot;Claude (Cowork)&quot;'), "the agent's label is shown as quoted, escaped text")
+    ok(/Started/.test(approvePage), 'it says when the pairing was started')
+    ok(approvePage.includes('alice@betamobility.io'), 'the page shows WHO would be granted: the signed-in identity')
+    ok(!approvePage.includes(pair.handle), 'and never the handle, which is the agent’s alone')
+    ok(!approvePage.includes('plausible.io'), 'no analytics on a page whose URL carries the code')
+    eq(r.headers.get('x-frame-options'), 'DENY', 'the approval page cannot be framed')
+    ok(/frame-ancestors 'none'/.test(r.headers.get('content-security-policy') || ''), 'and says so in CSP too')
+    const nonce = nonceIn(approvePage)
+    ok(!!nonce, 'the form carries a nonce')
+
+    // AE7: a cross-site form carrying the person's session must not approve.
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'approve from another site is 403, even with a valid session')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' },
+      body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'and a foreign Origin is 403 as well')
+    r = await pollPair(pair.handle)
+    eq(r.status, 202, 'after a refused cross-site approve the code is still pending')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: 'nonce=wrong',
+    })
+    eq(r.status, 403, 'approve with the wrong nonce is 403')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: '',
+    })
+    eq(r.status, 403, 'and approve with no nonce at all is 403')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 401, 'approve with no assertion is 401')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'service', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 403, 'approve with a service token is 403: only a person consents')
+
+    console.log('\napproval, delivery, and the grant that comes out (U2, F1/AE9)')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 200, 'alice approves, same-origin, with the nonce')
+    const donePage = await r.text()
+    ok(/close this tab/i.test(donePage), 'and is told she can close the tab')
+
+    // AE9: approved, not yet polled — the namespace holds nothing usable.
+    const beforeDelivery = await kv.list({})
+    let usable = 0
+    for (const k of beforeDelivery.keys) {
+      const v = (await kv.get(k.name)) || ''
+      for (const cand of v.match(/[A-Za-z0-9_-]{43}/g) || []) {
+        if (await verifyGrant(asReq(bearer(cand)), grantEnv)) usable++
+      }
+    }
+    eq(usable, 0, 'between approval and the first poll, no stored value is a usable grant (AE9)')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 200, 'the first poll after approval is 200')
+    const delivered = await r.json()
+    eq(delivered.owner, 'alice@betamobility.io', 'the grant names the person who approved')
+    ok(Number.isFinite(Date.parse(delivered.expires)), 'and says when it ends')
+    const aliceGrant = await verifyGrant(asReq(bearer(delivered.grant)), grantEnv)
+    eq(aliceGrant?.id, 'alice@betamobility.io', 'the delivered grant verifies as alice')
+
+    r = await pollPair(pair.handle)
+    eq(r.status, 200, 'a second poll is still answered, so a dropped connection is not a silent loss')
+    const second2 = await r.json()
+    ok(!second2.grant, 'but it carries no grant: the raw token was never stored (R21)')
+    r = await pollPair(pair.handle)
+    eq(r.status, 410, 'a third poll is 410: the handle is gone')
+    r = await pollPair('x'.repeat(43))
+    eq(r.status, 410, 'an unknown handle is 410')
+
+    console.log('\na pairing is single-use, and short-lived (U2, R4/F4)')
+    r = await call('GET', `/link/${pair.code}`, { as: 'alice' })
+    eq(r.status, 410, 'the code is single-use: its page is gone once approved')
+    r = await call('POST', `/link/${pair.code}/approve`, {
+      as: 'alice', headers: { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }, body: `nonce=${nonce}`,
+    })
+    eq(r.status, 410, 'and approving it a second time is 410')
+    r = await call('GET', '/link/0000000000', { as: 'alice' })
+    eq(r.status, 410, 'a code nobody minted is 410')
+
+    const stalePair = await (await startPair('stale')).json()
+    await expireKey(`link:${stalePair.code}`)
+    r = await call('GET', `/link/${stalePair.code}`, { as: 'alice' })
+    eq(r.status, 410, 'an expired code has no approval page')
+    await expireKey(`handle:${stalePair.handle}`)
+    r = await pollPair(stalePair.handle)
+    eq(r.status, 410, 'and its handle polls 410, so the agent learns nobody approved (F4)')
+
+    console.log('\nthe pairing values are not credentials anywhere else (AE4)')
+    const unapproved = await (await startPair('unapproved')).json()
+    for (const cred of [unapproved.code, unapproved.handle]) {
+      const rr = await call('GET', '/api/publish/decks/0123456789', { headers: { authorization: `Bearer ${cred}` } })
+      eq(rr.status, 401, 'a pairing code or handle used as a bearer on the publish path is 401')
+    }
+
+    console.log('\nthe start endpoint is public, so it is capped (U2, R5/KTD9)')
+    r = await startPair(undefined, { body: 'not json' })
+    eq(r.status, 400, 'a body that is not JSON is 400')
+    r = await startPair(undefined, { headers: { 'content-type': 'text/plain' }, body: '{}' })
+    eq(r.status, 400, 'a request that is not application/json is 400')
+    r = await startPair(undefined, { body: JSON.stringify({ label: 'x'.repeat(200) }) })
+    eq(r.status, 400, 'a label over 80 characters is 400')
+    r = await startPair(undefined, { body: JSON.stringify({ label: 'a', pad: 'x'.repeat(2048) }) })
+    eq(r.status, 400, 'a body over 1 KB is 400')
+    r = await startPair(undefined, { body: JSON.stringify({}) })
+    eq(r.status, 200, 'a start with no label at all is fine')
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: JSON.stringify({ label: '<script>alert(1)</script>' }) })
+    const evil = await r.json()
+    r = await call('GET', `/link/${evil.code}`, { as: 'alice' })
+    const evilPage = await r.text()
+    ok(!evilPage.includes('<script>alert(1)</script>'), "a label's markup never reaches the page as markup")
+    ok(evilPage.includes('&lt;script&gt;'), 'it is shown escaped, as what the agent called itself')
+
+    console.log('\nthe rate limiter is required in production (U2, KTD9)')
+    const burstIp = { 'cf-connecting-ip': '198.51.100.7' }
+    let limited = 0
+    for (let i = 0; i < 12; i++) {
+      const rr = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...burstIp }, body: '{}' })
+      if (rr.status === 429) limited++
+    }
+    ok(limited > 0, 'a burst from one address is refused with 429')
+    // A handle of the right SHAPE that names no pairing: the limiter answers
+    // before the lookup, so the poll route is limited on the same key. (A
+    // misshapen handle is the 401 above and never costs a KV read at all.)
+    r = await call('GET', `/api/link/${'n'.repeat(43)}`, { headers: burstIp })
+    eq(r.status, 429, 'and the poll route is limited on the same key')
+
+    await mf.setOptions({ ...mfOptions, ratelimits: undefined })
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: '{}' })
+    eq(r.status, 503, 'with LINK_LIMIT_REQUIRED on and no binding, start is 503 rather than unguarded')
+    await mf.setOptions({ ...mfOptions, ratelimits: undefined, bindings: { ...mfOptions.bindings, LINK_LIMIT_REQUIRED: 'off' } })
+    r = await call('POST', '/api/link/start', { headers: { 'content-type': 'application/json', ...fromIp() }, body: '{}' })
+    eq(r.status, 200, 'with the flag off (the rig, wrangler dev) it runs without one')
+    await mf.setOptions(mfOptions)
+
+    console.log('\nthe index cannot be framed either (KTD13)')
+    r = await call('GET', '/', { as: 'alice' })
+    eq(r.headers.get('x-frame-options'), 'DENY', 'the index carries x-frame-options DENY')
+    ok(/frame-ancestors 'none'/.test(r.headers.get('content-security-policy') || ''), 'and frame-ancestors none')
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

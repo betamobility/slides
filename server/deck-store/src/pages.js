@@ -18,6 +18,8 @@
 // inlined: cream surface, charcoal ink, Playfair Display for the one
 // headline, Inter for body, DM Mono for numbers and tags.
 
+import { GRANT_TTL_S } from './grant.js'
+
 export const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -96,7 +98,10 @@ button.secondary{background:transparent;color:var(--color-on-surface)}
 footer{margin-top:3rem;font-size:.875rem;color:var(--color-on-surface-subtle)}
 `
 
-const head = (title) => `<!doctype html>
+// `analytics: false` for the pairing pages: their URL carries the pairing
+// code, and a third-party script on the page would send that path to
+// plausible.io. Nothing else about the pages differs.
+const head = (title, { analytics = true } = {}) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -105,7 +110,7 @@ const head = (title) => `<!doctype html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500&family=Inter:wght@400;500&family=DM+Mono:wght@400&display=swap">
 <style>${CSS}</style>
-${PLAUSIBLE}
+${analytics ? PLAUSIBLE : ''}
 </head>`
 
 function fmtSize(n) {
@@ -318,6 +323,77 @@ ${create ? `<script>
   else $('intro').textContent = 'Open this page from a deck: Share panel, Save to Beta.'
 })()
 </script>
+</body>
+</html>
+`
+}
+
+/**
+ * `GET /link/<code>` — the one click (one-click publish plan, KTD11, R2/R3).
+ *
+ * THE PAGE CANNOT KNOW WHO STARTED THE PAIRING and does not pretend to. A
+ * pairing is started with no credential at all, so the only honest things to
+ * show are what a grant reaches, how long it lasts, when this pairing was
+ * started, and what the agent called itself — the last as quoted, escaped
+ * text, because a label is a string a caller chose.
+ *
+ * So the copy is fixed and carries the meaning. "Approve only if you asked an
+ * agent to publish in the last few minutes" is the defence against a phished
+ * approval, together with the start time: the whole flow is a person clicking
+ * seconds after they asked for a deck.
+ *
+ * The form's nonce is the pairing's own, stored beside the code, and the
+ * worker takes the POST only from this origin (KTD13) — an Access session
+ * cookie travels on a cross-site form submission, so same-origin is the check
+ * that makes the click a consent rather than a forgery.
+ */
+export function linkPage(who, code, { label = '', created = '', nonce = '' } = {}) {
+  const hours = Math.round(GRANT_TTL_S / 3600)
+  return `${head('Approve agent access', { analytics: false })}
+<body>
+<main>
+<header>
+<div><div class="mark">beta/slides</div><h1>Approve agent access</h1></div>
+<div class="who">${esc(who)}</div>
+</header>
+<div class="card">
+<p>Whoever started this pairing will be able to publish decks as you for ${hours} hours. Approve only if you asked an agent to publish in the last few minutes.</p>
+<dl>
+<dt>Asked for by</dt><dd>${label ? `&quot;${esc(label)}&quot;` : '<span class="muted">an agent that gave no name</span>'}</dd>
+<dt>Started</dt><dd class="num">${esc(fmtTime(created))}</dd>
+<dt>Can</dt><dd>create decks, and read and change any deck by its link</dd>
+<dt>Cannot</dt><dd>list the store, delete a deck, or read a deck's live-session keys</dd>
+</dl>
+<form method="post" action="/link/${esc(code)}/approve">
+<input type="hidden" name="nonce" value="${esc(nonce)}">
+<div class="row">
+<button type="submit">Approve for ${hours} hours</button>
+<span class="muted">Close this tab to refuse.</span>
+</div>
+</form>
+</div>
+<footer>You can end this access at any time from <a href="/">the deck list</a>.</footer>
+</main>
+</body>
+</html>
+`
+}
+
+/** The page after the click. Nothing to do here, and it says so. */
+export function linkDonePage(who, { label = '' } = {}) {
+  const hours = Math.round(GRANT_TTL_S / 3600)
+  return `${head('Approved', { analytics: false })}
+<body>
+<main>
+<header>
+<div><div class="mark">beta/slides</div><h1>Approved</h1></div>
+<div class="who">${esc(who)}</div>
+</header>
+<div class="card">
+<p>${label ? `&quot;${esc(label)}&quot;` : 'The agent'} can publish decks as you for the next ${hours} hours. Go back to where you asked for the deck; you can close this tab.</p>
+<p class="muted">End this access at any time from <a href="/">the deck list</a>.</p>
+</div>
+</main>
 </body>
 </html>
 `
