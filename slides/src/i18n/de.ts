@@ -809,6 +809,7 @@ export const de: Catalog = {
   "The store tab gave no answer — timed out": "Der Speicher-Tab hat nicht geantwortet — Zeitüberschreitung",
   "The store tab was closed before the deck was saved": "Der Speicher-Tab wurde geschlossen, bevor die Präsentation gespeichert war",
   "This deck changed in the store. Reload to get the latest version before saving.": "Diese Präsentation wurde im Speicher geändert. Laden Sie neu, um die neueste Version zu erhalten, bevor Sie speichern.",
+  "This deck was updated in the store. You now have the latest version.": "Diese Präsentation wurde im Speicher aktualisiert. Sie haben jetzt die neueste Version.",
   "After the reload, you can keep your unsaved edits as a new deck.": "Nach dem Neuladen können Sie Ihre nicht gespeicherten Änderungen als neue Präsentation behalten.",
   "This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.": "Diese Präsentation wurde im Speicher geändert, nachdem Ihre nicht gespeicherten Änderungen von {when} entstanden sind. Behalten Sie sie als neue Präsentation oder verwerfen Sie sie.",
   "Save my version as a new deck": "Meine Version als neue Präsentation speichern",

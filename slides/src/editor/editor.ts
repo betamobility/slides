@@ -19,7 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
-import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, recoveryChoice, saveToDisk, setLiveCheck, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { paletteSignature, resolveThemeRefs } from '../palette'
 import { SlideCanvas } from './canvas'
@@ -54,6 +54,10 @@ const SAVE_NOTICE_KEY = 'bento-save-notice'
  *  version that boots next. Deliberately NOT localStorage — see
  *  noticeIfJustUpdated. */
 const JUST_UPDATED_KEY = 'bento-just-updated'
+
+/** BETA FORK. sessionStorage: the slide a tab was on when it reloaded onto a
+ *  newer store version (followStore), read once by the boot that follows. */
+const STORE_RELOADED_KEY = 'bento-store-reloaded'
 
 /** How long a finger must rest before a press becomes a menu. 500ms is what
  *  iOS itself uses for the callout, so it matches the muscle memory already on
@@ -111,6 +115,7 @@ export class Editor {
       if (store.dirty) ev.preventDefault()
     })
     this.wireAutosave()
+    this.wireStoreWatch() // BETA FORK
     this.wirePaste()
     this.wireContextMenu()
     store.on('doc', () => this.syncLinkedCharts())
@@ -2285,6 +2290,78 @@ export class Editor {
    *  an encrypted deck: it is never snapshotted, so nothing would be offered. */
   private storeConflictMessage(err: StoreConflictError): string {
     return isEncryptionActive() ? err.message : `${err.message} ${t('After the reload, you can keep your unsaved edits as a new deck.')}`
+  }
+
+  /**
+   * BETA FORK: an idle tab follows the store. Claude can replace a deck while
+   * someone has it open, and until now the tab only found out when its next
+   * save was refused, by which time it held edits that could no longer be
+   * saved in place. A tab with nothing unsaved reloads onto the new version
+   * instead, so the person keeps working on what Claude wrote.
+   *
+   * Asked every 15 seconds while the tab is visible, and at once when it
+   * becomes visible or takes focus: coming back from the terminal where
+   * Claude was working is the moment that matters.
+   */
+  private storeWatchBusy = false
+  private wireStoreWatch() {
+    const id = storeIdFromLocation()
+    if (!isStoreOrigin() || !id || this.store.doc.readonly) return
+    this.noteStoreReload()
+    const check = () => { void this.followStore(id) }
+    window.setInterval(check, 15_000)
+    document.addEventListener('visibilitychange', check)
+    window.addEventListener('focus', check)
+  }
+
+  /**
+   * Nothing a reload would cost. Unsaved edits are the obvious part; the rest
+   * is work that is not in the document yet (an open caret, a half-typed
+   * panel field, a drawing gesture, a dialog) or a moment that must not be
+   * interrupted (a show, a recovery banner waiting for an answer). An
+   * encrypted deck would ask for its password again, so it is left alone.
+   */
+  private idleForStoreReload(): boolean {
+    if (document.visibilityState !== 'visible') return false
+    if (this.store.dirty || this.storeConflict || this.presenting || isEncryptionActive()) return false
+    if (this.canvas.isEditingText || this.canvas.isDrawing) return false
+    const a = document.activeElement as HTMLElement | null
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return false
+    return !document.querySelector('.ed-recover, .ed-about-overlay')
+  }
+
+  private async followStore(id: string) {
+    if (this.storeWatchBusy || !this.idleForStoreReload()) return
+    this.storeWatchBusy = true
+    try {
+      const probe = await probeStore(id)
+      if (!reloadChoice({ probe, live: onlineTransport()?.status === 'open' })) return
+      if (!this.idleForStoreReload()) return // the answer took a moment; look again
+      // The recovery snapshot is this tab's last saved state, which the store's
+      // new version now differs from. Left in place, the reload would offer it
+      // as "unsaved changes", and Restore would save it over what Claude wrote
+      // with a fresh ETag and no 412. It holds nothing the store did not have.
+      clearTimeout(this.autosaveTimer)
+      await clearRecovery(this.store.doc.docId)
+      try { sessionStorage.setItem(STORE_RELOADED_KEY, this.store.slide.id) } catch { /* private mode */ }
+      location.reload()
+    } finally {
+      this.storeWatchBusy = false
+    }
+  }
+
+  /** After that reload: back to the slide the person was on, and one line on
+   *  why the page blinked. */
+  private noteStoreReload() {
+    let slideId: string | null = null
+    try {
+      slideId = sessionStorage.getItem(STORE_RELOADED_KEY)
+      sessionStorage.removeItem(STORE_RELOADED_KEY)
+    } catch { /* private mode */ }
+    if (slideId === null) return
+    const i = this.store.doc.slides.findIndex((s) => s.id === slideId)
+    if (i >= 0) this.store.goTo(i)
+    this.toast(t('This deck was updated in the store. You now have the latest version.'), 6000)
   }
 
   /** Keep the dirty dot's tooltip honest about the backstop — the file is still

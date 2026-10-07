@@ -807,6 +807,7 @@ export const pt: Catalog = {
   "The store tab gave no answer — timed out": "A aba do repositório não respondeu — tempo esgotado",
   "The store tab was closed before the deck was saved": "A aba do repositório foi fechada antes de a apresentação ser salva",
   "This deck changed in the store. Reload to get the latest version before saving.": "Esta apresentação mudou no repositório. Recarregue para obter a versão mais recente antes de salvar.",
+  "This deck was updated in the store. You now have the latest version.": "Esta apresentação foi atualizada no repositório. Agora você tem a versão mais recente.",
   "After the reload, you can keep your unsaved edits as a new deck.": "Depois de recarregar, você pode manter suas alterações não salvas como uma nova apresentação.",
   "This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.": "Esta apresentação mudou no repositório depois das suas alterações não salvas de {when}. Mantenha-as como uma nova apresentação ou descarte-as.",
   "Save my version as a new deck": "Salvar minha versão como nova apresentação",

@@ -75,6 +75,11 @@
 // overwrite the store change without a 412. `recoveryChoice` makes the editor
 // offer that snapshot as a new deck instead.
 //
+// BEFORE A CONFLICT. A tab with nothing unsaved has no reason to wait for its
+// next save to find out. `probeStore` asks with a HEAD whether the deck moved
+// on, and `reloadChoice` says whether an idle tab may reload onto it. The
+// editor owns the timer and decides what idle means; nothing here starts one.
+//
 // Every request goes through kernel net.ts — scripts/test-offline.ts refuses
 // a `fetch(` anywhere else, and the offline switch must cover the store too.
 
@@ -259,6 +264,60 @@ function adoptVersion(id: string, res: Response): void {
   const gen = etag ? genOf(res) : null
   if (gen !== null) gens.set(id, gen)
   else gens.delete(id)
+}
+
+/**
+ * What a look at the store found, against the version this tab holds:
+ * `same`; `service` (a service wrote since, which never travels through
+ * sync); `changed` (the deck differs and no service write is known, so a
+ * person saved it); `unknown` (no version to compare, a latched tab, signed
+ * out, offline, or a worker without ETags).
+ */
+export type StoreProbe = 'same' | 'changed' | 'service' | 'unknown'
+
+/**
+ * Ask the store whether the open deck moved on. Never rejects and never
+ * changes what this tab believes its version is: the caller reloads or does
+ * nothing. Queued with the PUTs, because a HEAD that overlaps this tab's own
+ * save reads the save's new ETag before putDeckNow has adopted it, and that
+ * would look like someone else's change.
+ */
+export function probeStore(id: string): Promise<StoreProbe> {
+  const run = (queues.get(id) ?? Promise.resolve()).then(() => probeNow(id))
+  const tail = run.then(() => {}, () => {})
+  queues.set(id, tail)
+  void tail.then(() => { if (queues.get(id) === tail) queues.delete(id) })
+  return run
+}
+
+async function probeNow(id: string): Promise<StoreProbe> {
+  if (versionCheck) await versionCheck
+  const held = versions.get(id)
+  if (conflicted || !held) return 'unknown'
+  let res: Response
+  try {
+    res = await netFetch(`${storeHost()}/d/${encodeURIComponent(id)}`, { method: 'HEAD', credentials: 'same-origin', redirect: 'manual' })
+  } catch {
+    return 'unknown'
+  }
+  const etag = res.status === 200 ? etagOf(res) : null
+  if (!etag) return 'unknown'
+  if (etag === held) return 'same'
+  const heldGen = gens.get(id)
+  const gen = genOf(res)
+  return heldGen !== undefined && gen !== null && gen !== heldGen ? 'service' : 'changed'
+}
+
+/**
+ * May an idle tab reload itself onto the store's version? A service write
+ * always: nothing else will bring it to this tab. A person's save only when
+ * this tab is not live in its room. A live tab already holds that save through
+ * sync, and reloading on it would loop: every autosave of one collaborator
+ * would reload the other.
+ */
+export function reloadChoice(o: { probe: StoreProbe; live: boolean }): boolean {
+  if (o.probe === 'service') return true
+  return o.probe === 'changed' && !o.live
 }
 
 /** Replace the deck stored under `id`. The worker answers 200 with no body.

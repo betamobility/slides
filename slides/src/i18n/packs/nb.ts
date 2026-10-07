@@ -744,6 +744,7 @@ export const strings: Catalog = {
   "⌘S asks where to save, then rewrites that file in place": "⌘S spør hvor den skal lagres og skriver deretter over den filen direkte",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} er en tom kopi av Bento, ikke en lagret presentasjon. Åpne den alene for å begynne en.",
   "This deck changed in the store. Reload to get the latest version before saving.": "Denne presentasjonen er endret i lageret. Last inn på nytt for å få den nyeste versjonen før du lagrer.",
+  "This deck was updated in the store. You now have the latest version.": "Denne presentasjonen ble oppdatert i lageret. Du har nå den nyeste versjonen.",
   "After the reload, you can keep your unsaved edits as a new deck.": "Etter at du har lastet inn på nytt, kan du beholde de ulagrede endringene som en ny presentasjon.",
   "This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.": "Denne presentasjonen er endret i lageret etter de ulagrede endringene dine fra {when}. Behold dem som en ny presentasjon, eller forkast dem.",
   "Save my version as a new deck": "Lagre min versjon som ny presentasjon",

@@ -75,6 +75,15 @@ if (import.meta.url.endsWith('.ts')) {
   ok(/handoffToStore\(/.test(editor), 'editor.ts routes it through handoffToStore()')
   ok(/isStoreOrigin\(\)/.test(editor), 'editor.ts branches on isStoreOrigin()')
   ok(/setLiveCheck\(\(\) => onlineTransport\(\)\?\.status === 'open'\)/.test(editor), 'editor.ts tells the store whether this tab is live in its sync room')
+  // An idle tab follows the store: the rule is reloadChoice(), the gate is
+  // idleForStoreReload(), and the recovery snapshot goes BEFORE the reload, or
+  // the next boot offers it as unsaved changes and Restore overwrites the store.
+  const follow = /private async followStore\([\s\S]*?\n  }\n/.exec(editor)?.[0] ?? ''
+  ok(/reloadChoice\(\{ probe, live: onlineTransport\(\)\?\.status === 'open' \}\)/.test(follow), 'editor.ts reloads an idle tab only when reloadChoice() says so')
+  ok((follow.match(/idleForStoreReload\(\)/g) ?? []).length === 2, '…checking that the tab is idle before the probe and again after it')
+  ok(follow.indexOf('await clearRecovery(') > 0 && follow.indexOf('await clearRecovery(') < follow.indexOf('location.reload()'), '…and clearing the recovery snapshot before it reloads')
+  const idle = /private idleForStoreReload\([\s\S]*?\n  }\n/.exec(editor)?.[0] ?? ''
+  ok(/this\.store\.dirty/.test(idle) && /this\.presenting/.test(idle) && /isEditingText/.test(idle) && /isEncryptionActive\(\)/.test(idle), 'idle means: nothing unsaved, no show running, no open caret, not an encrypted deck')
   const main = readFileSync(join(root, 'slides/src/main.ts'), 'utf8')
   ok(/installStoreHost\(\)/.test(main), 'main.ts installs the store host at boot')
   const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8')
@@ -639,6 +648,87 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   ec = await rejects(() => save.writeUpdatedFile('live tab, old worker'))
   ok(ec instanceof store.StoreConflictError && calls.slice(mark).filter((c) => c.init.method === 'PUT').length === 1, `no x-bento-service-gen → person 412 + live still latches, no retry (${ec?.name})`)
   serveGen = true
+
+  // ---- an idle tab follows the store ---------------------------------------------
+  // The tab asks BEFORE its next save is refused. probeStore() only reports;
+  // reloadChoice() is the rule; the editor owns the timer and the reload.
+  console.log('\n§6b probeStore() and reloadChoice()')
+  const heldBy = async () => {
+    const before = calls.length
+    await save.writeUpdatedFile('what does this tab hold')
+    return header(calls.slice(before).filter((c) => c.init.method === 'PUT')[0], 'if-match')
+  }
+  await boot(false)
+  mark = calls.length
+  ok(await store.probeStore('abc123XYZ0') === 'same', 'nothing happened in the store → same')
+  const probes = calls.slice(mark)
+  ok(probes.length === 1 && probes[0].init.method === 'HEAD' && probes[0].url === `${STORE}/d/abc123XYZ0`, `…asked with one HEAD ${STORE}/d/<id> (${probes.map((c) => `${c.init.method} ${c.url}`).join(', ')})`)
+  ok(probes[0]?.init.redirect === 'manual' && probes[0]?.init.credentials === 'same-origin', "…with redirect: 'manual' and same-origin credentials")
+
+  otherTab('claude replaced this while the tab sat idle', 'service')
+  ok(await store.probeStore('abc123XYZ0') === 'service', 'Claude replaced the deck → service')
+  ok(await store.probeStore('abc123XYZ0') === 'service', '…and asking again says the same: a probe does not adopt the version')
+  ec = await rejects(() => save.writeUpdatedFile('a save after the probe'))
+  ok(ec instanceof store.StoreConflictError && decks.get('abc123XYZ0')?.bytes === 'claude replaced this while the tab sat idle', 'a save after that probe is still refused, so the probe cannot be how Claude\'s change gets overwritten')
+  ok(await store.probeStore('abc123XYZ0') === 'unknown', 'a latched tab → unknown (it is already telling the person to reload)')
+
+  await boot(false)
+  otherTab('a colleague saved', 'person')
+  ok(await store.probeStore('abc123XYZ0') === 'changed', 'a person saved → changed')
+
+  await boot(false)
+  otherTab('claude replaced this', 'service')
+  otherTab('then a person saved on top', 'person')
+  ok(await store.probeStore('abc123XYZ0') === 'service', 'a service write followed by a person\'s → still service: the generation moved')
+
+  // The tab's own save, still in flight when the timer fires. The HEAD must
+  // wait for it, or it reads the save's new ETag as someone else's change.
+  // The fake holds each PUT's answer back, so the store already has the new
+  // version while the tab still believes in the old one.
+  await boot(false)
+  respond(async (c) => {
+    const res = await fakeStore(c)
+    if (c.init.method === 'PUT') await new Promise((r) => setTimeout(r, 30))
+    return res
+  })
+  const racing = store.putDeck('abc123XYZ0', 'this tab is saving')
+  await new Promise((r) => setTimeout(r, 10)) // the PUT reached the store; its 200 is not back
+  ok(decks.get('abc123XYZ0')?.bytes === 'this tab is saving', 'the store holds the tab\'s save while the tab still waits for the answer')
+  const during = store.probeStore('abc123XYZ0')
+  await racing
+  respond(fakeStore)
+  ok(await during === 'same', 'a probe that overlaps this tab\'s own save waits for it and reports same')
+  ok(decks.get('abc123XYZ0')?.bytes === 'this tab is saving', '…and the save landed')
+  // …and a save queued behind a probe still goes out with the right version.
+  const before = decks.get('abc123XYZ0')!.etag
+  const [, held] = await Promise.all([store.probeStore('abc123XYZ0'), heldBy()])
+  ok(held === before, `a save queued behind a probe sends the version the tab held (${held} vs ${before})`)
+
+  serveGen = false
+  await boot(false)
+  otherTab('saved, old worker', 'service')
+  ok(await store.probeStore('abc123XYZ0') === 'changed', 'a worker without x-bento-service-gen → changed, never service')
+  serveGen = true
+
+  serveEtag = false
+  store.installStoreHost()
+  ok(await store.probeStore('abc123XYZ0') === 'unknown', 'a worker without ETags → unknown: nothing to compare')
+  serveEtag = true
+
+  await boot(false)
+  respond(async () => new Response(null, { status: 302, headers: { location: `${STORE}/login` } }))
+  ok(await store.probeStore('abc123XYZ0') === 'unknown', 'a login redirect instead of the deck → unknown')
+  respond(async () => { throw new TypeError('network down') })
+  ok(await store.probeStore('abc123XYZ0') === 'unknown', 'a rejected fetch → unknown, and the probe does not reject')
+  respond(async () => new Response(null, { status: 404 }))
+  ok(await store.probeStore('abc123XYZ0') === 'unknown', 'a 404 → unknown')
+  respond(fakeStore)
+
+  const reload = store.reloadChoice
+  ok(reload({ probe: 'service', live: false }) === true && reload({ probe: 'service', live: true }) === true, 'a service write reloads an idle tab, live or not')
+  ok(reload({ probe: 'changed', live: false }) === true, 'a person\'s save reloads a tab that is not live')
+  ok(reload({ probe: 'changed', live: true }) === false, 'a person\'s save does NOT reload a live tab: it holds that save through sync, and two tabs would reload each other on every autosave')
+  ok(reload({ probe: 'same', live: false }) === false && reload({ probe: 'unknown', live: false }) === false && reload({ probe: 'unknown', live: true }) === false, 'same and unknown never reload')
 }
 
 // ---- after a conflict, the recovery banner ----------------------------------------
