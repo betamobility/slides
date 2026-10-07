@@ -809,6 +809,7 @@ export const zhHans: Catalog = {
   "The store tab gave no answer — timed out": "存储库标签页没有响应 — 已超时",
   "The store tab was closed before the deck was saved": "演示文稿保存前存储库标签页已被关闭",
   "This deck changed in the store. Reload to get the latest version before saving.": "此演示文稿已在存储中被更改。请先重新加载以获取最新版本，然后再保存。",
+  "This deck was updated in the store. You now have the latest version.": "此演示文稿已在存储中更新。你现在看到的是最新版本。",
   "After the reload, you can keep your unsaved edits as a new deck.": "重新加载后，你可以将未保存的更改保留为新的演示文稿。",
   "This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.": "在你于 {when} 做出未保存的更改之后，此演示文稿已在存储中被更改。请将这些更改保留为新的演示文稿，或放弃它们。",
   "Save my version as a new deck": "将我的版本另存为新演示文稿",

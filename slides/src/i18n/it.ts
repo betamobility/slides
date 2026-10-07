@@ -809,6 +809,7 @@ export const it: Catalog = {
   "The store tab gave no answer — timed out": "La scheda dell’archivio non ha risposto — tempo scaduto",
   "The store tab was closed before the deck was saved": "La scheda dell’archivio è stata chiusa prima che la presentazione fosse salvata",
   "This deck changed in the store. Reload to get the latest version before saving.": "Questa presentazione è cambiata nell’archivio. Ricarica per ottenere l’ultima versione prima di salvare.",
+  "This deck was updated in the store. You now have the latest version.": "Questa presentazione è stata aggiornata nell’archivio. Ora hai l’ultima versione.",
   "After the reload, you can keep your unsaved edits as a new deck.": "Dopo il ricaricamento potrai conservare le modifiche non salvate come nuova presentazione.",
   "This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.": "Questa presentazione è cambiata nell’archivio dopo le tue modifiche non salvate del {when}. Conservale come nuova presentazione o scartale.",
   "Save my version as a new deck": "Salva la mia versione come nuova presentazione",
