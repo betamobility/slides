@@ -29,6 +29,13 @@ export function paletteFrom(theme) {
   }
 }
 
+// Every layout's transition, so every slide made from one starts with it.
+// 'none': the layouts share element ids (title, footer), so 'morph' as the
+// default made every slide change animate, wanted or not. The ids stay, and a
+// person or Claude sets 'morph' on the slides where the movement is the point.
+export const DEFAULT_TRANSITION = 'none'
+const T = DEFAULT_TRANSITION
+
 const HEADING = "'Playfair Display', Georgia, serif"
 const BODY = "'Inter', system-ui, sans-serif"
 const MONO = "'DM Mono', 'Courier New', monospace"
@@ -67,7 +74,7 @@ const chart = (pal, id, frame) => ({
   },
 })
 
-/** Footer chrome shared by every content layout: same ids, so it morphs. */
+/** Footer chrome shared by every content layout: same ids, so it can morph. */
 const footer = (pal) => [
   rect(pal, 'beta-foot-rule', { x: M, y: 640, w: BAND, h: 1 }, { fillSlot: 'tx2', opacity: 0.25 }),
   text(pal, 'beta-foot-company', '', { x: M, y: 652, w: 540, h: 28 },
@@ -80,7 +87,7 @@ export function betaLayouts(theme) {
   const pal = paletteFrom(theme)
   return [
     {
-      id: 'beta-title', name: 'Beta title', background: pal.bg1, transition: 'fade', notes: '',
+      id: 'beta-title', name: 'Beta title', background: pal.bg1, transition: T, notes: '',
       themeRefs: { background: 'bg1' },
       elements: [
         rect(pal, 'beta-orbit', { x: 1000, y: 96, w: 120, h: 120 },
@@ -96,7 +103,7 @@ export function betaLayouts(theme) {
       ],
     },
     {
-      id: 'beta-section', name: 'Beta section', background: pal.tx1, transition: 'morph', notes: '',
+      id: 'beta-section', name: 'Beta section', background: pal.tx1, transition: T, notes: '',
       themeRefs: { background: 'tx1' },
       elements: [
         text(pal, 'beta-kicker', 'Part 1', { x: M, y: 272, w: 640, h: 32 },
@@ -108,7 +115,7 @@ export function betaLayouts(theme) {
       ],
     },
     {
-      id: 'beta-two-col', name: 'Beta two columns', background: pal.bg1, transition: 'morph', notes: '',
+      id: 'beta-two-col', name: 'Beta two columns', background: pal.bg1, transition: T, notes: '',
       themeRefs: { background: 'bg1' },
       elements: [
         text(pal, 'beta-title-h', 'Slide title', { x: M, y: 72, w: BAND, h: 84 },
@@ -121,7 +128,7 @@ export function betaLayouts(theme) {
       ],
     },
     {
-      id: 'beta-chart-text', name: 'Beta chart + text', background: pal.bg1, transition: 'morph', notes: '',
+      id: 'beta-chart-text', name: 'Beta chart + text', background: pal.bg1, transition: T, notes: '',
       themeRefs: { background: 'bg1' },
       elements: [
         text(pal, 'beta-title-h', 'What the numbers say', { x: M, y: 72, w: BAND, h: 84 },
@@ -135,7 +142,7 @@ export function betaLayouts(theme) {
       ],
     },
     {
-      id: 'beta-hero', name: 'Beta hero', background: pal.tx1, transition: 'fade', notes: '',
+      id: 'beta-hero', name: 'Beta hero', background: pal.tx1, transition: T, notes: '',
       themeRefs: { background: 'tx1' },
       elements: [
         rect(pal, 'beta-hero-band', { x: 0, y: 0, w: CANVAS.width, h: 456 }, { fillSlot: 'accent3' }),
@@ -148,7 +155,7 @@ export function betaLayouts(theme) {
       ],
     },
     {
-      id: 'beta-closing', name: 'Beta closing', background: pal.bg1, transition: 'morph', notes: '',
+      id: 'beta-closing', name: 'Beta closing', background: pal.bg1, transition: T, notes: '',
       themeRefs: { background: 'bg1' },
       elements: [
         rect(pal, 'beta-orbit', { x: 1000, y: 96, w: 120, h: 120 }, { shape: 'ellipse', fillSlot: 'accent1' }),
