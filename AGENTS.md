@@ -162,6 +162,14 @@ verbatim; this section is what the fork adds. The plan of record is
    shells already on disk drive that handoff. Never point any of them at
    bento.page.
 
+## Documented solutions
+
+`docs/solutions/` holds write-ups of problems solved in this fork (design
+patterns, bugs, workflow), organised by category with YAML frontmatter
+(`module`, `tags`, `problem_type`). Relevant when working in an area one of
+them covers. `CONCEPTS.md` at the root defines the fork's deck-store
+vocabulary (store tab, service write, latched tab, grant).
+
 ## CLAUDE.md and AGENTS.md
 
 Per Beta's convention `AGENTS.md` is canonical and `CLAUDE.md` is the wrapper
