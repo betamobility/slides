@@ -116,6 +116,12 @@ editing an existing deck, never regenerate `docId`.
 6. **Live content goes in an `embed` element** only when the brief needs a
    live surface, and always with a static `view` (SVG) so it renders offline
    and prints. The guide's "Beta build" section has the shape.
+7. **The default transition is `"none"`.** Every slide you write carries
+   `"transition": "none"` unless the movement is the point. The Beta layouts
+   share element ids, so a `morph` set by habit animates every slide change.
+   Set `"morph"` only on a slide where shared elements should visibly travel
+   (a before/after, a process step, a code walkthrough), and say that you did.
+   The guide's advice to morph consecutive slides applies inside that limit.
 
 ## Native slides
 

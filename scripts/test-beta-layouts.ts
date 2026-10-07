@@ -81,7 +81,13 @@ for (const ly of layouts) {
 console.log('\nmorph chrome')
 const withFooter = layouts.filter((l) => l.elements.some((e) => e.id === 'beta-foot-page'))
 ok(withFooter.length >= 3, `${withFooter.length} layouts share the footer ids (beta-foot-company, beta-foot-page)`)
-ok(layouts.every((l) => l.elements.some((e) => e.id === 'beta-title-h')), 'every layout has a beta-title-h so titles morph slide to slide')
+ok(layouts.every((l) => l.elements.some((e) => e.id === 'beta-title-h')), 'every layout has a beta-title-h so titles can morph slide to slide')
+
+console.log('\ndefault transition')
+ok(layouts.every((l) => l.transition === 'none'), `every layout's transition is none (${layouts.map((l) => l.transition).join(', ')})`)
+for (const [name, doc] of Object.entries(betaTemplates(fragment) as Record<string, BentoDoc>)) {
+  ok(doc.slides.every((s) => s.transition === 'none'), `${name}: every slide's transition is none`)
+}
 
 console.log('\ntemplates')
 const built = betaTemplates(fragment) as Record<string, BentoDoc>
@@ -121,6 +127,7 @@ ok(!starter.template && !('docId' in starter) && !('collab' in starter), 'the Be
 ok(starter.slides.length >= 3 && starter.layouts!.length === 6, `the starter has ${starter.slides.length} slides and all six layouts`)
 const sres = validateDoc(JSON.parse(JSON.stringify({ ...starter, docId: 'starter' })) as BentoDoc)
 ok(!sres.findings.some((f: { severity: string }) => f.severity === 'error'), 'the starter validates with no errors')
+ok(starter.slides.every((s) => s.transition === 'none'), "every starter slide's transition is none")
 const gen = readFileSync(join(root, 'slides/src/starter/beta.generated.ts'), 'utf8')
 ok(gen.includes(JSON.stringify(JSON.stringify(starter).replace(/</g, '\\u003c'))), 'slides/src/starter/beta.generated.ts is current (run build-beta-starter.mjs)')
 
