@@ -6731,3 +6731,41 @@ Two smaller decisions from the same review:
   minted grant leaves a live credential nobody holds and nobody knows to end.
 
 Plan of record: `docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md`.
+
+## 2026-10-07 — BETA FORK: an idle store tab follows the store, and a live tab never reloads on a person's save
+
+Extends the 2026-09-14 entry's conditional writes to the tab that has NOT yet
+tried to save. Until #37 a tab learned that Claude had replaced its deck only
+when its next save was refused, by which time it held edits it could no longer
+save in place. A tab with nothing unsaved now asks the store (`HEAD /d/<id>`,
+every 15 seconds while visible and at once on focus) and reloads onto the newer
+version. No worker change.
+
+Three rules, each of which the obvious version gets wrong:
+
+1. **A live tab does not reload on a person's save; it does on a service
+   write.** Two tabs in one sync room both autosave, so "the ETag moved and I am
+   clean" would make each reload on the other's every save. A person's save
+   reaches a live tab through sync; Claude's store replace never does. The
+   generation (`x-bento-service-gen`) tells them apart. Do not "simplify" this
+   to any-change-reloads.
+2. **The recovery snapshot is cleared before the reload.** It is the tab's last
+   saved state. Left in place, the next boot offers it as unsaved changes with
+   no conflict marker, and Restore saves it over Claude's version with a fresh
+   ETag and no 412: the 2026-09-14 hazard, reached without a conflict.
+3. **The probe is queued with the PUTs and never adopts a version.** A HEAD that
+   overlaps the tab's own save reads that save's new ETag as someone else's
+   change. A failed or unreadable probe is `unknown`, and `unknown` never
+   reloads.
+
+Reload, never `replaceDoc` in place: the replace would schedule an autosave
+that writes Claude's content straight back as a person's.
+
+Unchanged: a tab with unsaved edits is refused and latches exactly as before,
+and a deck in a live session while Claude writes is still unsupported. KTD12's
+accepted gap also stands (a change landing between the page GET and the boot
+HEAD is invisible to the probe too).
+
+How it was verified before a release, the idle gate, and the race test that
+passed against broken code until the fake held the PUT's answer back:
+`docs/solutions/design-patterns/idle-tab-follows-the-store-auto-reload.md`.
