@@ -65,3 +65,15 @@ A Bento deck embeds its faces, so the HTML file renders identically everywhere. 
 | DM Mono | code and data callouts | https://fonts.google.com/specimen/DM+Mono |
 
 Without them PowerPoint substitutes a system face; the layout survives, the character does not. The commercial faces in Beta's wider brand (PP Editorial New, Neue Montreal) are not used here because a deck is a redistributed file and their licences do not travel with it.
+
+## General template — design system v1.3.1
+
+`general.bento.html` is the single recommended template for new presentations. Its 23 populated slides have matching editable layouts. Duplicate the examples or apply the blank layouts: covers, chapters, text, bullets, two columns, centered statements, colored callouts, steps, five photographic compositions, icons, comparisons, quotes, charts, thanks and contact. No eyebrow headings. Images and chart values are illustrative placeholders.
+
+The source is `scripts/lib/beta-general.mjs`; the versioned asset snapshot is `beta/v131/`. Run the existing template builder after building the shell. The legacy template filenames and saved decks are preserved for compatibility; this additive library does not rebrand existing documents.
+
+Geist 400/500 is embedded under the included OFL licence. Serif openings use local Times New Roman/Times, the system-family fallback to the licensed display face; Slides does not support the website's font-face metric override, so the deck uses explicit slide geometry. No commercial font files are redistributed. PowerPoint recipients need Geist installed. The existing exporter keeps text and chart data editable; logos/icons/gradients become pictures, and CSS animation has a static fallback. The presenter’s reduced-motion setting disables the chapter animation.
+
+Canvas: 1280×720; content margin 64px. Body 24–36px, working headings 42px, expressive serif titles 68–100px. Logo: x 42⅔px, bottom 32px, height 21⅓px. The editor's legacy 96px margin heuristic reports informational notes for this deliberate 64px grid.
+
+Verification: `node scripts/test-beta-general.ts` checks geometry, logo placement, source identity, native document validation and a 23-slide editable PowerPoint export. `node scripts/test-beta-templates-current.ts` verifies every generated template embeds the current built shell.

@@ -245,6 +245,7 @@ jobs:
         # to the shell's — the same check publish-site.mjs runs), so a template
         # built from an older shell can never pass as current.
         run: |
+          node scripts/test-beta-general.ts
           node scripts/test-beta-layouts.ts
           node scripts/test-beta-templates-current.ts
           node scripts/build-beta-starter.mjs --check

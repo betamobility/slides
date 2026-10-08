@@ -73,10 +73,8 @@ Prefer a Beta template; fall back to the bare Beta shell. Never download from
 bento.page: that shell has upstream's identity and self-updates from upstream.
 
 ```bash
-# a branded starter (pick the closest shape; each carries the Beta theme, fonts and layouts)
-curl -fsSL https://slides.betamobility.ai/templates/client-pitch.bento.html   -o "<Topic>.bento.html"
-curl -fsSL https://slides.betamobility.ai/templates/insight-brief.bento.html  -o "<Topic>.bento.html"
-curl -fsSL https://slides.betamobility.ai/templates/workshop.bento.html       -o "<Topic>.bento.html"
+# the general template: choose a layout within this deck
+curl -fsSL https://slides.betamobility.ai/templates/general.bento.html   -o "<Topic>.bento.html"
 
 # or the bare Beta build, then apply the theme fragment from agents.md "Beta build"
 curl -fsSL https://slides.betamobility.ai/releases/slides/Bento_Slides.bento.html -o "<Topic>.bento.html"
@@ -748,3 +746,5 @@ run the command again. Never work around it.
 - [ ] A code walkthrough keeps one element id across its steps, with
       `morph` on every step after the first, and no line clipped at the box?
 - [ ] PPTX exported and its degrade report reported to the user?
+
+For new decks use the general v1.3.1 template: 23 editable layout examples, embedded Geist, no eyebrows, white/sage/peach/deep surfaces and the standard bottom-left logo. Older template URLs remain compatibility assets. The general template becomes publicly available when the maintainer publishes the template release.

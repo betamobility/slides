@@ -15,6 +15,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { generalTemplate } from './lib/beta-general.mjs'
 import { betaTemplates } from './lib/beta-layouts.mjs'
 // The splice lives in the plugin now (runtime-slides plan, KTD11), because
 // the splice tool that ships there needs it and may import nothing outside.
@@ -34,7 +35,7 @@ const shell = readFileSync(shellPath, 'utf8')
 const fragment = JSON.parse(readFileSync(join(root, 'beta/theme.json'), 'utf8'))
 
 mkdirSync(outDir, { recursive: true })
-for (const [name, doc] of Object.entries(betaTemplates(fragment))) {
+for (const [name, doc] of Object.entries({ ...betaTemplates(fragment), general: generalTemplate() })) {
   if ('docId' in doc || 'collab' in doc) throw new Error(`${name}: a template must not carry docId or collab`)
   const file = join(outDir, `${name}.bento.html`)
   const html = spliceDoc(shell, doc)
