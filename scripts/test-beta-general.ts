@@ -19,9 +19,13 @@ assert.equal(doc.template,true);assert.ok(!doc.docId&&!doc.collab)
 assert.equal(doc.beta.tokens,'1.3.1');assert.equal(doc.theme.background,'#FFFFFF')
 const findings=validateDoc(doc).findings;const errors=findings.filter((f:any)=>f.severity==='error');assert.deepEqual(errors,[])
 for(const slide of [...doc.slides,...doc.layouts]){
- const ids=new Set();for(const e of slide.elements){assert.ok(!ids.has(e.id));ids.add(e.id);assert.ok(e.x>=0&&e.y>=0&&e.x+e.w<=1280.01&&e.y+e.h<=720.01,slide.id+':'+e.id);assert.notEqual(e.role,'kicker');if(e.type==='image')assert.ok(doc.assets[e.src.slice(6)])}
+ const ids=new Set();for(const e of slide.elements){assert.ok(!ids.has(e.id));ids.add(e.id);assert.ok(e.x>=0&&e.y>=0&&e.x+e.w<=1280.01&&e.y+e.h<=720.01,slide.id+':'+e.id);assert.notEqual(e.role,'kicker');assert.notEqual(e.id,'page');if(e.type==='image')assert.ok(doc.assets[e.src.slice(6)])}
  const logo=slide.elements.find((e:any)=>e.id==='beta-logo');assert.equal(logo.x,128/3);assert.equal(logo.h,64/3);assert.ok(Math.abs(720-logo.y-logo.h-32)<.01)
 }
+assert.ok(!doc.slides.some((s:any)=>s.id==='image-callouts'));
+assert.ok(doc.slides.some((s:any)=>s.id==='image-full-left'));
+assert.ok(doc.slides.flatMap((s:any)=>s.elements).some((e:any)=>e.type==='image'&&e.radius===32));
+assert.deepEqual(doc.slides.find((s:any)=>s.id==='chart').elements.find((e:any)=>e.type==='chart').option.series[0].itemStyle.borderRadius,[8,8,0,0]);
 const {pptx,report}=await mapDeck(doc)
 const file=join(tmpdir(),'Beta-General-v131.pptx');await pptx.writeFile({fileName:file})
 const xmls=execFileSync('unzip',['-Z1',file],{encoding:'utf8'}).split('\n').filter(s=>/^ppt\/slides\/slide\d+.xml$/.test(s));assert.equal(xmls.length,23)
