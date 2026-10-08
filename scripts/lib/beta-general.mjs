@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 const dir = fileURLToPath(new URL('../../beta/v131/', import.meta.url))
 const core = JSON.parse(readFileSync(dir+'tokens.json','utf8'))
-const tokens = core.contexts.find(c=>c.selector===':root').tokens
+const tokens = {...core.contexts.find(c=>c.selector===':root').tokens,...core.contexts.find(c=>c.selector==='[data-format="slide"]').tokens}
 function value(name, seen=new Set()) { if(seen.has(name)) throw Error('Cyclic token '+name); seen.add(name); const v=tokens[name]; if(!v) throw Error('Missing token '+name); return v.startsWith('var(')?value(v.slice(4,-1),seen):v }
+const metric=name=>parseFloat(value('--slide-'+name))
 const P={bg1:value('--color-surface'),tx1:value('--color-on-surface'),bg2:value('--color-surface-alt'),tx2:value('--color-on-surface-muted'),accent1:value('--color-surface-deep'),accent2:value('--color-surface-sage'),accent3:value('--color-surface-peach'),accent4:value('--color-on-tint-muted'),accent5:value('--color-on-surface-subtle'),accent6:value('--color-surface-emphasis')}
 const SANS="'Geist', Arial, sans-serif", SERIF="'Times New Roman', Times, serif"
 const frame=(id,x,y,w,h)=>({id,x,y,w,h,rotation:0,opacity:1})
@@ -19,7 +20,15 @@ const heading=(title,o={})=>text('title',title,64,56,1152,112,42,{fontWeight:500
 const sub=(html,x=64,y=185,w=920)=>text('subtitle',html,x,y,w,88,24,{ink:'tx2',role:'subtitle'})
 const notes='Duplicate this slide or apply its matching layout. Replace the sample copy and images. Keep the logo clear zone free. Sample content is illustrative, not research evidence.'
 const slide=(id,name,elements,{dark=false,bg='bg1',note=''}={})=>({id,name,background:P[bg],themeRefs:{background:bg},transition:'none',notes:notes+' '+note,elements:[...elements,...foot(dark)]})
-function bullets(items,x=64,y=212,w=1070,gap=98,size=30){return items.flatMap((s,i)=>[text('bullet-'+i,'•',x,y+i*gap,22,gap-20,size,{role:'list-marker'}),text('point-'+i,s,x+36,y+i*gap,w-36,gap-20,size,{role:'body'})])}
+function bullets(items,x=64,y=212,w=1070,_gap=98,size=30){
+ const fontSize=metric(size>=32?'type-bullet':'type-body'), indent=metric('bullet-indent');let top=y
+ return items.flatMap((html,i)=>{
+  const lines=Math.max(1,Math.ceil(html.length/((w-indent)/(fontSize*.55))))
+  const height=fontSize*metric('leading-body')*lines
+  const elements=[text('bullet-'+i,'•',x,top,22,height,fontSize,{role:'list-marker'}),text('point-'+i,html,x+indent,top,w-indent,height,fontSize,{role:'body'})]
+  top+=height+metric('bullet-gap');return elements
+ })
+}
 function gradient(id,a,b){return {...frame(id,0,0,1280,720),type:'svg',markup:`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720"><defs><linearGradient id="wash"><stop stop-color="${P[a]}"/><stop offset="1" stop-color="${P[b]}"/></linearGradient><radialGradient id="light"><stop stop-color="${P.bg1}" stop-opacity=".75"/><stop offset="1" stop-color="${P.bg1}" stop-opacity="0"/></radialGradient></defs><path fill="url(#wash)" d="M0 0H1280V720H0z"/><ellipse class="drift" cx="920" cy="280" rx="600" ry="440" fill="url(#light)"/></svg>`,css:'.drift{animation:beta-wash 18s ease-in-out infinite alternate;transform-origin:center}@keyframes beta-wash{to{transform:translate(-220px,100px) scale(1.15)}}'}}
 function icons(){return ['route','bus','bicycle'].map((name,i)=>({...frame('icon-'+i,64+i*392,230,48,48),type:'svg',markup:readFileSync(dir+name+'.svg','utf8').replaceAll('currentColor',P.tx1)}))}
 export function generalTemplate(){
@@ -34,22 +43,49 @@ export function generalTemplate(){
  slide('two-columns','Text / two columns',[heading('Two perspectives, one decision.'),text('left-heading','For the traveller',64,220,532,48,30,{fontWeight:500,role:'column-title'}),text('left','A clear route.<br>A legible entrance.<br>A reliable connection.',64,282,520,280,30,{lineHeight:1.55}),text('right-heading','For the operator',680,220,532,48,30,{fontWeight:500,role:'column-title'}),text('right','A workable service.<br>A simple handover.<br>A way to learn.',680,282,520,280,30,{lineHeight:1.55})]),
  slide('statement','Statement / centered',[text('title','The next step should\nbe easy to see.',112,230,1056,250,68,{align:'center',valign:'middle',fontFamily:SERIF,lineHeight:1.08,role:'title'})]),
  slide('statement-sage','Statement / sage',[text('title','Small changes can\nremove real friction.',80,192,1110,250,72,{fontFamily:SERIF,lineHeight:1.08,role:'title'}),text('subtitle','Use this layout for one thought worth pausing on.',80,495,1010,64,26,{ink:'accent4',role:'subtitle'})],{bg:'accent2'}),
- slide('callout','Text / colored callout',[heading('Keep the conclusion close to the evidence.'),text('body','Describe the situation in a few lines. Give the reader a clear reason to care about the decision.',64,224,570,280,32,{lineHeight:1.4}),shape('callout',728,206,488,382,'accent3'),text('callout-title','What this changes',764,244,416,78,30,{fontWeight:500,role:'callout-title'}),text('callout-body','One concrete implication.\nOne clear next step.',764,346,416,160,30,{role:'callout'})]),
+ slide('callout','Text / colored callout',[heading('Keep the conclusion close to the evidence.'),text('body','Describe the situation in a few lines. Give the reader a clear reason to care about the decision.',64,224,570,280,32,{lineHeight:1.4}),shape('callout',728,206,488,382,'accent3',{radius:metric('radius-callout')}),text('callout-title','What this changes',764,244,416,78,30,{fontWeight:500,role:'callout-title'}),text('callout-body','One concrete implication.\nOne clear next step.',764,346,416,160,30,{role:'callout'})]),
  slide('numbered','Steps / numbered',[heading('A sequence people can follow.'),...['See','Understand','Act'].flatMap((s,i)=>[text('number-'+i,String(i+1).padStart(2,'0'),64+i*392,217,320,78,58,{ink:'tx2',role:'number'}),shape('rule-'+i,64+i*392,314,328,1,'tx1'),text('step-'+i,s,64+i*392,346,328,55,32,{fontWeight:500}),text('explain-'+i,['Read the place before proposing a change.','Make the choices and constraints visible.','Test one improvement and learn from it.'][i],64+i*392,417,328,155,25,{lineHeight:1.4})])]),
- slide('image-left','Image / rounded left with bullets',[image('photo',64,180,560,430,'street',32),heading('Show the place. Explain the point.'),...bullets(['Name what matters.','Explain the consequence.','Propose the next step.'],688,223,528,105,28)]),
- slide('image-right','Image / rounded right with bullets',[heading('Keep the picture and argument together.'),...bullets(['A short observation.','A useful distinction.','A practical implication.'],64,225,520,105,28),image('photo',656,180,560,430,'workshop',32)]),
+ slide('image-left','Image / rounded left with bullets',[image('photo',64,180,560,430,'street',metric('radius-photo')),heading('Show the place. Explain the point.'),...bullets(['Name what matters.','Explain the consequence.','Propose the next step.'],688,223,528,105,28)]),
+ slide('image-right','Image / rounded right with bullets',[heading('Keep the picture and argument together.'),...bullets(['A short observation.','A useful distinction.','A practical implication.'],64,225,520,105,28),image('photo',656,180,560,430,'workshop',metric('radius-photo'))]),
  slide('image-top','Image / wide with caption',[image('photo',64,180,1152,338),heading('Let the image carry the context.'),text('caption','Describe what the image shows. Add the photographer or source here.',64,542,1130,65,23,{ink:'tx2',role:'caption'})]),
  slide('image-full','Image / full bleed',[image('photo',0,0,1280,720),shape('reading-ground',48,334,770,268,'bg1'),text('title','Start where\npeople are.',80,366,706,150,64,{fontFamily:SERIF,lineHeight:1.04,role:'title'}),text('caption','Use a real photograph, with permission and a source.',80,545,690,38,19,{role:'caption'})]),
  slide('image-full-left','Image / full-height left',[image('photo',0,0,584,720),text('title','A place worth\nlooking at.',664,152,552,150,48,{fontWeight:500,lineHeight:1.12,role:'title'}),...bullets(['Describe what matters.','Make the implication clear.','Name the next step.'],664,354,548,84,28)]),
  slide('icons','Icons / three concepts',[heading('Use icons to identify real subjects.'),...icons(),...['Connections','Public transport','Cycling'].flatMap((s,i)=>[text('icon-heading-'+i,s,64+i*392,316,328,75,30,{fontWeight:500,role:'column-title'}),text('icon-body-'+i,['Describe the relationship between places.','Explain the service and the rider’s experience.','Show what makes the route useful.'][i],64+i*392,409,328,150,25,{lineHeight:1.4})])]),
  slide('comparison','Comparison / two surfaces',[heading('Make the trade-off visible.'),shape('left-panel',64,196,552,404,'bg2'),shape('right-panel',640,196,576,404,'accent2'),text('left-title','Today',96,230,488,52,32,{fontWeight:500,role:'column-title'}),text('right-title','Proposed',672,230,512,52,32,{fontWeight:500,role:'column-title'}),text('left','Describe the current arrangement and its main limitation.',96,329,468,230,30),text('right','Describe the change and the benefit you expect to test.',672,329,492,230,30)]),
  slide('quote','Quote / attribution below',[text('title','“Make the question\nspecific enough\nto answer.”',80,156,1090,300,74,{fontFamily:SERIF,lineHeight:1.04,role:'title'}),text('source','Illustrative wording · replace with a verified quotation and source',80,519,1090,65,22,{ink:'tx2',role:'source'})]),
- slide('chart','Chart / commentary',[heading('Give the chart a clear takeaway.'),{...frame('chart',64,212,740,368),type:'chart',preset:'bar',option:{grid:{left:55,right:24,top:24,bottom:44},xAxis:{type:'category',data:['A','B','C'],axisLabel:{fontSize:18}},yAxis:{type:'value',axisLabel:{fontSize:16}},series:[{type:'bar',data:[4,7,6],itemStyle:{color:P.accent1,borderRadius:[8,8,0,0]}}]}},text('body','One sentence on the pattern.\n\nOne sentence on what it means.',872,235,330,270,28),text('source','Illustrative data · replace values, units, period and source',64,610,1130,32,18,{ink:'tx2',role:'source'})]),
+ slide('chart','Chart / commentary',[heading('Give the chart a clear takeaway.'),{...frame('chart',64,212,740,368),type:'chart',preset:'bar',option:{grid:{left:55,right:24,top:24,bottom:44},xAxis:{type:'category',data:['A','B','C'],axisLabel:{fontSize:18}},yAxis:{type:'value',axisLabel:{fontSize:metric('type-source')}},series:[{type:'bar',data:[4,7,6],itemStyle:{color:P.accent1,borderRadius:[metric('radius-bar'),metric('radius-bar'),0,0]}}]}},text('body','One sentence on the pattern.\n\nOne sentence on what it means.',872,235,330,270,28),text('source','Illustrative data · replace values, units, period and source',64,610,1130,32,18,{ink:'tx2',role:'source'})]),
+ slide('table','Table / concise briefing',[heading('Separate the observation from the next step.'),{...frame('table',64,180,1152,360),type:'table',header:true,columns:[{w:1},{w:1.4},{w:1.4}],rows:[['Place','Observation','Next step'],['Arrival','Two possible entrances','Check which one is open'],['Crossing','The route is unclear','Test one clearer sign'],['Destination','The door is visible','Confirm step-free access']].map(row=>({cells:row.map(html=>({html}))})),style:{headerBg:P.bg2,headerColor:P.tx1,borderColor:P.accent5,borderWidth:1,cellPadX:24,cellPadY:24,fontSize:metric('type-compact'),fontFamily:SANS,color:P.tx1,radius:metric('radius-callout')}},text('source','Illustrative briefing · replace with verified observations and a source',64,564,1120,32,18,{role:'source',ink:'tx2'})]),
+ slide('map-commentary','Map / commentary',[heading('Show the route, then explain the decision.'),{...frame('map',64,180,752,412),type:'svg',markup:`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 752 412"><rect width="752" height="412" fill="${P.bg2}"/><path d="M0 100H752M0 300H752M140 0V412M570 0V412" stroke="${P.bg1}" stroke-width="40"/><path d="M140 330V100H570V240" fill="none" stroke="${P.accent1}" stroke-width="8"/><g fill="${P.accent1}" stroke="${P.bg1}" stroke-width="5"><circle cx="140" cy="330" r="13"/><circle cx="140" cy="100" r="13"/><circle cx="570" cy="240" r="13"/></g><g fill="${P.tx1}" font-family="Geist,Arial,sans-serif" font-size="28"><text x="175" y="352">Arrival</text><text x="178" y="70">Crossing</text><text x="395" y="285">Destination</text></g></svg>`},text('map-title','The crossing matters',872,190,344,92,28,{fontWeight:500,role:'column-title'}),text('map-body','Describe one decision people need to make here. Keep supporting detail in the notes.',872,239,344,280,28),text('source','Schematic example, not a geographic map · preserve scale, legend and source on real maps',64,616,1152,30,18,{role:'source',ink:'tx2'})]),
  slide('thank-you','Thank you',[text('title','Thank you.',64,228,1090,132,100,{fontFamily:SERIF,role:'title'}),sub('What would you like to discuss?',64,430,980)]),
  slide('contact','Contact',[heading('Let’s continue the conversation.'),text('name','Your name',64,237,900,64,40,{fontWeight:500,role:'contact-name'}),text('details','Your role<br>name@example.com<br>+00 000 00 000',64,328,900,186,28,{lineHeight:1.55,role:'contact'}),text('website','betamobility.com',64,558,900,48,24,{role:'contact'})]),
  ]
+ // Apply the canonical format profile without changing saved decks.
+ for(const s of slides){
+   for(const e of s.elements){
+     if(e.type!=='text')continue
+     if(e.role==='title'){
+       e.fontSize=metric(e.fontFamily===SERIF?(s.id==='thank-you'?'type-display-large':['statement','statement-sage','quote','image-full','title-photo'].includes(s.id)?'type-statement':'type-hero'):'type-title')
+       e.lineHeight=metric(e.fontFamily===SERIF?'leading-display':'leading-title')
+     }else if(['source'].includes(e.role))e.fontSize=metric('type-source')
+     else if(['caption','metadata'].includes(e.role))e.fontSize=metric('type-caption')
+     else if(e.role==='number')e.fontSize=metric('type-statement')
+     else if(e.role==='list-marker'||e.id.startsWith('point-'))e.fontSize=metric(s.id==='bullets'?'type-bullet':'type-body')
+     else e.fontSize=metric(e.fontSize<=26?'type-compact':'type-body')
+     if(e.role!=='title')e.lineHeight=metric(e.role==='number'?'leading-display':'leading-body')
+     e.letterSpacing=-.01*e.fontSize
+     if(s.id==='statement-sage'||['callout-title','callout-body'].includes(e.id)){e.color=P.accent1;e.themeRefs.color='accent1'}
+     if(s.id==='chapter-dark'){e.color=P.accent2;e.themeRefs.color='accent2'}
+   }
+   const title=s.elements.find(e=>e.id==='title')
+   if(title?.fontFamily===SANS&&s.id!=='image-full-left'){
+     const content=s.elements.filter(e=>!['title','beta-logo'].includes(e.id))
+     const top=Math.min(...content.map(e=>e.y))
+     const start=title.y+title.fontSize*title.lineHeight+metric('title-gap')
+     for(const e of content)e.y-=top-start
+   }
+ }
  const assets={street:'data:image/jpeg;base64,'+readFileSync(dir+'images/cyclists-bus-lane.jpg').toString('base64'),workshop:'data:image/jpeg;base64,'+readFileSync(dir+'images/regulation-workshop.jpg').toString('base64')}
  const fonts=[400,500].map(weight=>{assets['geist-'+weight]='data:font/ttf;base64,'+readFileSync(dir+'fonts/geist-'+weight+'.ttf').toString('base64');return {family:'Geist',weight:String(weight),asset:'geist-'+weight}})
  const layouts=structuredClone(slides).map(s=>{for(const e of s.elements)if(e.type==='text'&&e.role!=='list-marker'&&!e.html.includes('{{')){e.placeholder=e.role==='title'?'Your slide title':e.role==='source'?'Source and date':'Replace with your content';e.html=''}return s})
- return {format:'bento/slides',version:1,title:'Beta general template',template:true,size:{width:1280,height:720},theme:{background:P.bg1,color:P.tx1,accent:P.accent1,fontFamily:SANS,headingFamily:SERIF,palette:Object.fromEntries(Object.entries(P).filter(([k])=>!['bg1','tx1','accent1'].includes(k)))},meta:{company:'Beta Mobility',author:''},fonts,assets,layouts,slides,beta:{tokens:core.version,designSystem:'bfc9e8d',template:'general-v131'}}
+ return {format:'bento/slides',version:1,title:'Beta general template',template:true,size:{width:1280,height:720},theme:{background:P.bg1,color:P.tx1,accent:P.accent1,fontFamily:SANS,headingFamily:SERIF,palette:Object.fromEntries(Object.entries(P).filter(([k])=>!['bg1','tx1','accent1'].includes(k)))},meta:{company:'Beta Mobility',author:''},fonts,assets,layouts,slides,beta:{tokens:core.version,designSystem:'46a3297',template:'general-v131'}}
 }

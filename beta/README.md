@@ -68,14 +68,14 @@ Without them PowerPoint substitutes a system face; the layout survives, the char
 
 ## General template — design system v1.3.1
 
-`general.bento.html` is the single recommended template for new presentations. Its 23 populated slides have matching editable layouts. Duplicate the examples or apply the blank layouts: covers, chapters, text, bullets, two columns, centered statements, colored callouts, steps, five photographic compositions, including full-height left and optional rounded crops, icons, comparisons, quotes, charts, thanks and contact. No eyebrow headings or slide numbers. Images and chart values are illustrative placeholders.
+`general.bento.html` is the single recommended template for new presentations. Its 25 populated slides have matching editable layouts. Duplicate the examples or apply the blank layouts: covers, chapters, text, bullets, two columns, centered statements, colored callouts, steps, five photographic compositions, including full-height left and optional rounded crops, icons, comparisons, quotes, charts, thanks and contact. No eyebrow headings or slide numbers. Images and chart values are illustrative placeholders.
 
 The source is `scripts/lib/beta-general.mjs`; the versioned asset snapshot is `beta/v131/`. Run the existing template builder after building the shell. The legacy template filenames and saved decks are preserved for compatibility; this additive library does not rebrand existing documents.
 
 Geist 400/500 is embedded under the included OFL licence. Serif openings use local Times New Roman/Times, the system-family fallback to the licensed display face; Slides does not support the website's font-face metric override, so the deck uses explicit slide geometry. No commercial font files are redistributed. PowerPoint recipients need Geist installed. The existing exporter keeps text and chart data editable; logos/icons/gradients become pictures, and CSS animation has a static fallback. The presenter’s reduced-motion setting disables the chapter animation.
 
-Canvas: 1280×720; content margin 64px. Body 24–36px, working headings 42px, expressive serif titles 68–100px. Logo: x 42⅔px, bottom 32px, height 21⅓px. The editor's legacy 96px margin heuristic reports informational notes for this deliberate 64px grid.
+Canvas: 1280×720; content margin 64px. Body 28px, compact prose 24px, short bullets 32px, working headings 42px, statements 64px, hero 80px and short greetings 96px. Values come from the canonical [data-format="slide"] token profile. Logo: x 42⅔px, bottom 32px, height 21⅓px. The editor's legacy 96px margin heuristic reports informational notes for this deliberate 64px grid.
 
-Verification: `node scripts/test-beta-general.ts` checks geometry, logo placement, source identity, native document validation and a 23-slide editable PowerPoint export. `node scripts/test-beta-templates-current.ts` verifies every generated template embeds the current built shell.
+Verification: `node scripts/test-beta-general.ts` checks geometry, logo placement, source identity, native document validation and a 25-slide editable PowerPoint export. `node scripts/test-beta-templates-current.ts` verifies every generated template embeds the current built shell.
 
 Rounded photos and chart bars render in Slides. The current PowerPoint exporter does not preserve their corner radii.
