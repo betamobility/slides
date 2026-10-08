@@ -93,22 +93,22 @@ editing an existing deck, never regenerate `docId`.
    for a colour outside the system gets the nearest slot and one sentence on
    why: the design system is the deck's identity, and a deck that breaks it
    is not a Beta deck. Do not restate this on every slide.
-2. **Typefaces are the three the deck carries.** Playfair Display for titles
-   (`theme.headingFamily`), Inter for body (`theme.fontFamily`), DM Mono for
-   kickers, numbers and tags. Always the full stack string, never a bare
-   family name. No other faces; they would not travel in the file.
-3. **Use the Beta layouts by name and set `role`.** `beta-title`,
-   `beta-section`, `beta-two-col`, `beta-chart-text`, `beta-hero`,
-   `beta-closing` live in `doc.layouts`. Instantiate slides from them (same
-   element ids, so chrome morphs), keep `role` on every text element
-   (`title | subtitle | body | kicker`), and use the guide's column
-   arithmetic: 96 px margins, a 1088 px band, rows flush at x = 1184.
+2. **Use the general template's typefaces.** Geist for working headings and
+   body text; local Times New Roman/Times for expressive openings and statements.
+   Keep the full font stack from the template. Geist is embedded in HTML;
+   PowerPoint recipients need it installed. Do not redistribute licensed Rhymes.
+3. **Use the general layouts and preserve `role`.** Read `doc.layouts` and
+   choose the composition that fits the content: `title`, `chapter`,
+   `two-columns`, `chart`, `statement`, `contact`, or the other named layouts.
+   Instantiate from its elements and retain their semantic roles. The canvas
+   is 1280 × 720, with 64px content margins. No eyebrow headings or labels:
+   place useful metadata beneath the heading, introduction or figure.
 4. **Write `meta.author`** (the person presenting) and keep `meta.company`.
    Title slides and footers use `{{company}}`, `{{author}}`, `{{date}}` and
    `{{page:2}}` tokens, never literal strings.
 5. **Refresh data at edit time, stamp it.** For any figure fetched from a
    Beta source (Mission Control, a report, an API), write the VALUE into the
-   document and add a `kicker`-role text element on that slide reading
+   document and add a `source`-role text element below the figure reading
    `Data as of YYYY-MM-DD` (the date you fetched it, ISO). A deck opened on
    stage never fetches anything; the number and its date travel in the file.
 6. **Live content goes in an `embed` element** only when the brief needs a
@@ -131,17 +131,17 @@ only kind a person can fully edit in the bento UI, so it is the default.
    (keep its element ids, so the chrome morphs between slides), give the
    slide a new id, and fill `html` on the placeholder elements. Delete a
    placeholder you do not use rather than leaving it empty.
-2. **Add elements on the grid.** 96 px margins, content between x = 96 and
-   x = 1184, a two-column split at 528 + 32 + 528. Measure text with
+2. **Add elements on the grid.** 64px margins, content between x = 64 and
+   x = 1216. Preserve the chosen layout’s column widths and gap. Measure text with
    `window.bento.measure()` before you size a box (agents.md).
 3. **Every element carries its palette slots and role.** A text element in
    the Beta system looks like this:
 
    ```json
-   { "id": "kpi-share", "type": "text", "x": 96, "y": 208, "w": 528, "h": 120,
+   { "id": "kpi-share", "type": "text", "x": 64, "y": 208, "w": 528, "h": 120,
      "rotation": 0, "opacity": 1, "html": "38 %", "fontSize": 96,
-     "fontFamily": "'Playfair Display', Georgia, serif", "fontWeight": 700,
-     "color": "#4A7C59", "align": "left", "valign": "top", "lineHeight": 1.1,
+     "fontFamily": "'Geist', Arial, sans-serif", "fontWeight": 500,
+     "color": "#242f30", "align": "left", "valign": "top", "lineHeight": 1.1,
      "role": "title", "themeRefs": { "color": "accent1" } }
    ```
 
@@ -736,7 +736,7 @@ run the command again. Never work around it.
       `font-not-embedded`)?
 - [ ] Every text element carries a `role`; slides come from Beta layouts?
 - [ ] `meta.author` set; tokens, not literals, in title slides and footers?
-- [ ] Every fetched figure has a `Data as of` kicker on its slide?
+- [ ] Every fetched figure has a `Data as of` source note below it, with no eyebrow?
 - [ ] Each slide is the right kind: native by default, source code in a
       `code` element with a real `grammarName`, a live scene only where the
       browser is the point?

@@ -82,9 +82,9 @@ ok(/build-beta-templates\.mjs[\s\S]*join\(site, 'templates'\)/.test(read('script
 
 console.log('\ntemplates')
 const names = [...skill.matchAll(/templates\/([a-z-]+)\.bento\.html/g)].map((m) => m[1])
-ok(names.length === 3, `the skill names three templates (${names.join(', ')})`)
+ok(names.length === 1 && names[0] === 'general', `the skill recommends one general template (${names.join(', ')})`)
 for (const n of names) ok(existsSync(join(root, `beta/templates/${n}.bento.html`)), `${n}.bento.html exists in beta/templates/`)
-const layoutNames = ['beta-title', 'beta-section', 'beta-two-col', 'beta-chart-text', 'beta-hero', 'beta-closing']
+const layoutNames = ['title', 'chapter', 'two-columns', 'chart', 'statement', 'contact']
 for (const l of layoutNames) ok(skill.includes(`\`${l}\``), `the skill names layout ${l}`)
 
 console.log('\nmanifests')
@@ -100,7 +100,8 @@ for (const [what, re] of [
   ['the collab warning', /ownerPriv[\s\S]*Tell the user before you continue/],
   ['palette slots via themeRefs', /themeRefs/],
   ['the no-hex rule', /No hex colours/i],
-  ['the as-of kicker', /Data as of YYYY-MM-DD/],
+  ['the as-of source note', /source`-role text element below the figure[\s\S]*Data as of YYYY-MM-DD/],
+  ['no eyebrow headings', /No eyebrow headings or labels/],
   ['Export PPTX with the report', /Export PPTX[\s\S]*report/],
   ['the visual check', /look at every\s+slide/],
   ['meta.author', /meta\.author/],
