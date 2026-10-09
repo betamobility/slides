@@ -1,0 +1,2 @@
+Design system v1.3.1, commit 46a3297. Tokens, approved wordmark and documentary image specimens copied from Tools/design-system. Images are illustrative, not evidence for the template copy. Geist 400/500 obtained from Google Fonts; OFL licence included. Serif uses local Times New Roman without redistributing commercial font files.
+The token snapshot also includes the calibrated slide profile from design-system PR #42. Shared brand values remain v1.3.1.

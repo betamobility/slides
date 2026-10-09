@@ -552,7 +552,10 @@ function addChart(
   const kind = types[0]
   if (types.length > 1) degrade('chart-mixed', `Mixed series types (${types.join(', ')}) exported as ${kind}.`)
   const xAxis = Array.isArray(option.xAxis) ? option.xAxis[0] : option.xAxis
-  const labels: string[] = Array.isArray(xAxis?.data) ? xAxis.data.map(String) : []
+  const yAxis = Array.isArray(option.yAxis) ? option.yAxis[0] : option.yAxis
+  const horizontal = yAxis?.type === 'category' && xAxis?.type === 'value'
+  const categoryAxis = horizontal ? yAxis : xAxis
+  const labels: string[] = Array.isArray(categoryAxis?.data) ? categoryAxis.data.map(String) : []
   const colours = series.map((x, i) => hexOr(x.itemStyle?.color ?? x.lineStyle?.color, palette[i % palette.length]))
   const common: PptxGenJS.IChartOpts = {
     ...box,
@@ -589,7 +592,7 @@ function addChart(
     values: ((x.data ?? []) as Array<Opt | number>).map((d) => typeof d === 'object' ? Number(d.value ?? 0) : Number(d)),
   }))
   const chartType = kind === 'line' ? pptx.ChartType.line : kind === 'area' ? pptx.ChartType.area : pptx.ChartType.bar
-  const extra: PptxGenJS.IChartOpts = kind === 'bar' ? { barDir: 'col', barGapWidthPct: 60 } : kind === 'line' ? { lineSize: 2, lineSmooth: series.some((x) => !!x.smooth) } : {}
+  const extra: PptxGenJS.IChartOpts = kind === 'bar' ? { barDir: horizontal ? 'bar' : 'col', barGapWidthPct: 60, catAxisLabelPos: 'low' } : kind === 'line' ? { lineSize: 2, lineSmooth: series.some((x) => !!x.smooth) } : {}
   if (!['bar', 'line', 'area'].includes(kind)) degrade('chart', `Series type "${kind}" is not mapped; exported as bars.`)
   s.addChart(chartType, data, { ...common, ...extra })
 }
