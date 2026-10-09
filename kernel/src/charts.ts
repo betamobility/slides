@@ -112,6 +112,7 @@ interface Digest {
   series: Array<Opt>
   categories: string[]
   isPie: boolean
+  horizontal: boolean
   grid: { x: number; y: number; w: number; h: number }
   legend: null | LegendCfg
   xAxisLabel: TextCfg
@@ -124,6 +125,9 @@ interface Digest {
 }
 
 function digest(option: Opt, w: number, h: number): Digest {
+  const horizontal = option?.yAxis?.type === 'category' && option?.xAxis?.type === 'value'
+  // Internally retain category/value roles; only the Cartesian geometry changes.
+  if (horizontal) option = { ...option, xAxis: option.yAxis, yAxis: option.xAxis }
   const series: Opt[] = Array.isArray(option?.series) ? option.series : option?.series ? [option.series] : []
   const isPie = series.some((s) => s?.type === 'pie')
   const g = option?.grid ?? {}
@@ -197,7 +201,7 @@ function digest(option: Opt, w: number, h: number): Digest {
     w, h,
     font: option?.textStyle?.fontFamily ?? 'sans-serif',
     colors: Array.isArray(option?.color) && option.color.length ? option.color : PALETTE,
-    series, isPie,
+    series, isPie, horizontal,
     categories: (xRaw?.data ?? []).map(String),
     grid,
     legend,
@@ -404,7 +408,38 @@ function catWindow(d: Digest, view: View): { cats: string[]; i0: number } {
   return { cats: d.categories.slice(i0, i1), i0 }
 }
 
+function renderHorizontalBars(svg: SVGSVGElement, d: Digest, sweep: number, view: View) {
+  const G = d.grid, { cats, i0 } = catWindow(d, view)
+  const bars = d.series.filter(s => s.type === 'bar')
+  const values = bars.flatMap(s => (s.data ?? []).slice(i0, i0 + cats.length).map((v: unknown) => num(v, 0)))
+  const range = axisRange(values, d.yAxes[0])
+  const xOf = (v: number) => G.x + (v - range.lo) / (range.hi - range.lo || 1) * G.w
+  const base = xOf(Math.max(range.lo, Math.min(range.hi, 0)))
+  const band = G.h / Math.max(1, cats.length), barH = band * .62 / Math.max(1, bars.length)
+  range.labels.forEach((label, i) => {
+    const x = G.x + G.w * i / Math.max(1, range.labels.length - 1)
+    svg.appendChild(elNS('line', { x1:x, y1:G.y, x2:x, y2:G.y+G.h, stroke:d.splitLine.color, 'stroke-width':1 }))
+    svg.appendChild(text(x,G.y+G.h+d.yAxes[0].label.size+6,label,d.yAxes[0].label.color,d.font,d.yAxes[0].label.size))
+  })
+  svg.appendChild(elNS('line',{x1:base,y1:G.y,x2:base,y2:G.y+G.h,stroke:d.axisLine.color,'stroke-width':1}))
+  cats.forEach((cat,i) => {
+    svg.appendChild(text(G.x-12,G.y+band*(i+.5)+d.xAxisLabel.size*.35,cat,d.xAxisLabel.color,d.font,d.xAxisLabel.size,'end'))
+    bars.forEach((s,si) => {
+      const v = num(s.data?.[i0+i],0), end=base+(xOf(v)-base)*sweep
+      const x=Math.min(base,end), y=G.y+band*i+band*.19+barH*si
+      const color=typeof s.itemStyle?.color==='string'?s.itemStyle.color:d.colors[d.series.indexOf(s)%d.colors.length]
+      const raw=s.itemStyle?.borderRadius, radii=Array.isArray(raw)?raw:[raw,raw,raw,raw]
+      const bar=elNS('path',{d:barCornerPath(x,y,Math.abs(end-base),Math.max(0,barH-2),radii),fill:color})
+      ;(bar as any).__cat=i
+      ;(bar as any).__tip={title:cat,rows:[{name:String(s.name??''),value:fmt(v),color}]}
+      svg.appendChild(bar)
+      if(s.label?.show) svg.appendChild(text(end+(v<0?-10:10),y+barH/2+d.yAxes[0].label.size*.35,fmt(v),d.yAxes[0].label.color,d.font,d.yAxes[0].label.size,v<0?'end':'start'))
+    })
+  })
+}
+
 function renderCartesian(svg: SVGSVGElement, d: Digest, sweep: number, view: View) {
+  if (d.horizontal) { renderHorizontalBars(svg, d, sweep, view); return }
   const G = d.grid
   const bars = d.series.filter((s) => s?.type === 'bar')
   const lines = d.series.filter((s) => s?.type === 'line')
@@ -573,6 +608,7 @@ function renderCartesian(svg: SVGSVGElement, d: Digest, sweep: number, view: Vie
         ;(r as any).__cat = i
         ;(r as any).__tip = { title: cats[i], rows: [{ name: String(s.name ?? ''), value: fmt(v), color }] }
         svg.appendChild(r)
+        if (s.label?.show) svg.appendChild(text(bx+bw/2,v<0?by+bh+d.yAxes[ax].label.size:by-8,fmt(v),d.yAxes[ax].label.color,d.font,d.yAxes[ax].label.size))
       })
     })
   }
@@ -820,7 +856,7 @@ export function mountChart(el: ChartLike, host: HTMLElement, fromOption?: Record
       ev.preventDefault()
       const span = view.end - view.start
       const rect = host.getBoundingClientRect()
-      const fx = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width))
+      const fx = Math.min(1, Math.max(0, (digestNow().horizontal ? (ev.clientY - rect.top) / rect.height : (ev.clientX - rect.left) / rect.width)))
       const factor = ev.deltaY > 0 ? 1.18 : 1 / 1.18
       const newSpan = Math.min(1, Math.max(0.1, span * factor))
       const anchor = view.start + span * fx
@@ -830,11 +866,11 @@ export function mountChart(el: ChartLike, host: HTMLElement, fromOption?: Record
       draw(option)
     }, { passive: false })
     let panFrom: { x: number; s: number; e: number } | null = null
-    host.addEventListener('mousedown', (ev) => { panFrom = { x: ev.clientX, s: view.start, e: view.end } })
+    host.addEventListener('mousedown', (ev) => { panFrom = { x: digestNow().horizontal ? ev.clientY : ev.clientX, s: view.start, e: view.end } })
     window.addEventListener('mousemove', (ev) => {
       if (!panFrom || disposed) return
       const rect = host.getBoundingClientRect()
-      const dx = (ev.clientX - panFrom.x) / rect.width
+      const dx = ((digestNow().horizontal ? ev.clientY : ev.clientX) - panFrom.x) / (digestNow().horizontal ? rect.height : rect.width)
       const span = panFrom.e - panFrom.s
       let s = panFrom.s - dx * span
       s = Math.max(0, Math.min(1 - span, s))

@@ -11,6 +11,16 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.10.9] — 2026-10-09
+
+- **One general Beta template with 35 layouts.** Adds agenda, metric, people, partner, diagram, photographic chapter and closing formats, plus two chart comparisons.
+- **Presentation typography with real font weights.** Geist 300–700 and DM Mono metadata are embedded; working titles use 46px semibold.
+- **Editable horizontal bars.** Ranked comparisons keep category labels editable and preserve their orientation in PowerPoint.
+- **Rounded bar ends, square baselines.** Independent corner radii now render correctly in the editor and slideshow.
+- **Complete tables and flexible image crops.** Square table corners preserve borders; inset photographs support rounded corners and full-height layouts.
+- **Updated image-parser dependency.** Pins the patched image-size version used by the PowerPoint dependency tree.
+
+
 ## [2026.9.5] — 2026-09-14
 
 - **Live slides for maps and demos.** A slide can now be a runtime slide: a

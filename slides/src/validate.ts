@@ -65,15 +65,14 @@ export interface ValidateOpts {
  * else in an `option` is ignored at render time with no warning — the engine
  * reads the ECharts option SHAPE, it is not ECharts.
  *
- * Kept deliberately close to the renderer: `label` is listed for pie only,
- * because `renderPie` is the sole reader of it and a `label` on a bar or line
- * series genuinely does nothing.
+ * Kept close to the renderer: pie and bar series support labels; line and
+ * scatter series do not.
  */
 const CHART_KEYS = {
   top: ['color', 'series', 'xAxis', 'yAxis', 'legend', 'grid', 'tooltip', 'textStyle', 'dataZoom'],
   series: ['type', 'name', 'data', 'yAxisIndex', 'itemStyle'],
   seriesByType: {
-    bar: ['barWidth'],
+    bar: ['barWidth', 'label'],
     line: ['smooth', 'symbol', 'symbolSize', 'lineStyle', 'areaStyle'],
     scatter: ['symbol', 'symbolSize'],
     pie: ['radius', 'label'],
@@ -430,7 +429,7 @@ function validateChart(
       // the one people reach for most, and the one that reads as a bug
       if (k === 'label') {
         note(`option.series[${i}].label`,
-          'value labels on a bar, line or scatter series (label is read for pie only)')
+          'value labels on a line or scatter series (labels are supported for pie and bar)')
       } else {
         note(`option.series[${i}].${k}`, `"${k}" on a ${s.type ?? 'series'} series`)
       }
