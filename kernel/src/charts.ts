@@ -17,6 +17,7 @@
 //     (tooltips, zoom); with fromOption, animates from that option to its own.
 
 import { anim } from './anim.ts'
+import { barCornerPath } from './bar-corners.ts'
 
 /** The chart surface the engine actually reads. An app's own chart element
  *  type (e.g. slides' ChartElement, which also carries preset/source) satisfies
@@ -564,10 +565,11 @@ function renderCartesian(svg: SVGSVGElement, d: Digest, sweep: number, view: Vie
         // grow from the zero baseline: positive up, negative down
         const vy = yOf(v, ax)
         const hv = Math.abs(base - vy) * sweep
-        const r = elNS('rect', {
-          x: x + 1, y: vy <= base ? base - hv : base, width: Math.max(1, barW - 2), height: Math.max(0, hv),
-          rx: Math.min(radius, barW / 2), fill: color,
-        })
+        const bx = x + 1, by = vy <= base ? base - hv : base
+        const bw = Math.max(1, barW - 2), bh = Math.max(0, hv)
+        const r = Array.isArray(s?.itemStyle?.borderRadius)
+          ? elNS('path', { d: barCornerPath(bx, by, bw, bh, s.itemStyle.borderRadius), fill: color })
+          : elNS('rect', { x: bx, y: by, width: bw, height: bh, rx: Math.min(radius, barW / 2), fill: color })
         ;(r as any).__cat = i
         ;(r as any).__tip = { title: cats[i], rows: [{ name: String(s.name ?? ''), value: fmt(v), color }] }
         svg.appendChild(r)

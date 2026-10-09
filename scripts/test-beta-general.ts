@@ -27,7 +27,7 @@ assert.ok(doc.slides.some((s:any)=>s.id==='image-full-left'));
 assert.ok(doc.slides.flatMap((s:any)=>s.elements).some((e:any)=>e.type==='image'&&e.radius===32));
 assert.deepEqual(doc.slides.find((s:any)=>s.id==='chart').elements.find((e:any)=>e.type==='chart').option.series[0].itemStyle.borderRadius,[8,8,0,0]);
 assert.equal(doc.slides.find((s:any)=>s.id==='text').elements.find((e:any)=>e.id==='body').fontSize,28);
-assert.equal(doc.slides.find((s:any)=>s.id==='text').elements.find((e:any)=>e.id==='title').fontSize,42);
+assert.equal(doc.slides.find((s:any)=>s.id==='text').elements.find((e:any)=>e.id==='title').fontSize,46);
 const {pptx,report}=await mapDeck(doc)
 const file=join(tmpdir(),'Beta-General-v131.pptx');await pptx.writeFile({fileName:file})
 const xmls=execFileSync('unzip',['-Z1',file],{encoding:'utf8'}).split('\n').filter(s=>/^ppt\/slides\/slide\d+.xml$/.test(s));assert.equal(xmls.length,25)
@@ -36,3 +36,7 @@ assert.ok(!report.some(r=>['image-remote','unknown:svg'].includes(r.reason)))
 writeFileSync(join(tmpdir(),'beta-general-export-report.json'),JSON.stringify(report,null,2))
 console.log('PASS: 25 layouts, fit, logo geometry, no eyebrows, native validation, editable 25-slide PPTX. '+file)
 assert.ok(findings.filter((f:any)=>f.severity==='warning').every((f:any)=>f.code==='unknown-key'&&f.path==='beta')); console.log('Only informational fixed-canvas margin notes and the documented beta provenance key remain.')
+
+assert.deepEqual(doc.fonts.filter((f:any)=>f.family==='Geist').map((f:any)=>f.weight),['300','400','500','600','700']);
+assert.ok(doc.fonts.some((f:any)=>f.family==='DM Mono'));
+for(const slide of doc.slides)for(const e of slide.elements){if(e.role==='metadata'||e.role==='source')assert.ok(e.fontFamily.includes('DM Mono'));if(e.type==='table')assert.equal(e.style.radius,0)}
