@@ -259,6 +259,35 @@ console.log('\na runtime slide validates; a broken one does not\n')
     ok(check(d, file).some((m) => /unknown key constructor/.test(m)),
       'round 3: inherited Object keys cannot bypass runtime additionalProperties false in the validator')
   }
+  // BETA FORK, break round 4: independently cross limits and object shapes.
+  // Refusal is checked on INPUT; every repair/drop must still produce a
+  // schema-valid saved record. Kind/value joins remain the documented gap.
+  {
+    const prop = { key: 'caption', label: 'Caption', kind: 'text', default: '' }
+    const valid: J[] = [
+      { src: 'asset:' + 'x'.repeat(200), steps: 10000, props: [] },
+      { url: 'https://' + 'x'.repeat(3992), steps: 0, props: [] },
+      { steps: 0, props: [{ ...prop, label: 'x'.repeat(200), default: 'x'.repeat(4000) }] },
+      { steps: 0, props: Array.from({ length: 64 }, (_, i) => ({ ...prop, key: `p${i}` })) },
+      { steps: 0, props: [], assets: Array.from({ length: 64 }, (_, i) => `a${i}.json`) },
+    ]
+    const invalid: J[] = [
+      { src: 'asset:' + 'x'.repeat(201), props: [] },
+      { url: 'https://' + 'x'.repeat(3993), props: [] },
+      { props: [{ ...prop, label: 'x'.repeat(201) }] },
+      { props: [{ ...prop, default: 'x'.repeat(4001) }] },
+      { props: Array.from({ length: 65 }, (_, i) => ({ ...prop, key: `p${i}` })) },
+      { assets: Array.from({ length: 65 }, (_, i) => `a${i}.json`) },
+      { assets: ['x'.repeat(81)] }, { props: null }, { values: [] },
+      { steps: 0.5 }, { props: [{ ...prop, extra: true }] },
+      JSON.parse('{"steps":0,"props":[],"__proto__":{"injected":true}}'),
+    ]
+    const badValid = valid.filter((r) => validate(rt, r, file).length || JSON.stringify(checkRuntime(r)) !== JSON.stringify(r))
+    const missed = invalid.filter((r) => validate(rt, r, file).length === 0)
+    const badSaved = [...valid, ...invalid].filter((r) => validate(rt, checkRuntime(r), file).length)
+    ok(!badValid.length && !missed.length && !badSaved.length,
+      `round 4 runtime limit matrix: ${valid.length} exact boundaries and ${invalid.length} refused inputs; mismatches=${JSON.stringify({ badValid, missed, badSaved })}`)
+  }
   const repairedDefault = { steps: 0, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 'banana' }] }
   ok(validate(rt, repairedDefault, file).length > 0 && ((checkRuntime(repairedDefault) as unknown as J).props as J[])[0].default === 0, 'a number prop with a text default: the schema refuses what the gate would repair to 0')
   ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'url(x)' }] }, file).length > 0, 'a colour default that smuggles url() is refused, as the gate refuses it')

@@ -135,7 +135,9 @@ export async function run(Miniflare) {
    * here rather than in the outbound stub means the public pass-through
    * assertions, which compare against this function, stay true of it too.
    */
-  const pagesBody = (path) => (path === '/templates/blank.bento.html'
+  const pagesBody = (path) => (path.startsWith('/schema/slides') && existsSync(join(repoRoot, path.slice(1)))
+    ? readFileSync(join(repoRoot, path.slice(1)), 'utf8')
+    : path === '/templates/blank.bento.html'
     ? blankTemplate()
     : `stub bytes for ${path}\n${'x'.repeat(64)}\n`)
 
@@ -143,6 +145,7 @@ export async function run(Miniflare) {
   // real built file — that is the document a colleague's first deck is made
   // from — and fall back to a minimal template so this route is still covered
   // before `node scripts/build-beta-templates.mjs` has run.
+  let schemaStatus = 200 // round 4: an unavailable schema must not become a successful response
   let templateOutage = false
   const builtBlank = join(repoRoot, 'beta', 'templates', 'blank.bento.html')
   const blankTemplate = () => (existsSync(builtBlank)
@@ -197,6 +200,11 @@ export async function run(Miniflare) {
       if (req.url.startsWith(`https://${PAGES_ORIGIN}/`)) {
         proxied.push({ url: req.url, method: req.method, headers: Object.fromEntries(req.headers) })
         const p = new URL(req.url).pathname
+        if (p === '/schema/slides.json' || p === `/schema/slides-${JSON.parse(readFileSync(join(repoRoot, 'slides/package.json'), 'utf8')).version}.json`) {
+          return new Response(schemaStatus === 200 ? readFileSync(join(repoRoot, p.slice(1)), 'utf8') : 'schema unavailable', {
+            status: schemaStatus, headers: { 'content-type': 'application/schema+json', 'cache-control': 'public, max-age=300' },
+          })
+        }
         // Pages 308s an `.html` URL to its extensionless form (KTD3).
         if (p === '/releases/slides/redirected.html') {
           return new Response(null, { status: 308, headers: { location: `https://${PAGES_ORIGIN}/releases/slides/redirected` } })
@@ -353,6 +361,29 @@ export async function run(Miniflare) {
         eq(proxied.length, before, `round 3 schema method boundary never proxies: ${method} ${path}`)
         eq(await response.text(), '', `round 3 schema method boundary has no private bytes: ${method} ${path}`)
       }
+    }
+    // Break round 4: fetch real schema bytes, then remove/fail their origin.
+    // A passing allowlist alone cannot establish that an agent got a schema.
+    {
+      const path = '/schema/slides.json'
+      const response = await call('GET', path, { headers: {
+        'cf-access-jwt-assertion': 'expired-or-malformed',
+        'cf-access-client-secret': 'must-not-leave-the-worker', cookie: 'CF_Authorization=expired',
+      } })
+      const body = await response.text()
+      const sub = proxied.at(-1)
+      ok(response.status === 200 && body === readFileSync(join(repoRoot, path.slice(1)), 'utf8')
+        && response.headers.get('content-type') === 'application/schema+json'
+        && !['cf-access-jwt-assertion', 'cf-access-client-secret', 'cookie'].some((h) => h in sub.headers),
+      'round 4 schema bytes survive the public proxy without forwarding stale credentials')
+      for (const [originStatus, expected] of [[404, 404], [500, 502]]) {
+        schemaStatus = originStatus
+        const unavailable = await call('GET', path)
+        const failedBody = await unavailable.text()
+        ok(unavailable.status === expected && !failedBody.includes('"$defs"'),
+          `round 4 unavailable schema is not a success (origin ${originStatus}, observed ${unavailable.status}, expected ${expected})`)
+      }
+      schemaStatus = 200
     }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')

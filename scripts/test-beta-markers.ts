@@ -101,21 +101,43 @@ export function markerLines(file: string, text: string): Set<number> {
     take(ts.getLeadingCommentRanges(text, sf.endOfFileToken.getFullStart()))
     return out
   }
-  const hash = ['toml', 'yml', 'yaml', 'sh'].includes(ext)
-  const pairs: Array<[string, string]> = ext === 'html' ? [['<!--', '-->'], ['/*', '*/']] : ext === 'css' ? [['/*', '*/']] : hash ? [['#', '\n']] : []
-  for (let i = 0; i < text.length; i++) {
-    // a quoted string on one line is skipped; html text and css have no escapes worth modelling here
-    if (hash && (text[i] === '"' || text[i] === "'")) {
-      const q = text[i]
-      for (i++; i < text.length && text[i] !== q && text[i] !== '\n'; i++) if (text[i] === '\\') i++
-      continue
-    }
-    const pair = pairs.find(([open]) => text.startsWith(open, i))
-    if (!pair) continue
-    const close = text.indexOf(pair[1], i + pair[0].length)
-    const end = close < 0 ? text.length : close
-    mark(i, end)
-    i = end
+  // The other languages. No comment DETECTION here: a marker counts only in a
+  // form a string cannot take.
+  //   css, html   the line OPENS with the comment, or ENDS with a complete
+  //               one that has no quote in it (a string would have to close
+  //               after it, so the line could not end there)
+  //   toml, yaml  a `#` comment outside quotes, on a line that is not content
+  //               of a multi-line string (TOML triple quotes) or of a block
+  //               scalar (YAML `|` and `>`), which this tracks line by line
+  const lines = text.split('\n')
+  const css = [/^\s*\/\*[^\n]*BETA FORK/, /\/\*[^*"'\n]*BETA FORK[^*"'\n]*\*\/\s*$/]
+  const html = [/^\s*<!--[^\n]*BETA FORK/, /<!--[^"'>\n]*BETA FORK[^"'>\n]*-->\s*$/, ...css]
+  const hashComment = (l: string) => {
+    // drop single-line quoted strings, then the comment is everything after a # that starts a word
+    const bare = l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
+    const at = bare.search(/(^|\s)#/)
+    return at >= 0 && bare.slice(at).includes(TOKEN)
+  }
+  if (ext === 'css') lines.forEach((l, i) => { if (css.some((r) => r.test(l))) out.add(i + 1) })
+  else if (ext === 'html') lines.forEach((l, i) => { if (html.some((r) => r.test(l))) out.add(i + 1) })
+  else if (ext === 'toml') {
+    let inString = false
+    lines.forEach((l, i) => {
+      const fences = (l.match(/"""|'''/g) ?? []).length
+      if (!inString && fences === 0 && hashComment(l)) out.add(i + 1)
+      if (fences % 2 === 1) inString = !inString
+    })
+  } else if (['yml', 'yaml'].includes(ext)) {
+    let block = -1 // indent of the key that opened a block scalar, or -1
+    lines.forEach((l, i) => {
+      const indent = l.search(/\S/)
+      if (block >= 0) {
+        if (indent < 0 || indent > block) return // blank, or the scalar's content
+        block = -1
+      }
+      if (hashComment(l)) out.add(i + 1)
+      if (/(?::|^\s*-)\s*[|>][+-]?\d*\s*(?:#.*)?$/.test(l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) block = indent
+    })
   }
   return out
 }
@@ -211,6 +233,25 @@ console.log('the rule itself (no git needed)')
   const line = '/* ordinary note */ enableNewFeature() // BETA FORK: deliberate hook'
   ok(hooksOf(file, '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0].marked,
     'a real marker after a closed ordinary comment still counts')
+}
+
+// From break round 4: the other languages have strings too, and none of these is a comment.
+{
+  const fixtures = [
+    { file: 'slides/src/styles.css', lines: ['.sample::after { content: "/* BETA FORK */"; color: red; }'] },
+    { file: 'slides/index.html', lines: ['<div title="<!-- BETA FORK -->" class="new-feature">Hello</div>'] },
+    { file: 'server/sync-worker/wrangler.toml', lines: ['[vars]', 'CAPTION = \"\"\"', '# BETA FORK', '\"\"\"'] },
+    { file: '.github/workflows/ci.yml', lines: ['env:', '  CAPTION: |', '    # BETA FORK', '    this is scalar data'] },
+  ]
+  for (const { file, lines } of fixtures) {
+    const diff = `@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => '+' + l).join('\n')}\n`
+    const hook = hooksOf(file, diff, lines)[0]
+    ok(!hook.marked && hook.file === file && hook.line === 1,
+      `comment syntax inside a string or scalar does not mark ${file}:1 (marked=${hook.marked})`)
+  }
+  const lines = ['/* BETA FORK: the actual CSS hook */', '.sample { color: red; }']
+  ok(hooksOf('slides/src/styles.css', '@@ -0,0 +1,2 @@\n' + lines.map((l) => '+' + l).join('\n') + '\n', lines)[0].marked,
+    'a real CSS comment still marks the hook')
 }
 
 console.log('\nthe upstream this fork tracks')

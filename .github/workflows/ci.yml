@@ -351,8 +351,9 @@ jobs:
         run: node scripts/test-beta-markers.ts --quiet
 
       - name: Beta schema (the stamp, the file, the public path, the tooling comment)
-        # --check pins schema/slides.json AND its version-pinned twin, the two
-        # files a release publishes, to what the gate's tables generate.
+        # --check pins schema/slides.json to what the gate's tables generate, and
+        # (a fork hook in build-schema.mjs) its version-pinned twin to the same
+        # bytes: a release publishes both.
         run: |
           node scripts/build-schema.mjs --check
           node scripts/test-beta-schema.ts

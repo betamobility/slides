@@ -14,7 +14,9 @@
 // plumbing around them: the stamp, the file on disk, what the release stages,
 // what the worker serves without a login, and what the built shell tells an
 // agent reading it.
-import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, cpSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -63,6 +65,48 @@ if (!existsSync(shellPath)) {
   ok(shell.includes(`Schema: ${URL_} (= window.bento.schema())`), 'the tooling comment names Beta\'s schema URL')
   ok(!shell.includes('bento.page/schema') && !shell.includes('bento.page/llms.txt'), 'and neither upstream\'s schema nor its llms.txt')
   ok(/--schema-url https:\/\/slides\.betamobility\.ai\/schema\/slides\.json --llms-url none/.test(read('slides/package.json')), 'because build:single passes both flags to postbuild-compress.mjs')
+}
+
+// From break round 4: exercise the generation gate on an isolated fixture, never mutate
+// the checkout's generated files. A current main file must not mask a stale twin.
+{
+  const fixture = realpathSync(mkdtempSync(join(tmpdir(), 'beta-schema-round4-')))
+  try {
+    mkdirSync(join(fixture, 'scripts'))
+    mkdirSync(join(fixture, 'schema'))
+    symlinkSync(join(root, 'slides'), join(fixture, 'slides'), 'dir')
+    writeFileSync(join(fixture, 'scripts/build-schema.mjs'), read('scripts/build-schema.mjs'))
+    const primary = join(fixture, 'schema/slides.json')
+    const twin = join(fixture, `schema/slides-${version}.json`)
+    writeFileSync(primary, read('schema/slides.json'))
+    writeFileSync(twin, read(`schema/slides-${version}.json`))
+    const run = () => spawnSync(process.execPath, [join(fixture, 'scripts/build-schema.mjs'), '--check'], { encoding: 'utf8' })
+    const healthy = run()
+    ok(healthy.status === 0, `schema fixture positive control (exit ${healthy.status})`)
+    writeFileSync(primary, '{}\n')
+    const staleMain = run()
+    ok(staleMain.status !== 0 && /out of date/.test(staleMain.stderr), 'a stale schema/slides.json fails the check')
+    writeFileSync(primary, read('schema/slides.json'))
+    const stale = JSON.parse(read(`schema/slides-${version}.json`))
+    delete stale.$defs.slide.properties.runtime
+    writeFileSync(twin, JSON.stringify(stale, null, 2) + '\n')
+    // Execute ONLY the release's schema-staging block, with temporary roots.
+    // Do not run release.mjs: it builds/signs/publishes unrelated artifacts.
+    const stagedSite = join(fixture, 'site')
+    const staging = release.match(/  mkdirSync\(join\(site, 'schema'\)[\s\S]*?\n  \}/)?.[0]
+    if (!staging) throw new Error('release schema staging block was not found')
+    writeFileSync(join(fixture, 'schema/upstream.json'), JSON.stringify({ $id: 'https://bento.page/schema/slides.json' }))
+    new Function('root', 'site', 'join', 'mkdirSync', 'readdirSync', 'readFileSync', 'cpSync', staging)(
+      fixture, stagedSite, join, mkdirSync, readdirSync, readFileSync, cpSync)
+    ok(readFileSync(join(stagedSite, 'schema/slides.json'), 'utf8') === read('schema/slides.json')
+      && readFileSync(join(stagedSite, `schema/slides-${version}.json`), 'utf8') === readFileSync(twin, 'utf8')
+      && !existsSync(join(stagedSite, 'schema/upstream.json')),
+      'release staging copies Beta\'s files byte for byte and leaves upstream\'s out')
+    const staleTwin = run()
+    ok(staleTwin.status !== 0, `stale version-pinned schema fails closed (observed exit ${staleTwin.status}; ${staleTwin.stdout.trim()})`)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
