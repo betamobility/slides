@@ -55,6 +55,16 @@ if (import.meta.url.endsWith('.ts')) {
 
   console.log('§1 editor.ts: Beta literals only, marked, dialog never opened by the launch check')
   ok(existsSync(aboutPath), 'slides/src/beta/about.ts exists (the fragment module KTD2 names)')
+  // Upstream 1.2.x added two Save-as entries that open bento.page's converter.
+  // In this build they stay hidden: the importer there builds a deck on
+  // upstream's shell, and Beta exports PowerPoint itself.
+  ok(/const CONVERTER_LINKS: boolean = false\b/.test(editor), 'the Beta build does not offer upstream\'s converter links')
+  {
+    const at = editor.indexOf('if (CONVERTER_LINKS) {')
+    const guarded = at < 0 ? '' : editor.slice(at, editor.indexOf("item(ICONS.template, t('Start from scratch…')", at))
+    ok(/IMPORT_PPTX_URL/.test(guarded) && /EXPORT_PPTX_URL/.test(guarded), 'both entries sit inside that guard')
+    ok((editor.match(/window\.open\((?:IMPORT|EXPORT)_PPTX_URL/g) || []).length === 2, 'and nothing else in the editor opens either URL')
+  }
 
   /** The method body from its signature to the next member at class indent. */
   const region = (start: RegExp, name: string): string => {

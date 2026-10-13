@@ -132,7 +132,16 @@ export const shape = (
   text = 'html',
   maps: readonly string[] = [],
 ): DocShape => {
-  const skipDoc = new Set([parents, 'modified', 'collab', 'format', 'version'])
+  // 'revisions'/'trail' are in-file version history (docfields.ts class 'history'):
+  // file-local, never synced — each replica keeps its own timeline. (PR2 turns
+  // skipDoc into a content-class allowlist so unknown fields don't sync either.)
+  // docId / readonly / template are identity and file modes: never synced, and —
+  // because skipDoc is ALSO the receive filter (applySet, mergeSnapshot) — never
+  // adopted from a peer either. A remote op can't rewrite a deck's identity,
+  // lock or unlock it, or turn it into a template. `policy` is an encoding tag
+  // like format/version: a loader that meets an unknown one FREEZES the document
+  // read-only on open, so a peer must never be able to set it.
+  const skipDoc = new Set([parents, 'modified', 'collab', 'format', 'version', 'policy', 'revisions', 'trail', 'docId', 'readonly', 'template'])
   // `assets` and `blobs` are per-key for every app and always have been —
   // unioned rather than defaulted so an app naming its own map cannot drop them.
   return { parents, children, text, skipDoc, maps: new Set(['assets', 'blobs', ...maps]) }
@@ -181,11 +190,11 @@ export interface CollabCreds {
   sync?: SyncStateJSON
   writerPub?: string
   writerPriv?: string
-  role?: 'writer' | 'reader'
+  role?: 'writer' | 'reader' | 'audience'
   v?: number
   owner?: string
   ownerPriv?: string
-  invite?: { pub: string; priv: string; role: 'writer' | 'commenter'; exp?: number; sig: string }
+  invite?: { pub: string; priv: string; role: 'writer' | 'commenter' | 'audience'; exp?: number; sig: string }
 }
 
 /** A blob the document references but does not inline. */
@@ -232,6 +241,55 @@ export const BLOB_INLINE_MAX = 64 * 1024
 /** composite element node key: slide id + separator + element id. U+001F
  * never appears in model ids (uid() emits [a-z0-9-]; generators use ASCII). */
 const SEP = '\u001f'
+
+/**
+ * Names that address an object's PROTOTYPE when used as a property key.
+ * `obj['__proto__'] = v` doesn't add a field, it swaps the prototype, so a
+ * remote op naming it made doc.readonly / doc.collab READ a peer's values
+ * through inheritance until reload, past any name-based refusal list. Every
+ * name off the wire is checked whole and per segment: dotted map keys, composite
+ * element keys (SEP), and register keys (`node key`, space-separated).
+ */
+const PROTO_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
+const protoName = (s: unknown): boolean =>
+  typeof s === 'string' && s.split(/[.\u001f ]/).some((p) => PROTO_NAMES.has(p))
+
+/** Does any own KEY, at any depth of a wire value, carry a prototype name?
+ *  Fails CLOSED: an object nested past the cap counts as unsafe rather than
+ *  passing uninspected (no real op payload comes close to 64 levels). */
+function hasProtoKey(x: unknown, depth = 0): boolean {
+  if (x === null || typeof x !== 'object') return false
+  if (depth > 64) return true
+  if (Array.isArray(x)) {
+    // Walk ELEMENTS, not index keys: an index is never a prototype name, and
+    // running protoName per index cost ~85ms on a 100k-row snapshot.
+    for (const el of x) if (hasProtoKey(el, depth + 1)) return true
+    // NAMED own keys on an array (structured clone over BroadcastChannel keeps
+    // them) are walked too, values included — but only when the array has any,
+    // so a plain array stays a single pass.
+    const keys = Object.keys(x)
+    if (keys.length !== x.length)
+      for (const k of keys) {
+        if (/^(0|[1-9]\d*)$/.test(k)) continue
+        if (protoName(k) || hasProtoKey((x as unknown as Record<string, unknown>)[k], depth + 1)) return true
+      }
+    return false
+  }
+  for (const k of Object.keys(x)) {
+    if (protoName(k)) return true
+    if (hasProtoKey((x as Record<string, unknown>)[k], depth + 1)) return true
+  }
+  return false
+}
+
+/** A remote op that names a prototype anywhere — in an identifier it addresses
+ *  (k, el, sl, id, a cascade key) or as a key inside its payload. */
+function protoOp(op: Op): boolean {
+  const o = op as unknown as Partial<Record<'k' | 'el' | 'sl' | 'id', unknown>> & { cas?: unknown }
+  if ([o.k, o.el, o.sl, o.id].some(protoName)) return true
+  if (Array.isArray(o.cas) && o.cas.some(protoName)) return true
+  return hasProtoKey(op)
+}
 export const elKey = (sl: string, el: string): string => sl + SEP + el
 export const keySlide = (key: string): string => key.slice(0, key.indexOf(SEP))
 export const keyEl = (key: string): string => key.slice(key.indexOf(SEP) + 1)
@@ -409,17 +467,29 @@ export interface SyncStateJSON {
    * history only ever grows. An emptied paragraph still carries everything ever
    * typed into it.
    *
-   * bento/slides stamps it: slide text is titles and bullets. bento/spaces
-   * does NOT — a space is typed prose, which is the whole app, and the state
-   * would outweigh the document many times over inside the plaintext
-   * #bento-doc block, re-serialized on every save and re-parsed on every open.
+   * EVERY shipping app stamps it — the default, via `stampInto` → `toJSON()`.
+   * bento/slides and bento/spaces both do (spaces' `SyncSession` extends the
+   * kernel one and does not override the stamp), and the differ runs with
+   * `text: true` (session.ts). The `text: false` option below OMITS the history
+   * and was meant for a future size optimisation — a space is typed prose, so
+   * its token history would outweigh its own document many times over inside
+   * the plaintext #bento-doc block. But NO shipping path uses it, only the sync
+   * rigs, because it is NOT SAFE YET:
    *
-   * ABSENT MEANS BLOCK-LEVEL MERGING, not breakage: `fromJSON` restores a
-   * state with no token history, the differ falls back to a whole-value `set`
-   * for that node's text, and the merge resolves last-writer-wins per block
-   * instead of per character. A LIVE session is unaffected — both replicas hold
-   * the tokens in memory for as long as they are connected; what degrades is
-   * two offline forks reunited later, editing the SAME paragraph.
+   * ABSENT TOKEN HISTORY LOSES DATA ON A SNAPSHOT REUNION — and not only in the
+   * same paragraph, the way this comment once claimed. A txt edit advances the
+   * node's text GENERATION but NOT its `html` LWW register; a `text: false`
+   * stamp drops the generation, so the only stamped carrier of that edit is
+   * gone, and `mergeSnapshot` — the path a mailed-back copy reunites by — never
+   * copies the edited value from the peer's document. Two offline forks that
+   * edited DIFFERENT blocks lose one edit, silently (measured; convergence
+   * still holds, which is exactly why it is silent — docs/DECISIONS.md
+   * 2026-09-17). A LIVE op-replay session is unaffected: a `set`/`txt` op both
+   * carries the value and stamps its register, so the loss is specific to a
+   * lean stamp reunited by snapshot. `toJSON` therefore REFUSES `text: false`
+   * without an explicit acknowledgement (see there). Making it safe — a stamped
+   * carrier that survives dropping the generation — is a separate kernel change
+   * gated on scripts/test-sync.
    *
    * Garbage-collecting the tombstones instead (what Yjs does by default) needs
    * to know every replica has seen the delete. A file that people mail to each
@@ -464,10 +534,14 @@ export class SyncEngine {
   stash: Record<string, Record<string, { v?: unknown; r: Reg }>> = {}
   /** live nodes whose winning parent is dead/absent — data parked here */
   limbo: Record<string, SlideElement> = {}
+  // Both are keyed by REMOTE strings (node ids, actor ids) and never serialized,
+  // so they are null-prototype: `??=` on a key like "constructor" must find
+  // nothing, not Object.prototype.constructor. Defence in depth behind the
+  // intake guards (applyOne / applyEffect).
   /** ops targeting nodes we haven't seen yet, keyed by node id */
-  private pending: Record<string, Op[]> = {}
+  private pending: Record<string, Op[]> = Object.create(null)
   /** out-of-order ops per actor awaiting their gap to fill */
-  private gap: Record<string, Op[]> = {}
+  private gap: Record<string, Op[]> = Object.create(null)
 
   /** The document shape. NO DEFAULT, deliberately: a default is how a spaces
    *  call site silently gets slides' shape and corrupts a room that then has
@@ -513,11 +587,25 @@ export class SyncEngine {
    * scripts/test-sync-equiv.ts compares these bytes against the engine as
    * shipped.
    *
+   * `text: false` is REFUSED without `unsafeOmitTextHistory: true`. Omitting the
+   * history silently loses edits to different blocks on a snapshot reunion (the
+   * note on SyncStateJSON.txt has the mechanism); no shipping stamp path may use
+   * it, so a lean stamp must be an explicit, acknowledged act — the rigs that
+   * measure the lean shape pass the flag. This is the wall that stops a future
+   * size optimisation from wiring `stampInto` to a silent data loss.
+   *
    * KEY ORDER IS PART OF THE FORMAT. `txt` is emitted in its original position
    * rather than appended, so a state WITH text is byte-identical whichever
    * call site produced it.
    */
-  toJSON(opts: { text?: boolean } = {}): SyncStateJSON {
+  toJSON(opts: { text?: boolean; unsafeOmitTextHistory?: boolean } = {}): SyncStateJSON {
+    if (opts.text === false && !opts.unsafeOmitTextHistory)
+      throw new Error(
+        'SyncState.toJSON({ text: false }) omits per-node token history, which silently LOSES ' +
+        'edits to different blocks when a copy is reunited by snapshot (mergeSnapshot) — see the ' +
+        'SyncStateJSON.txt note and docs/DECISIONS.md 2026-09-17. No shipping stamp path may use ' +
+        'it; a rig that intends the lean shape passes { text: false, unsafeOmitTextHistory: true }.',
+      )
     return {
       v: SYNC_V,
       lamport: this.lamport,
@@ -893,6 +981,9 @@ export class SyncEngine {
 
   private applyOne(doc: BentoDoc, op: Op, res: ApplyResult) {
     if (op.a === this.actor) return // own ops are pre-applied at diff time
+    // An actor id is used as a key in vv / gap; a prototype-shaped one is no real
+    // peer, so it is dropped before it can touch either table.
+    if (protoName(op.a)) return
     const seen = this.vv[op.a] ?? 0
     if (op.s <= seen) return // duplicate
     if (op.s > seen + 1) {
@@ -917,6 +1008,13 @@ export class SyncEngine {
   }
 
   private applyEffect(doc: BentoDoc, op: Op, res: ApplyResult) {
+    // A prototype-shaped name anywhere in the op: CONSUMED, never applied. The
+    // version vector already advanced in applyOne, so the sender's later ops
+    // still deliver — dropping it from the sequence would stall them.
+    if (protoOp(op)) {
+      dbg(String((op as { el?: string }).el ?? '?'), `${op.op} DROP prototype-shaped name`)
+      return
+    }
     // A FLAT document has no element layer, so an element-scoped op has
     // nowhere to land. It should never arrive — peers in a room share a shape
     // — but the frame came off the wire, and materializing it would either
@@ -987,8 +1085,19 @@ export class SyncEngine {
       | undefined
   }
 
+  /** A doc-level key this peer must never ADOPT from a remote op or snapshot:
+   *  the never-synced set (skipDoc) — capability, identity, file modes, history,
+   *  volatile/encoding fields. Whatever a peer sends for these is refused, so a
+   *  remote peer or a local page on the channel can't replace the room keys,
+   *  rewrite docId, or flip readonly/template in a victim's open deck (which the
+   *  next save would write to the file). `assets.x` → field `assets`. */
+  private refusesDocKey(k: string): boolean {
+    return this.S.skipDoc.has(this.mapKey(k)?.[0] ?? k)
+  }
+
   private applySet(doc: BentoDoc, op: SetOp, res: ApplyResult) {
     const nodeId = op.el ?? op.sl ?? DOC_NODE
+    if (nodeId === DOC_NODE && this.refusesDocKey(op.k)) return // never adopted, whatever the sender claims
     const rk = `${nodeId} ${op.k}`
     if (!newer(op.l, op.a, this.regs[rk])) return
     // birth gate: an ins is a whole-node assignment — sets older than the
@@ -1409,6 +1518,10 @@ export class SyncEngine {
   mergeSnapshot(doc: BentoDoc, rdoc: BentoDoc, rstate: SyncStateJSON): ApplyResult {
     const res: ApplyResult = { changed: false, structure: false }
     if (rstate.v !== SYNC_V) return res // pre-v2 snapshot: bare-id keys, unusable
+    // A snapshot whose state or doc carries a prototype-shaped key anywhere is
+    // refused whole: its ids/keys feed pos, births, regs, stash and doc writes,
+    // and no honest peer ever produces one. Catch-up still arrives via ops.
+    if (hasProtoKey(rstate) || hasProtoKey(rdoc)) return res
     this.lamport = Math.max(this.lamport, rstate.lamport)
     for (const [a, s] of Object.entries(rstate.vv ?? {})) {
       if ((this.vv[a] ?? 0) < s) {
@@ -1539,6 +1652,8 @@ export class SyncEngine {
       const sp = rk.indexOf(' ')
       const nodeId = rk.slice(0, sp)
       const key = rk.slice(sp + 1)
+      // the snapshot path writes doc fields too: same refusal as applySet
+      if (nodeId === DOC_NODE && this.refusesDocKey(key)) continue
       if (!regNewer(rr, this.regs[rk])) continue
       this.regs[rk] = clone(rr) // registers advance even for dead nodes
       if (nodeId !== DOC_NODE) {

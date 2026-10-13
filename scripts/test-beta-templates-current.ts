@@ -7,7 +7,7 @@
 //
 // WHAT THIS PROVES. Every deck in beta/templates/ embeds the runtime of the
 // shell in slides/dist-single/ — byte for byte, measured as a sha256 over the
-// `bento/deflate-b64` payload blocks, the same regex scripts/publish-site.mjs
+// runtime payload blocks (`bento/deflate-b86`), the same regex scripts/publish-site.mjs
 // runs before a publish (both import scripts/lib/beta-shell-payload.mjs).
 //
 // WHY. The templates are generated output — build-beta-templates.mjs splices
@@ -45,7 +45,7 @@ const ok = (cond: boolean, msg: string) => {
 console.log('shell')
 ok(existsSync(shellPath), `built shell at ${rel(shellPath)} (run "npm run build:single" in slides/)`)
 const shellHash = existsSync(shellPath) ? payloadHashOfFile(shellPath) : null
-ok(shellHash !== null, 'the shell carries bento/deflate-b64 payload blocks (guard is live)')
+ok(shellHash !== null, 'the shell carries runtime payload blocks (guard is live)')
 
 console.log('\ntemplates')
 const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.bento.html')).sort() : []
@@ -54,7 +54,7 @@ for (const f of files) {
   const file = join(dir, f)
   const hash = payloadHashOfFile(file)
   if (hash === null) {
-    ok(false, `${rel(file)} carries no bento/deflate-b64 payload — not a deck built from a shell`)
+    ok(false, `${rel(file)} carries no runtime payload — not a deck built from a shell`)
   } else {
     ok(hash === shellHash, `${rel(file)} embeds the built shell's runtime` +
       (hash === shellHash ? '' : ` (payload ${hash.slice(0, 12)}… ≠ shell ${String(shellHash).slice(0, 12)}… — rebuild it from the current shell)`))

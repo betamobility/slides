@@ -31,6 +31,8 @@ import { gatePackIndex } from './sign-packs.mjs'
 import { walk, plannedDeletions, groupDeletions, supersededPacks } from './site-inventory.mjs'
 import { APPS, RELEASE_MARKER, tagFor } from './apps.mjs'
 import { embeddedShellDecks, staleEmbeddedDecks } from './lib/beta-shell-payload.mjs'
+import { appHash, sameApp } from './lib/apphash.mjs'
+import { accountMayRelease, activeAccount, mismatchMessage, noOwnerMessage, ownerOfRemote, repoRemote } from './gh-account.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const site = join(root, 'site')
@@ -101,13 +103,17 @@ if (doGallery) {
 // (site/templates/*, BETA FORK) EMBED the shell, so they have to be rebuilt/
 // re-shelled whenever the shell changes (release.mjs does this — the guestbook
 // is re-shelled in place, preserving its room). Hash the shell's app payload
-// (the bento/deflate-b64 blocks) and refuse to publish if any embedded-shell
+// (its runtime payload blocks) and refuse to publish if any embedded-shell
 // deck carries a different one — otherwise a stale deck would ship on top of a
 // fresh shell. The list and the hash live in scripts/lib/beta-shell-payload.mjs
 // so scripts/test-beta-templates-current.ts and test-publish-gate.mjs check
 // exactly what this publish checks.
 const shellFile = join(site, 'releases/slides/Bento_Slides.bento.html')
 if (existsSync(shellFile)) {
+  // A file with NO payload is a refusal too: null === null once let this gate
+  // pass while comparing nothing (upstream's check, kept ahead of Beta's list).
+  const shellHash = appHash(readFileSync(shellFile, 'utf8'))
+  if (shellHash === null) die(`the release shell carries no runtime payload blocks — cannot check the example decks against it:\n    · ${shellFile.slice(site.length + 1)}`)
   const decks = embeddedShellDecks(site)
   const stale = staleEmbeddedDecks(shellFile, decks)
   if (stale.length) {
@@ -308,6 +314,30 @@ if (!existsSync(join(site, 'guestbook.bento.html'))) {
   } else {
     console.log(`• deletion gate: ${published.length} published file(s), none would be removed ✓`)
   }
+}
+
+// ---- the gh account, BEFORE anything is published ------------------------
+//
+// Publishing has two halves — mirror the site, then create the GitHub
+// release — and the second needs gh to be the repo owner's account. Three
+// releases running it was not (a job/temp worktree, where the shell's chpwd
+// hook selects the work profile), and the failure came AFTER the site was
+// live. So: which account is gh, and may it release here? Checked here, with
+// nothing mirrored yet; the message names the command to run from ~/personal.
+// scripts/gh-account.mjs holds the rule; scripts/test-publish-account.ts the
+// cases. --dry skips it (a dry run publishes nothing either way); every real
+// publish runs it, because every real publish ends in the release step.
+if (!dry) {
+  const remote = repoRemote(root, (cmd, a) => capture(cmd, a, { stdio: ['ignore', 'pipe', 'ignore'] }))
+  const owner = remote ? ownerOfRemote(remote.url) : null
+  const status = (() => { try { return capture('gh', ['auth', 'status'], { stdio: ['ignore', 'pipe', 'pipe'] }) } catch (e) { return String(e?.stdout ?? '') + String(e?.stderr ?? '') } })()
+  const account = activeAccount(status)
+  const allowed = (process.env.BENTO_RELEASE_ACCOUNTS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  // never skip: an owner that cannot be read is a refusal, not a warning
+  if (!owner) die(noOwnerMessage(root))
+  else if (!accountMayRelease(account, owner, allowed)) {
+    die(mismatchMessage({ account, owner, repoRoot: root.startsWith(process.env.HOME ?? '') ? root : '~/personal/bento', cmd: `node scripts/publish-site.mjs ${args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}` }))
+  } else console.log(`• gh account: ${account} ✓ (may release on ${owner})`)
 }
 
 if (dry) rsyncFlags.push('-n', '-v', '--itemize-changes')

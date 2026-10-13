@@ -56,6 +56,20 @@ if (!app) {
 }
 
 const version = JSON.parse(readFileSync(join(root, `${app.dir}/package.json`), 'utf8')).version
+
+// bento.page/import refuses to build on a slides shell older than
+// convert/src/deliver.ts MIN_SHELL_VERSION. A slides release below that floor
+// would ship a page that refuses the very release it shipped with, so it is
+// stopped here, before anything is built or signed.
+if (app.ownsSiteContent) {
+  const floor = /export const MIN_SHELL_VERSION = '([\d.]+)'/.exec(
+    readFileSync(join(root, 'convert/src/deliver.ts'), 'utf8'))?.[1]
+  if (!floor) { console.error('✗ convert/src/deliver.ts has no MIN_SHELL_VERSION'); process.exit(1) }
+  if (cmpVer(version, floor) < 0) {
+    console.error(`✗ ${app.appId} v${version} is below MIN_SHELL_VERSION ${floor} (convert/src/deliver.ts): bento.page/import would refuse this release`)
+    process.exit(1)
+  }
+}
 const shellSrc = join(root, `${app.dir}/dist-single/${app.shell}`)
 // Where the site is assembled. `site/` for a real release — publish-site.mjs
 // mirrors exactly that path — and `--out` for a rehearsal, so

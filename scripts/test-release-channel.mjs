@@ -285,47 +285,74 @@ await throws(
   'the untouched shell gets PAST the integrity check (and then needs a browser)',
 )
 
-// ---- 5. BETA FORK: the AppConfig key lift ------------------------------------
-// Everything above swapped the kernel CONSTANT. A fork sets the key through
-// configureApp({ publicKeyJwk }) instead (kernel/src/app.ts). Prove that path
-// on an UNMODIFIED kernel: the configured key accepts the manifest this run
-// signed; without the field the platform constant refuses it; and a manifest
-// signed by some other key is refused even with the field set.
-console.log('\nthe configured key (AppConfig.publicKeyJwk, unmodified kernel)')
+// ---- 4. the publisher is a build-time choice, and it is honoured -------------
+//
+// `AppConfig.publicKeyJwk` lets a fork that runs its own signed channel verify
+// against ITS key instead of the platform key embedded in update.ts. The
+// property that makes that safe — "refuses another PUBLISHER" — was untested:
+// every case above configures the app WITHOUT the field, so a refactor that
+// quietly stopped reading it would make every fork accept upstream signatures,
+// and nothing here would move. Three cases, because either direction alone can
+// be passed by a verifier that refuses everything, or one that accepts
+// everything.
+//
+// The "fork" is a second throwaway keypair. Its manifest is the SAME payload,
+// re-signed — so the only thing that differs between accepted and refused is
+// which publisher signed it.
+console.log('\n--- publisher: the configured key is the one that counts ---')
+const { releaseSigner } = await import('./lib/release-sign.ts')
+const fork = await releaseSigner()
+const forkManifest = await fork.envelope(payload)
+
+// direction 1: an UPSTREAM build (no override) refuses a fork-signed manifest.
+serve({ [MANIFEST_URL]: forkManifest })
 {
-  const pristine = join(work, 'kernel-pristine')
-  mkdirSync(pristine, { recursive: true })
-  cpSync(join(root, 'kernel/src'), pristine, { recursive: true })
-  const pApp = await import(join(pristine, 'app.ts'))
-  const pUpdate = await import(join(pristine, 'update.ts'))
-  const base = { appId: app.appId, appName: app.label, manifestUrl: MANIFEST_URL }
-  serve({ [MANIFEST_URL]: manifestRaw })
-  pApp.configureApp({ ...base })
-  {
-    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
-    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
-      `NEGATIVE CONTROL: without publicKeyJwk the platform constant REFUSES the throwaway-signed manifest (${r.status})`)
-  }
-  pApp.configureApp({ ...base, publicKeyJwk: { kty: 'EC', crv: 'P-256', x: pubJwk.x, y: pubJwk.y } })
-  {
-    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
-    ok(r.status === 'update' && r.release.version === payload.version,
-      `with publicKeyJwk configured the same kernel ACCEPTS it and offers v${payload.version}`)
-  }
-  {
-    const otherKey = join(work, 'other-throwaway-key.json')
-    const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
-    writeFileSync(otherKey, JSON.stringify({ kind: 'bento-release-key-THROWAWAY', private: privateKey.export({ format: 'jwk' }), public: publicKey.export({ format: 'jwk' }) }))
-    execFileSync('node', [
-      join(root, 'scripts/sign-release.mjs'), stagedShell,
-      '--app', app.appId, '--version', payload.version,
-      '--url', payload.url, '--key', otherKey, '--out', join(work, 'other-key.json'),
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
-    serve({ [MANIFEST_URL]: readFileSync(join(work, 'other-key.json'), 'utf8') })
-    const r = await pUpdate.checkForUpdates(MANIFEST_URL)
-    ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
-      `NEGATIVE CONTROL: a manifest signed by ANOTHER key is REFUSED by the configured-key shell (${r.status})`)
-  }
+  const r = await kernelUpdate.checkForUpdates(MANIFEST_URL)
+  ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+    `an upstream build REFUSES a manifest signed by another publisher (${r.status})`)
+}
+
+// now build "as the fork": same app, its own publisher.
+kernelApp.configureApp({
+  appId: app.appId,
+  appName: app.label,
+  manifestUrl: MANIFEST_URL,
+  publicKeyJwk: fork.jwk,
+})
+
+// positive control: the fork build ACCEPTS its own publisher. Without this the
+// case below would pass for a verifier that refuses everything.
+{
+  const r = await kernelUpdate.checkForUpdates(MANIFEST_URL)
+  ok(r.status === 'update' && r.release.version === payload.version,
+    `a fork build ACCEPTS its own publisher's manifest and offers v${payload.version}`)
+}
+
+// direction 2: the fork build REFUSES the upstream (platform) publisher — the
+// case the field exists for. A refactor that ignored publicKeyJwk fails HERE.
+serve({ [MANIFEST_URL]: manifestRaw })
+{
+  const r = await kernelUpdate.checkForUpdates(MANIFEST_URL)
+  ok(r.status === 'error' && /signature is INVALID/i.test(r.message),
+    `a fork build REFUSES the platform publisher's manifest (${r.status})`)
+}
+
+// And no app IN THIS REPO sets either field. They are for a downstream build;
+// an upstream app setting one is a deliberate act that deserves a review, not
+// something that slips in. Read from source so the assertion is about what
+// ships, not about what this rig configured.
+{
+  const apps = ['slides', 'spaces', 'dash', 'type']
+  const offenders = apps.filter((a) => {
+    const p = join(root, a, 'src/main.ts')
+    if (!existsSync(p)) return false
+    const block = readFileSync(p, 'utf8').match(/configureApp\(\{[\s\S]*?\}\)/)?.[0] ?? ''
+    return /\b(publicKeyJwk|syncHost)\b/.test(block)
+  })
+  // BETA FORK: this repo IS the downstream build the two fields exist for, so
+  // slides sets both (Beta's release key and relay) and nothing else does.
+  ok(offenders.length === 1 && offenders[0] === 'slides',
+    `only the Beta build of slides sets publicKeyJwk or syncHost (${offenders.join(', ') || 'none does'})`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -171,6 +171,12 @@ export interface RuntimeShow {
   canPrev(): boolean
   /** A rail/grid jump to `idx`: that slide starts on step 0, even when already showing. */
   jump(idx: number): void
+  /** The scene's step on the slide showing (the one it will open on, while it
+   *  loads), or null when that slide mounted no scene. */
+  step(): number | null
+  /** An audience following a presenter: put the scene on slide `idx` at `step`
+   *  (clamped). True when a scene on that slide took it, live or still loading. */
+  follow(idx: number, step: number): boolean
   setReduceMotion(reduce: boolean): void
   dispose(): void
 }
@@ -295,6 +301,18 @@ export function createRuntimeShow(
     prev: () => move('prev', true),
     canNext: () => move('next', false),
     canPrev: () => move('prev', false),
+    // The step the scene is ON, or will open on: a scene still loading already
+    // has one (its bento:init carries it), and the audience must hear that one.
+    step: () => (live ? live.step : null),
+    follow: (idx, step) => {
+      if (!live || live.idx !== idx) return false
+      const to = Math.max(0, Math.min(Math.max(0, live.steps - 1), Math.floor(step)))
+      if (to === live.step) return true
+      live.step = to
+      // a scene still loading reads cur.step in its bento:init; a live one is told
+      live.channel.step(to)
+      return true
+    },
     jump: (idx) => {
       // Reveal fires no slidechanged for the slide already showing, so a
       // click on it resets here; any other target resets on its entry.
