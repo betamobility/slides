@@ -1443,7 +1443,10 @@ export function startPresentation(
   let pendingStep: number | null = null
   const followStep = (index: number, step: number | undefined) => {
     if (typeof step !== 'number') return
-    if (index !== deck.getIndices().h) { pendingStep = step; return }
+    // BETA FORK: also parked while the show is not ready yet. Reveal has an
+    // index before it has slides, so "the slide showing" means nothing then,
+    // and the opening slide gets no slidechanged to apply a step on.
+    if (!deckReady || index !== deck.getIndices().h) { pendingStep = step; return }
     if (runtimeShow.follow(index, step)) return // BETA FORK: a runtime slide's step is its scene's
     const was = steps.step
     steps.set(step)
@@ -1562,6 +1565,9 @@ export function startPresentation(
       // tear it down and run the opening scene off screen.
       if (deck.getIndices().h === startIndex) runtimeShow.enter(startIndex, true)
     }
+    // BETA FORK: a step a presenter named before the show was ready, for the slide
+    // it opens on. Any other slide drained it in slidechanged on the way there.
+    if (pendingStep !== null) { const named = pendingStep; pendingStep = null; followStep(deck.getIndices().h, named) }
     if (opts?.onDocChange) {
       opts.onDocChange({ slidesEl, deck, buildSection })
     }

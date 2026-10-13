@@ -34,7 +34,7 @@ const runtimeShow = createRuntimeShow(doc, { children: [{ querySelector: () => (
 runtimeShow.enter(0, true)
 listener({ source: frame.contentWindow, data: { type: 'bento:ready' } })
 const deps = { runtimeShow, steps, doc, deck: { getIndices: () => ({ h: 0 }), slide() {} }, isState: () => false, anchorOf: (i: number) => i, revealStep() {}, hideStep() {}, showOn: true, bc: { presenter: { verbs: () => ({ nav: (p: any) => wire.push(p) }) } }, visibleIndex: () => 1, showLock: false, currentSection: () => ({}), updateSpeakerControls() {} }
-const js = ts.transpile('let pendingStep = null;\n' + [...decls.values()].map(d => 'const ' + d + ';').join('\n'), { target: ts.ScriptTarget.ES2022 })
+const js = ts.transpile('let pendingStep = null, deckReady = true;\n' + [...decls.values()].map(d => 'const ' + d + ';').join('\n'), { target: ts.ScriptTarget.ES2022 })
 const nav = new Function(...Object.keys(deps), js + '; return {goNext,goPrev,sendNav,followStep}')(...Object.values(deps))
 let failures = 0
 function check(name: string, fn: () => void) { try { fn(); console.log('PASSED: ' + name) } catch (e) { failures++; console.error('FOUND A BUG: ' + name + '\n' + (e as Error).message) } }
