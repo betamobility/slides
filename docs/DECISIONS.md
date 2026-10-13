@@ -6797,10 +6797,20 @@ only for a lifetime measured in months.
 credential the splice tool starts the pairing itself and prints the link. The
 service token is used only when its two variables are set, and then always. A
 run with `CI` set and no credential refuses and starts no pairing. `CI`, not a
-TTY test: an agent's shell has no TTY while a person is there to click. The
+TTY test: an agent's shell has no TTY while a person is there to click. "Set"
+is read literally (any value, even empty), so a machine run is never taken for
+a person because of the value it chose. The
 grant file lives in the home directory or at `SLIDES_GRANT_FILE`, never beside
 the deck, because a week-long grant in a project folder travels with the
 folder.
+
+**A pairing in flight is remembered, beside the grant and as private.** The
+tool waits up to ten minutes for the click, and an agent's shell kills a
+command long before that, taking the only handle that can collect the grant
+with it. The click that followed minted a grant nobody could collect, and the
+next run asked for a second one. The pending pairing (`<grant file>.pending`,
+mode 0600) lets the next run show the same link and collect. The handle is a
+bearer until collected, so it is never printed, in an error message either.
 
 **Accepted, with reason:**
 

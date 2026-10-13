@@ -1588,6 +1588,22 @@ export async function run(Miniflare) {
     r = await publish('POST', '/api/publish/decks', { headers: asGrant(expiredGrant.token), body: deck(slidesDoc('Expired')) })
     eq(r.status, 401, 'an expired grant cannot create either (F3)')
 
+    // Independent U7 probe: actual conditional writes, not just verifyGrant.
+    for (const day of [6, 8]) {
+      const g = await mintGrant(grantEnv, 'alice@betamobility.io', `independent day ${day}`, { now: Date.now() - day * 86400_000 })
+      const read = await publish('GET', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
+      const before = await read.text()
+      const write = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+        headers: asGrant(g.token, { 'if-match': read.headers.get('x-bento-etag') }), body: before,
+      })
+      eq(write.status, day === 6 ? 200 : 401, `NEW worker day ${day} conditional write ${day === 6 ? 'succeeds' : 'refuses'}`)
+      await revokeGrant(grantEnv, 'alice@betamobility.io', g.hash)
+      const revoked = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
+        headers: asGrant(g.token, { 'if-match': '*' }), body: before,
+      })
+      eq(revoked.status, 401, `NEW worker day ${day} revoked grant cannot write`)
+    }
+
     const leakCheck = [...events].map((e) => JSON.stringify(e)).join('\n')
     ok(!leakCheck.includes(aliceTok), 'no analytics event carries the bearer')
     r = await publish('PUT', `/api/publish/decks/0123456789`, { headers: asGrant(aliceTok, { 'if-match': 'x' }), body: deck(slidesDoc('Nope')) })

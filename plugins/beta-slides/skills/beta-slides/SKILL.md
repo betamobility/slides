@@ -57,8 +57,8 @@ Whichever kind, where the deck lives decides how you write it:
 
 - **A file on disk** (not in the store): edit the `#bento-doc` JSON directly.
   Add, remove and reorder slides and elements freely.
-- **A new deck for the store**: build it locally, then create it with the
-  `curl` recipe (no live scenes) or `splice.mjs --create` (any live scene).
+- **A new deck for the store**: build it as a project folder, then create it
+  with `splice.mjs --create` (with or without live scenes).
   Both need a way in to the store, and the way in is one click from the user
   in a browser they are already signed into, which the tool asks for by
   itself. See "Publishing: one click in a browser" below; never ask for a
@@ -621,17 +621,27 @@ for the user to approve, and then carries on with what you asked for.
 SLIDES_GRANT_LABEL="Claude Code" node splice.mjs --create <projectDir>
 ```
 
-1. Run the command you need. With no approval yet, it prints the link first.
+1. Run the command you need **in the background**, or with the longest
+   command timeout your shell allows: it prints the link at once and then
+   waits up to ten minutes for the click, and a shell that shows output only
+   when a command returns would hide the link until it is too late. Read the
+   link from the command's output while it runs.
 2. Give the user that URL, as a link, and wait. Do not run anything else
-   meanwhile.
+   meanwhile. **Never open or approve the link yourself**, with a browser
+   tool or any other way: the click is the user's consent and nobody else's.
 3. They open it in a browser where they are already signed in, see what is
    being granted ("publish decks as you", for 7 days, when the pairing
    started, and what you called yourself), and click **Approve** once.
 4. The command continues, saying who approved and until when. Every later
    `splice.mjs` command publishes as them, with no second approval.
 
-`node splice.mjs --link` does the pairing alone, for when you want the
+If your shell killed the command while it waited, run the same command again:
+it picks the pairing up and shows the same link, so the user never clicks
+twice. `node splice.mjs --link` does the pairing alone, for when you want the
 approval in place before the work starts.
+
+`--create --dry-run` needs no approval. A dry run of a change to a stored
+deck does, because it reads the deck.
 
 **Say who you are.** `SLIDES_GRANT_LABEL` is the name the approval page shows
 and the name on the user's Agent access list. In Claude Code set
@@ -647,25 +657,29 @@ under **Agent access**.
 The approval is kept in `~/.bento/slides-grant.json`, readable only by the
 user, and never beside the deck. **Cowork may not keep `~/.bento` between
 sessions**, so there a new session can mean one new click; that is expected,
-not a fault. A shell with no home directory needs `SLIDES_GRANT_FILE` set to
-a file outside the deck folder.
+not a fault. A shell whose home directory is missing or cannot be written is
+refused before anyone is asked to click; set `SLIDES_GRANT_FILE` to a file
+outside the deck folder and run again.
 
 **Never ask the user for a token, a secret or anything to paste.** If a
-command refuses and says `CI` is set, the shell is marked as a machine run:
+command refuses and says `CI` is set, the shell is marked as a machine run
+(the variable counts when set to anything, even empty). With a user present,
 run `node splice.mjs --link` there, which pairs regardless, then repeat the
-command.
+command. In a real unattended job, stop and say so; do not pair.
 
 **When an approval lapses**, the next command asks for one more click the
 same way. If the store ends it mid-run (the user revoked it), the tool says
 so and names `--link`. Do not fall back to a hand-written `curl` replace.
 
 **When nobody clicks**, the pairing expires after ten minutes and the tool
-says the deck is not published. The file on disk is a complete deck on its
-own. Say that, rather than reporting the work as lost, and run the same
-command again when the user is at a browser.
+says nothing was published. Nothing in the store changed and the project
+folder is untouched. Say that, rather than reporting the work as lost, and
+run the same command again when the user is at a browser.
 
-**When the sandbox cannot run `node` or reach the store at all**, fall back to
-handing the file over:
+**When the sandbox cannot run `node` or reach the store at all**, a new deck
+can still be handed over as a file (below). A deck already in the store
+cannot be changed from there: the user edits it in the editor, or you change
+it from a shell that has `node`.
 
 > Open the file (download it and double-click, or drag it into Chrome), then
 > **Share → Save to Beta**. A store tab opens, you sign in, and you get back a
@@ -686,8 +700,8 @@ person never needs it, and you never ask a person for what it uses.
 A machine run sets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` from
 its own secret store, never from a file in the repo. When both are set the
 tool uses them, through `/api/harness/`, and ignores any saved approval. A
-run with `CI` set and no token refuses instead of pairing, because nobody is
-there to click.
+run with `CI` set (to anything, even empty) and no token refuses instead of
+pairing, because nobody is there to click.
 
 The token may create a deck, read a deck whose id it already has, and replace
 it; it cannot list decks, so a leaked token cannot enumerate anyone's work. A

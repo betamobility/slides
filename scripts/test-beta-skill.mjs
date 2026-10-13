@@ -196,6 +196,12 @@ function sectionOf(text, heading) {
   const people = sectionOf(skill, '### Publishing: one click in a browser')
   ok(/SLIDES_GRANT_LABEL="Claude Code"/.test(people), 'the skill has a Claude Code session name itself on the Agent access list')
   ok(/Cowork/.test(people) && /~\/\.bento/.test(people), 'and says Cowork may not keep the approval between sessions')
+  // What an agent needs to get the ONE click: the tool waits up to ten minutes
+  // and an agent's shell shows output only when a command returns.
+  ok(/background/.test(people) && /ten\s+minutes/.test(people), 'the skill says to run the pairing where its link can be read while it waits')
+  ok(/same\s+link/.test(people), 'and that a command killed while waiting is simply run again, with the same link')
+  ok(/Never\s+open[^.]*yourself/.test(people), 'and that the click is the person\'s, never the agent\'s')
+  ok(!/`curl`\s+recipe/.test(elsewhere), 'no part of the skill outside the machines section sends an agent to a curl recipe')
 }
 // The fallback is still documented, and is no longer the first answer: the
 // pairing command must come BEFORE Save to Beta in the publishing section.
@@ -220,6 +226,16 @@ function sectionOf(text, heading) {
   const off = sectionOf(storeReadme, '### Offboarding')
   ok(/revoke[^.]*grants[^.]*,\s+then\s+remove\s+them\s+from\s+Access/i.test(off),
     'the store README gives the offboarding order: revoke the grants, then remove the person from Access')
+}
+
+// Break-round text probe: a scene project is not yet a standalone deck.
+// --create only POSTs its assembled shell; a timed-out first pairing leaves
+// deck.json/scenes on disk, not a complete .bento.html file.
+{
+  const people = sectionOf(skill, '### Publishing: one click in a browser')
+  const timeout = people.split('**When nobody clicks**')[1]?.split('**When the sandbox')[0] || ''
+  ok(!/file on disk is a complete deck/i.test(timeout) || /if|already|previously|saved.*html/i.test(timeout),
+    'timeout guidance does not promise a complete HTML deck for an unpublished --create project')
 }
 
 // Numbers the README states as prose, checked against the code that enforces
