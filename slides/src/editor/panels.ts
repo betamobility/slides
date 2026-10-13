@@ -5,16 +5,24 @@
 // into a single undo checkpoint.
 
 import type { Store } from '../store'
-import { MEDIA_EMBED_BUDGET, applyChartPalette, defaultChart, internAsset, morphKey, tableStyleFor, uid, type BentoDoc, type ChartElement, type EmbedElement, type LineEnding, type MediaElement, type ShapeElement, type Slide, type SlideElement, type TableElement, type TextElement, type TransitionKind, type CodeElement } from '../model'
+import { MEDIA_EMBED_BUDGET, applyChartPalette, defaultChart, internAsset, morphKey, paginates, isWebUrl, tableStyleFor, uid, type ChartElement, type ImageElement, type LineEnding, type MediaElement, type ShapeElement, type Slide, type SlideElement, type TableElement, type TextElement, type TransitionKind, type CodeElement, type BentoDoc, type EmbedElement } from '../model'
+import { CROP_MAX_SCALE, normalizeCrop } from '../crop'
 import { LANGS } from '../../../kernel/src/tokenize.ts'
 import { resolveAsset } from '../render'
 import { measureElement } from '../measure'
-import { PALETTE_SLOTS, paletteOf, refAt, setColor } from '../palette'
+import { PALETTE_SLOTS, paletteOf, refAt, setColor, slotIsSet } from '../palette'
 import { isMacOS } from '../screens'
 import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
 import { CHART_PRESETS } from '../charts'
 import { FONT_CHOICES, firstFamily, injectFonts } from '../fonts'
+import { CODE_SCOPES, DEFAULT_CODE_COLORS } from '../code'
+import { TIPS } from '../tips'
+import { DATE_PRESETS, TIME_PRESETS, OTHER_FIELDS, formatDate } from '../datefmt'
+import { shrinkImageFile, shrinkNote, fmtBytes } from './shrink'
+import { revealInOrder, revealTogether, removeReveal, type StepPatch } from './reveal'
+import { stepOf } from '../steps'
 import { ICONS } from '../icons'
+import { LayersUI } from './layers'
 import { t } from '../i18n'
 import { lsJson, lsSet } from '../../../kernel/src/storage.ts'
 
@@ -49,6 +57,7 @@ const ROW_TIPS: Record<string, string> = {
   'Color': 'Colour with opacity — pick with the swatch, the % field is how opaque it is',
   'Enter': 'Entrance animation when the slide appears (plays on non-morph entries; equal order = together)',
   'Enter secs': 'How long the entrance takes, in seconds',
+  'Reveal step': 'Animate on click: hidden until the n-th → on this slide (0 = shown with the slide)',
   'Count up': 'Numbers in this text count up from zero when the slide enters',
   'Ambient': 'Continuous motion while the slide is on screen — Ken Burns drift or zoom',
   'Zoom': 'Ken Burns direction — drift, settle out, or settle in',
@@ -64,6 +73,7 @@ const ROW_TIPS: Record<string, string> = {
   'Show on hover': 'Puts this element in a hover set — visible only while that set is active',
   'Group': 'Presentation group — with focus-group hover, the other groups dim',
   'Link to': 'Clicking this element during the show jumps to the chosen slide',
+  'Web link': 'Clicking this element during the show opens this web page in a new tab (https:// only)',
   'Font': 'Typeface for this text',
   'Size (pt)': 'Font size in points',
   'Weight': 'Font weight — 400 regular, 700 bold',
@@ -79,6 +89,7 @@ const ROW_TIPS: Record<string, string> = {
   'Start tip': 'Decoration at the line’s start — arrow, dot or bar',
   'End tip': 'Decoration at the line’s end — arrow, dot or bar',
   'Corner radius': 'How rounded the corners are, in pixels',
+  'Keep aspect ratio': 'On: a resize keeps the image’s proportions (Shift frees it for one drag). Off: width and height move independently and the image stretches',
   'Type': 'Chart type — switching bar⇄pie animates the data across',
   'Legend': 'Show the series legend above the chart',
   'Second axis': 'Adds a right-hand value axis — assign series to it in the list below',
@@ -179,6 +190,16 @@ export class PropsPanel {
     if (final) this.burst = false
   }
 
+  /* The canonical API to edit `slide` attributes. */
+  private editSlideAttrs(slideId: string, mutate: (slide: Slide) => void, final: boolean) {
+    const slide = this.store.slideById(slideId)
+    if (slide) {
+      this.edit(() => {
+        mutate(slide)
+      }, final)
+    }
+  }
+
   private rebuild(force = false) {
     if (!force && this.isActiveEditFocus()) {
       this.stale = true // don't rip the field out from under the user; catch up on focusout
@@ -186,16 +207,38 @@ export class PropsPanel {
     }
     this.stale = false
     this.burst = false
+    // A doc edit rebuilds the same inspector in place: keep its scroll so a
+    // control near the bottom does not throw the panel back to the top on
+    // every change. A selection or slide switch (force) starts the new
+    // inspector at the top, which is where a different subject belongs.
+    const scrollTop = force ? 0 : this.host.scrollTop
+    this.layers.detach()
     this.host.innerHTML = ''
     const els = this.store.selectedElements
+    // Layers (editor/layers.ts): FIRST, whatever is selected — one home. It
+    // used to sit first on the Slide panel and last on an element's, so every
+    // canvas click hopped it from top to bottom (see layerrows.ts's header).
+    this.layers.mount(this.host)
     if (els.length === 0) this.buildSlidePanel()
     else if (els.length === 1) this.buildElementPanel(els[0])
     else this.buildMultiPanel(els)
     this.applyAccordion()
+    this.layers.restoreScroll()
+    this.host.scrollTop = scrollTop
   }
 
   /** Collapsed by default until the user opens them (persisted per title). */
-  private static CLOSED_BY_DEFAULT = new Set(['Slideshow', 'Presenting', 'Interactivity', 'Layout', 'Advanced (JSON)'])
+  private static CLOSED_BY_DEFAULT = new Set(['Slideshow', 'Presenting', 'Interactivity', 'Layout', 'Advanced (JSON)', 'Layers'])
+
+  /** The layer list: one instance, the SAME header and list nodes re-appended
+   *  on every rebuild (a drag emits a doc event per frame; the rows are only
+   *  rebuilt when what they say changed — layers.ts refresh). */
+  private layers = new LayersUI({
+    slide: () => this.store.slide,
+    selection: () => this.store.selection,
+    select: (ids) => this.store.select(ids),
+    setOrder: (elements) => this.store.commit(() => { this.store.slide.elements = elements }),
+  })
 
   /**
    * Retrofit the flat panel into an accordion: every .ed-section header
@@ -220,15 +263,21 @@ export class PropsPanel {
       h.after(body)
       const isOpen = openState[key] ?? !PropsPanel.CLOSED_BY_DEFAULT.has(key)
       h.classList.add('ed-sec-toggle')
-      if (!isOpen) {
-        h.classList.add('closed')
-        body.style.display = 'none'
-      }
+      h.classList.toggle('closed', !isOpen)
+      if (!isOpen) body.style.display = 'none'
+      // A header can outlive a rebuild (the Layers h3 is one node for the
+      // panel's life), so the click handler is attached once and reads its
+      // body from the DOM each time rather than closing over one that a later
+      // rebuild threw away.
+      if (h.dataset.acc) continue
+      h.dataset.acc = '1'
       h.addEventListener('click', () => {
         const nowClosed = h.classList.toggle('closed')
-        body.style.display = nowClosed ? 'none' : ''
-        openState[key] = !nowClosed
-        lsSet('bento-panel-open', JSON.stringify(openState))
+        const live = h.nextElementSibling as HTMLElement | null
+        if (live?.classList.contains('ed-section-body')) live.style.display = nowClosed ? 'none' : ''
+        const state = lsJson<Record<string, boolean>>('bento-panel-open', {})
+        state[key] = !nowClosed
+        lsSet('bento-panel-open', JSON.stringify(state))
       })
     }
   }
@@ -255,6 +304,9 @@ export class PropsPanel {
       this.buildNotes(slide)
       return
     }
+    // Track the `slide.id` so when updating you can find the slide to update using its `id`. 
+    // This way if the doc is actively replaced and the references are stale the update still succeeds.
+    const slideId = slide.id
     this.section(t('Slide'))
     // deck-wide page size: presets + custom. Elements keep their absolute
     // positions — a size change reframes the canvas, it never rescales art.
@@ -286,22 +338,36 @@ export class PropsPanel {
       this.edit(() => { this.store.doc.size.height = Math.max(320, Math.min(4000, Math.round(v))) }, fin)))
     showCustomSize(presetKey === 'Custom…')
     this.row('Background', this.color(slide.background, (v, fin) =>
-      this.edit(() => { this.store.slide.background = v }, fin),
-      { id: null, path: 'background' }))
+      this.editSlideAttrs(slideId, (slide: Slide) => { slide.background = v }, fin),
+      { id: null, path: 'background', slide }))
     this.row('Transition', this.select(
       ['none', 'fade', 'slide', 'zoom', 'morph'],
       slide.transition,
-      (v) => this.edit(() => { this.store.slide.transition = v as TransitionKind }, true),
+      (v) => this.editSlideAttrs(slideId, (slide: Slide) => { slide.transition = v as TransitionKind }, true),
     ))
     // Hidden slides stay in the deck and stay editable; they drop out of the
     // walk, the PDF and the file thumbnail. Offered only on ordinary slides —
     // a state is already unreachable linearly, so hiding one means nothing.
     if (!slide.stateOf) {
       this.row('Hide slide', this.toggle(!!slide.hidden, (v) =>
-        this.edit(() => {
-          if (v) this.store.slide.hidden = true
-          else delete this.store.slide.hidden
+        this.editSlideAttrs(slideId, (slide: Slide) => {
+          if (v) slide.hidden = true
+          else delete slide.hidden
         }, true)))
+      // The third answer to "does it take a number": stays in the walk, counts
+      // for nothing, and {{page}} on it continues the slide before. Builds
+      // (one element revealed per morph step) and interstitials.
+      this.row('Unnumbered', this.toggle(!!slide.unnumbered, (v) =>
+        this.editSlideAttrs(slideId, (slide: Slide) => {
+          if (v) slide.unnumbered = true
+          else delete slide.unnumbered
+        }, true)))
+      if (slide.unnumbered) {
+        const hint = document.createElement('p')
+        hint.className = 'ed-hint'
+        hint.textContent = t('Stays in the show but takes no page number — the page field continues the previous slide’s. For a reveal built as several morph steps, or a card that should not count.')
+        this.host.appendChild(hint)
+      }
     }
     if (slide.transition === 'morph') {
       const hint = document.createElement('p')
@@ -356,7 +422,7 @@ export class PropsPanel {
     name.placeholder = t('unnamed')
     name.value = slide.name ?? ''
     name.addEventListener('change', () =>
-      this.edit(() => { this.store.slide.name = name.value || undefined }, true))
+       this.editSlideAttrs(slideId, (slide: Slide) => { slide.name = name.value || undefined }, true))
     this.row('Name', name)
 
     const stateSel = document.createElement('select')
@@ -373,8 +439,8 @@ export class PropsPanel {
       stateSel.appendChild(o)
     })
     stateSel.addEventListener('change', () =>
-      this.edit(() => {
-        this.store.slide.stateOf = stateSel.value || undefined
+      this.editSlideAttrs(slideId, (slide: Slide) => {
+        slide.stateOf = stateSel.value || undefined
         this.store.emit('slides')
       }, true))
     stateSel.title = t('A state is hidden from arrow-key flow — viewers reach it by clicking a linked element. Shared element ids morph between states.')
@@ -392,14 +458,14 @@ export class PropsPanel {
     this.row('Hover', this.select(
       ['none', 'focus-group', 'reveal'],
       slide.hover?.type ?? 'none',
-      (v) => this.edit(() => {
-        this.store.slide.hover = v === 'none'
+      (v) => this.editSlideAttrs(slideId, (slide: Slide) => {
+        slide.hover = v === 'none'
           ? undefined
-          : { ...(this.store.slide.hover ?? {}), type: v as 'focus-group' | 'reveal' }
+          : { ...(slide.hover ?? {}), type: v as 'focus-group' | 'reveal' }
       }, true)))
     if (slide.hover?.type === 'focus-group') {
       this.row('Hover dim', this.number(slide.hover.dim ?? 0.15, 0.01, (v, fin) =>
-        this.edit(() => { if (this.store.slide.hover) this.store.slide.hover.dim = Math.min(Math.max(v, 0), 1) }, fin)))
+        this.editSlideAttrs(slideId, (slide: Slide) => { if (slide.hover) slide.hover.dim = Math.min(Math.max(v, 0), 1) }, fin)))
     }
     if (slide.hover?.type === 'reveal') {
       const sets = [...new Set(slide.elements.map((e) => e.showOnHover).filter(Boolean))] as string[]
@@ -408,7 +474,7 @@ export class PropsPanel {
       defIn.placeholder = sets[0] ?? 'set name'
       defIn.value = slide.hover.default ?? ''
       defIn.addEventListener('change', () =>
-        this.edit(() => { if (this.store.slide.hover) this.store.slide.hover.default = defIn.value || undefined }, true))
+        this.editSlideAttrs(slideId, (slide: Slide) => { if (slide.hover) slide.hover.default = defIn.value || undefined }, true))
       this.row('Default set', defIn)
       if (sets.length) {
         this.row('Preview set', this.select(sets, this.store.hoverPreview ?? slide.hover.default ?? sets[0], (v) => {
@@ -436,11 +502,11 @@ export class PropsPanel {
     saveLy.textContent = t('＋ Save slide as layout…')
     saveLy.title = "Add this slide to the document's layout picker (New slide button)"
     saveLy.addEventListener('click', () => {
-      const name = window.prompt('Layout name', this.store.slide.name ?? 'My layout')
+      const name = window.prompt('Layout name', slide.name ?? 'My layout')
       if (!name) return
       this.edit(() => {
         const doc = this.store.doc
-        const copy: Slide = JSON.parse(JSON.stringify(this.store.slide))
+        const copy: Slide = JSON.parse(JSON.stringify(slide))
         doc.layouts = [...(doc.layouts ?? []), { ...copy, id: uid('layout'), name, stateOf: undefined, notes: '' }]
       }, true)
     })
@@ -450,13 +516,16 @@ export class PropsPanel {
   }
 
   private buildNotes(slide: Slide) {
+    const slideId = slide.id
     this.section(t('Speaker notes'))
     const notes = document.createElement('textarea')
     notes.className = 'ed-notes'
     notes.placeholder = t('Notes for presenter view (press S while presenting)…')
     notes.value = slide.notes
-    notes.addEventListener('input', () => this.edit(() => { this.store.slide.notes = notes.value }, false))
-    notes.addEventListener('change', () => this.edit(() => { this.store.slide.notes = notes.value }, true))
+    // Using the captured value of `slide` in the closure here to ensure that we edit the slide that fired the event.
+    // Otherwise we end up racing against store updates.
+    notes.addEventListener('input', () => this.editSlideAttrs(slideId, (slide: Slide) => { slide.notes = notes.value }, false))
+    notes.addEventListener('change', () => this.editSlideAttrs(slideId, (slide: Slide) => { slide.notes = notes.value }, true))
     notes.title = t('Shown in the speaker view (Slideshow menu, or S while presenting).') +
       (isMacOS() ? ' ' + t('On macOS, open the speaker view before going fullscreen.') : '')
     this.host.appendChild(notes)
@@ -469,6 +538,8 @@ export class PropsPanel {
     this.opsRow(els)
     this.section(t('Arrange'))
     this.arrangeRows(els)
+    this.section(t('Presenting'))
+    this.revealRow(els)
   }
 
   private buildElementPanel(el: SlideElement) {
@@ -697,7 +768,7 @@ export class PropsPanel {
     const setFx = (patch: Partial<NonNullable<SlideElement['fx']>>) =>
       this.mutate(el.id, (e) => {
         const fx = { ...(e.fx ?? {}), ...patch }
-        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop) delete e.fx
+        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step) delete e.fx
         else e.fx = fx
       }, true)
 
@@ -712,6 +783,19 @@ export class PropsPanel {
       this.row('Enter secs', this.number(
         el.fx.enterDur ?? (el.fx.enter.startsWith('slide-') ? 0.75 : 0.55), 0.05,
         (v, fin) => { if (fin) setFx({ enterDur: Math.max(v, 0.05) }) }))
+    }
+    // "Animate on click": hidden until the n-th → on this slide (0 = with the
+    // slide). The element's Enter plays when its step comes, or a plain fade.
+    // The verbs come first (one click, no number to think about); the number
+    // row underneath is the precise control, and the canvas badge cycles it.
+    this.revealRow([el])
+    this.row('Reveal step', this.number(el.fx?.step ?? 0, 1,
+      (v, fin) => { if (fin) setFx({ step: v >= 1 ? Math.floor(v) : undefined }) }))
+    if (el.fx?.step) {
+      const hint = document.createElement('p')
+      hint.className = 'ed-hint'
+      hint.textContent = t('Hidden until that press of → while presenting; ← hides it again. Give several elements the same step to reveal them together.')
+      this.host.appendChild(hint)
     }
     this.row('Count up', this.select(
       ['off', 'on'], el.fx?.countUp ? 'on' : 'off',
@@ -828,12 +912,37 @@ export class PropsPanel {
       if (el.link === s.id) o.selected = true
       sel.appendChild(o)
     })
+    if (isWebUrl(el.link)) {
+      const web = document.createElement('option')
+      web.value = el.link
+      web.textContent = t('web page (below)')
+      web.selected = true
+      sel.appendChild(web)
+    }
     sel.addEventListener('change', () =>
       this.mutate(el.id, (e) => {
         if (sel.value) e.link = sel.value
         else delete e.link
       }, true))
     this.row('Link to', sel)
+    // Or a web page: opens in a new tab while presenting (discussion #373).
+    const url = document.createElement('input')
+    url.type = 'url'
+    url.placeholder = 'https://…'
+    url.value = isWebUrl(el.link) ? el.link : ''
+    url.addEventListener('change', () => {
+      const v = url.value.trim()
+      if (v && !isWebUrl(v)) {
+        this.toast(t('That doesn’t look like a web address — it should start with https://'))
+        url.value = isWebUrl(el.link) ? el.link : ''
+        return
+      }
+      this.mutate(el.id, (e) => {
+        if (v) e.link = v
+        else if (isWebUrl(e.link)) delete e.link
+      }, true)
+    })
+    this.row('Web link', url)
 
     // one-click interactivity: duplicate this slide as a hidden state
     // (element ids preserved ⇒ it morphs) and link this element to it
@@ -919,15 +1028,22 @@ export class PropsPanel {
     this.store.goTo(insertAt)
   }
 
-  /** Human label for a slide in pickers. */
-  private slideLabel(s: { id: string; name?: string; stateOf?: string }, i: number): string {
-    const linear = this.store.doc.slides.slice(0, i + 1).filter((x) => !x.stateOf).length
+  /**
+   * Human label for a slide in pickers — the number the SIDEBAR shows, so an
+   * author who reads "4" there finds "slide 4" here. That is the page number
+   * (`paginates`), not the position: an unnumbered or hidden slide shows the
+   * number it continues, marked, so two entries can share a number without
+   * being confused for each other.
+   */
+  private slideLabel(s: { id: string; name?: string; stateOf?: string; hidden?: boolean; unnumbered?: boolean }, i: number): string {
+    const doc = this.store.doc
+    const pageAt = (idx: number) => doc.slides.slice(0, idx + 1).filter((x) => paginates(x, doc)).length
     if (s.stateOf) {
-      const p = this.store.doc.slides.findIndex((x) => x.id === s.stateOf)
-      const pn = this.store.doc.slides.slice(0, p + 1).filter((x) => !x.stateOf).length
-      return `state of ${pn}${s.name ? ` — ${s.name}` : ''}`
+      const p = doc.slides.findIndex((x) => x.id === s.stateOf)
+      return `state of ${pageAt(p)}${s.name ? ` — ${s.name}` : ''}`
     }
-    return `slide ${linear}${s.name ? ` — ${s.name}` : ''}`
+    const mark = s.hidden ? ` (${t('hidden')})` : s.unnumbered ? ` (${t('unnumbered')})` : ''
+    return `slide ${pageAt(i)}${mark}${s.name ? ` — ${s.name}` : ''}`
   }
 
   /**
@@ -957,6 +1073,39 @@ export class PropsPanel {
     this.host.appendChild(fit)
   }
 
+  /** "Insert field": drops a {{token}} at the end of the text (discussion
+   *  #381 — the tokens existed since 0.9.12 but nothing in the editor said
+   *  so). Date and time offer presets whose labels show TODAY in that shape,
+   *  so the choice is made by eye; the pattern is in the token for anyone who
+   *  wants to edit it. Appends rather than inserts at a caret: choosing from
+   *  the panel blurs the text box and commits the edit, so there is no caret
+   *  to honour — the token lands at the end, inside the last block, and the
+   *  author moves it like any other text. */
+  private buildFieldPicker(el: TextElement) {
+    const now = new Date()
+    const fmt = (token: string) => { const m = /^\{\{(?:date|time):(.*)\}\}$/.exec(token); return m ? formatDate(now, m[1]) : '' }
+    const pairs: Array<[string, string]> = [['', t('Insert field…')]]
+    for (const p of DATE_PRESETS) pairs.push([p.token, p.token === '{{date}}' ? t(p.label) : `${t('Date')} — ${fmt(p.token)}`])
+    for (const p of TIME_PRESETS) pairs.push([p.token, p.token === '{{time}}' ? t(p.label) : `${t('Time')} — ${fmt(p.token)}`])
+    for (const p of OTHER_FIELDS) pairs.push([p.token, t(p.label)])
+    const sel = this.labeledSelect(pairs, '', (token) => {
+      if (!token) return
+      this.mutate(el.id, (e) => {
+        const tx = e as TextElement
+        const html = tx.html ?? ''
+        // inside the last block if there is one, so the token joins the last
+        // line rather than starting a stray one after </p>
+        const m = /<\/(p|div|li)>\s*$/i.exec(html)
+        const at = m ? m.index : html.length
+        const sep = at > 0 && !/[\s>]$/.test(html.slice(0, at)) ? ' ' : ''
+        tx.html = html.slice(0, at) + sep + token + html.slice(at)
+      }, true)
+      sel.value = ''
+    })
+    sel.title = t('Page number, date, time, title and the document properties — resolved when the slide is shown. Date and time can pin a format: {{date:M/D/YY}}; edit the pattern in the text.')
+    this.row('Field', sel)
+  }
+
   private buildTextProps(el: TextElement) {
     this.section(t('Typography'))
     const hint = document.createElement('p')
@@ -964,6 +1113,7 @@ export class PropsPanel {
     hint.innerHTML = t('While editing: <b>⌘B</b>/<b>⌘I</b>/<b>⌘U</b> · markdown auto-converts — **bold*&#8203;* *italic*&#8203; `code` ~~strike~~ and "- " bullets; pasting markdown converts too. Escape with \\ or press ⌘Z right after to keep the literal characters.')
     this.host.appendChild(hint)
     this.buildFitHeight(el)
+    this.buildFieldPicker(el)
     this.row('Font', this.fontSelect(el))
     // Shown in POINTS (the unit office users know); the model stores slide-space
     // px. 1pt = 4/3 px at the slide's 96dpi space, so 32px = 24pt exactly.
@@ -1227,12 +1377,20 @@ export class PropsPanel {
         s.strokeStyle = v === 'solid' ? undefined : (v as 'dashed' | 'dotted')
         if (v === 'solid') delete s.strokeDash // clear the legacy dash too
       }, true)))
-    if (el.shape === 'line') {
-      const ENDINGS = ['none', 'arrow', 'dot', 'bar']
-      this.row('Start tip', this.select(ENDINGS, el.lineStart ?? 'none', (v) =>
+    // Tips: lines, and open paths (a curved line or connector, #302). The
+    // options are tips.ts's catalogue — display labels localized, values the
+    // model's words. A closed path (polygon) has no ends to tip.
+    if (el.shape === 'line' || (el.shape === 'path' && !/z\s*$/i.test(el.d ?? ''))) {
+      const ENDINGS: Array<[string, string]> = TIPS.map((tip) => [tip.kind, t(tip.label)])
+      this.row('Start tip', this.labeledSelect(ENDINGS, el.lineStart ?? 'none', (v) =>
         this.mutate(el.id, (e) => { (e as ShapeElement).lineStart = v === 'none' ? undefined : (v as LineEnding) }, true)))
-      this.row('End tip', this.select(ENDINGS, el.lineEnd ?? 'none', (v) =>
+      this.row('End tip', this.labeledSelect(ENDINGS, el.lineEnd ?? 'none', (v) =>
         this.mutate(el.id, (e) => { (e as ShapeElement).lineEnd = v === 'none' ? undefined : (v as LineEnding) }, true)))
+    }
+    if (el.shape === 'arrow') {
+      // #304: a head at both ends is a property of the arrow, not a kind
+      this.row('Double-headed', this.toggle(el.heads === 2, (on) =>
+        this.mutate(el.id, (e) => { const s = e as ShapeElement; if (on) s.heads = 2; else delete s.heads }, true)))
     }
     if (el.shape === 'rect') {
       this.row('Corner radius', this.number(el.radius, 1, (v, fin) =>
@@ -1691,11 +1849,98 @@ export class PropsPanel {
   }
 
   private buildImageProps(el: SlideElement) {
+    this.section(t('Picture'))
+    const src = (el as ImageElement).src
+    // what is stored: size and pixels for an embed, the URL otherwise
+    const status = document.createElement('p')
+    status.className = 'ed-hint'
+    const resolved = src ? resolveAsset(this.store.doc, src) : ''
+    if (resolved.startsWith('data:')) {
+      const bytes = Math.floor(((resolved.length - resolved.indexOf(',') - 1) * 3) / 4)
+      status.textContent = t('Embedded') + ` · ${fmtBytes(bytes)}`
+      const probe = new Image()
+      probe.onload = () => { status.textContent = t('Embedded') + ` · ${fmtBytes(bytes)} · ${probe.naturalWidth}×${probe.naturalHeight}` }
+      probe.src = resolved
+    } else status.textContent = src ? t('Linked') + ` · ${src.slice(0, 60)}` : t('No picture yet')
+    this.host.appendChild(status)
+    // Replace: through the shrink path, or at original size (the one honest
+    // way to say "I want the full-resolution file in the deck").
+    const pick = (label: string, original: boolean) => {
+      const b = document.createElement('button')
+      b.className = 'ed-btn ed-btn-block'
+      b.textContent = label
+      b.addEventListener('click', () => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = 'image/*'
+        input.addEventListener('change', () => {
+          const file = input.files?.[0]
+          if (!file) return
+          void (original ? Promise.resolve(null) : shrinkImageFile(file)).then(async (r) => {
+            const dataUrl = r ? r.dataUrl : await new Promise<string>((resolve) => { const rd = new FileReader(); rd.onload = () => resolve(String(rd.result)); rd.readAsDataURL(file) })
+            const note = r && shrinkNote(r)
+            if (note) this.toast(note.photo ? t('Photo stored at {px} px — {before} → {after}', note.vars) : t('Image stored at {px} px — {before} → {after}', note.vars))
+            this.mutate(el.id, (e) => { (e as ImageElement).src = internAsset(this.store.doc, dataUrl) }, true)
+          })
+        })
+        input.click()
+      })
+      this.host.appendChild(b)
+    }
+    pick(t('Replace file…'), false)
+    pick(t('Replace file (original size)…'), true)
     this.section(t('Fit & corners'))
     this.row('Fit', this.select(['contain', 'cover', 'fill'], (el as any).fit, (v) =>
       this.mutate(el.id, (e) => { (e as any).fit = v }, true)))
     this.row('Corner radius', this.number((el as any).radius, 1, (v, fin) =>
       this.mutate(el.id, (e) => { (e as any).radius = Math.max(v, 0) }, fin)))
+    // Off = width and height resize independently. Unlocking also sets
+    // fit:'fill' so the stretch is what the reader sees — contain/cover would
+    // letterbox the distortion away. Re-locking deletes the field (absent =
+    // locked, the format's default) and keeps the CURRENT shape: the next
+    // resize starts from whatever ratio the frame has now.
+    this.row('Keep aspect ratio', this.toggle((el as ImageElement).keepAspectRatio !== false, (on) =>
+      this.mutate(el.id, (e) => {
+        if (e.type !== 'image') return
+        if (on) delete e.keepAspectRatio
+        else { e.keepAspectRatio = false; e.fit = 'fill' }
+      }, true)))
+    this.buildCropProps(el as ImageElement)
+  }
+
+  /** Crop (discussion #319): which part of the picture the frame shows. The
+   *  numbers live in `crop` (model.ts ImageCrop); the canvas edits them by
+   *  gesture (double-click the picture), this block offers the zoom as a
+   *  number, the way in, and the way back to the whole picture. */
+  private buildCropProps(el: ImageElement) {
+    this.section(t('Crop'))
+    const hint = document.createElement('p')
+    hint.className = 'ed-hint'
+    hint.textContent = t('Double-click the picture to move it inside its frame; scroll or pinch to zoom.')
+    this.host.appendChild(hint)
+    const crop = normalizeCrop(el.crop)
+    this.row('Zoom', this.number(Math.round((crop?.scale ?? 1) * 10) / 10, 0.1, (v, fin) =>
+      this.mutate(el.id, (e) => {
+        const im = e as ImageElement
+        const scale = Math.min(CROP_MAX_SCALE, Math.max(1, Number.isFinite(v) ? v : 1))
+        const cur = normalizeCrop(im.crop) ?? { x: 0.5, y: 0.5, scale: 1 }
+        if (scale === 1 && cur.x === 0.5 && cur.y === 0.5) delete im.crop
+        else im.crop = { ...cur, scale }
+      }, fin)))
+    const edit = document.createElement('button')
+    edit.className = 'ed-btn ed-btn-block'
+    edit.textContent = t('✎ Edit crop on canvas')
+    edit.addEventListener('click', () =>
+      document.dispatchEvent(new CustomEvent('bento:edit-crop', { detail: { id: el.id } })))
+    this.host.appendChild(edit)
+    if (el.crop) {
+      const reset = document.createElement('button')
+      reset.className = 'ed-btn ed-btn-block'
+      reset.textContent = t('Reset crop')
+      reset.title = t('Show the whole picture again, the way Fit says')
+      reset.addEventListener('click', () => this.mutate(el.id, (e) => { delete (e as ImageElement).crop }, true))
+      this.host.appendChild(reset)
+    }
   }
 
   private buildMediaProps(el: MediaElement) {
@@ -1785,7 +2030,7 @@ export class PropsPanel {
   }
 
   /**
-   * Beta build (runtime slides U5): the values a scene declares. Each row
+   * BETA FORK (runtime slides U5): the values a scene declares. Each row
    * writes `runtime.values[key]`, undoable like any panel edit; the scene gets
    * them when presented. Labels are the scene author's words, so they do not
    * go through row()'s t(). The scene's code is not editable here: Claude
@@ -1845,7 +2090,7 @@ export class PropsPanel {
   }
 
   /**
-   * Beta build: the `embed` element (model.ts EmbedElement). The view is the
+   * The `embed` element (model.ts EmbedElement). The view is the
    * tier that always paints; "Capture view" fills it from a picture the
    * author already has. It cannot be read off the live frame: the frame is
    * sandboxed without same-origin, so its pixels are not ours to take, and
@@ -1908,6 +2153,14 @@ export class PropsPanel {
     note.className = 'ed-hint'
     note.textContent = t('The live frame loads only while online. Offline mode and a missing network show the captured view instead.')
     this.host.appendChild(note)
+    // Two things a presenter finds out on stage otherwise: a focused frame
+    // keeps the arrow keys until they click outside it, and a live frame means
+    // every viewer who presents this deck requests the page from its author —
+    // the same trade a linked media src makes, said here so it is a choice.
+    const trade = document.createElement('p')
+    trade.className = 'ed-hint'
+    trade.textContent = t('While presenting, a clicked frame keeps the arrow keys until you click outside it. Everyone who presents this deck loads the page from its site.')
+    this.host.appendChild(trade)
   }
 
   private buildCodeProps(el: CodeElement) {
@@ -2086,6 +2339,58 @@ export class PropsPanel {
     this.edit(() => { for (const el of els) el.groupId = gid }, true)
   }
 
+  // --- reveal verbs (editor/reveal.ts decides, this applies) ---------------
+
+  /** Number the selection in reading order: top-to-bottom, then left-to-right. */
+  revealInOrder(els: SlideElement[]) { this.applySteps(revealInOrder(this.store.slide.elements, els)) }
+
+  /** The whole selection on one step, after everything else on the slide. */
+  revealTogether(els: SlideElement[]) { this.applySteps(revealTogether(this.store.slide.elements, els)) }
+
+  /** Shown with the slide again. */
+  removeReveal(els: SlideElement[]) { this.applySteps(removeReveal(els)) }
+
+  private applySteps(patches: StepPatch[]) {
+    if (!patches.length) return
+    this.edit(() => {
+      for (const { id, step } of patches) {
+        const el = this.store.element(id)
+        if (!el) continue
+        const fx = { ...(el.fx ?? {}), step: step > 0 ? step : undefined }
+        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step) delete el.fx
+        else el.fx = fx
+      }
+    }, true)
+  }
+
+  /** The three reveal verbs as a captioned button row (multi panel + Presenting). */
+  private revealRow(els: SlideElement[]) {
+    const stepped = els.some((e) => stepOf(e) > 0)
+    const row = document.createElement('div')
+    row.className = 'ed-reveal-row'
+    const cap = document.createElement('span')
+    cap.className = 'ed-arrange-cap'
+    cap.textContent = t('Reveal')
+    row.appendChild(cap)
+    const btn = (label: string, title: string, run: () => void, enabled = true) => {
+      const b = document.createElement('button')
+      b.className = 'ed-btn'
+      b.textContent = label
+      b.title = title
+      b.disabled = !enabled
+      b.addEventListener('click', run)
+      row.appendChild(b)
+    }
+    btn(t('In order'), t('Hide until → is pressed, one after another in reading order — top to bottom, then left to right'), () => this.revealInOrder(els))
+    btn(t('Together'), t('Hide until → is pressed, all at once'), () => this.revealTogether(els))
+    btn(t('Remove'), t('Show with the slide again'), () => this.removeReveal(els), stepped)
+    this.host.appendChild(row)
+    const hint = document.createElement('p')
+    hint.className = 'ed-hint'
+    hint.textContent = t('Numbered badges on the canvas show the order; click one for the next step.')
+    this.host.appendChild(hint)
+  }
+
   ungroup(els: SlideElement[]) {
     const gids = new Set(els.map((e) => e.groupId).filter(Boolean))
     this.edit(() => {
@@ -2194,7 +2499,7 @@ export class PropsPanel {
     onEdit: (v: string, final: boolean) => void,
     /** when given, offer the deck's brand palette above the free picker.
      *  `id: null` means the property belongs to the slide, not an element. */
-    ref?: { id: string | null; path: string },
+    ref?: { id: string | null; path: string; slide?: Slide },
   ): HTMLElement {
     const input = document.createElement('input')
     input.type = 'color'
@@ -2216,9 +2521,9 @@ export class PropsPanel {
   }
 
   /** Write a colour and its palette reference together, as one undoable edit. */
-  private setRef(ref: { id: string | null; path: string }, literal: string, token: string | null) {
+  private setRef(ref: { id: string | null; path: string; slide?: Slide }, literal: string, token: string | null) {
     this.edit(() => {
-      const holder = ref.id ? this.store.element(ref.id) : this.store.slide
+      const holder = ref.id ? this.store.element(ref.id) : (ref.slide ?? this.store.slide)
       if (holder) setColor(holder as never, ref.path, literal, token)
     }, true)
   }
@@ -2230,15 +2535,16 @@ export class PropsPanel {
    * re-derives it — that is the whole difference between a deck that can be
    * re-branded and one that has 400 hex literals in it.
    */
-  private paletteSwatches(ref: { id: string | null; path: string }, input: HTMLInputElement): HTMLElement {
+  private paletteSwatches(ref: { id: string | null; path: string; slide?: Slide }, input: HTMLInputElement): HTMLElement {
     const row = document.createElement('div')
     row.className = 'ed-swatches'
     const palette = paletteOf(this.store.doc)
-    const holder = (ref.id ? this.store.element(ref.id) : this.store.slide) as never
+    const holder = (ref.id ? this.store.element(ref.id) : (ref.slide ?? this.store.slide)) as never
     const current = holder ? refAt(holder, ref.path) : undefined
     for (const slot of PALETTE_SLOTS) {
       const base = palette[slot]
       if (!base) continue // hlink/folHlink are usually unset — don't show empties
+      if (!slotIsSet(this.store.doc, slot)) continue // accent 2–6 unset: a copy of accent 1, not a choice
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'ed-swatch'
@@ -2271,12 +2577,41 @@ export class PropsPanel {
     slot('Background', () => theme.background, (v) => { this.store.doc.theme.background = v })
     slot('Text', () => theme.color, (v) => { this.store.doc.theme.color = v })
     slot('Accent', () => theme.accent, (v) => { this.store.doc.theme.accent = v })
+    // Accent 2–6 rows only for slots the deck carries (palette.ts slotIsSet):
+    // an unset one resolves to accent 1 and showed as a sixth identical swatch.
     for (const n of [2, 3, 4, 5, 6] as const) {
       const key = `accent${n}` as const
+      if (!slotIsSet(this.store.doc, key)) continue
       slot(t('Accent {n}', { n: String(n) }), () => paletteOf(this.store.doc)[key], (v) => {
         const t2 = this.store.doc.theme
         ;(t2.palette ??= {})[key] = v
       })
+    }
+    // Code colours: theme.codePalette (#450), one row per token scope. Plain
+    // literals, deliberately — the palette-swatch reference (themeRefs) is a
+    // per-element/per-slide path resolved through resolveRef, and codePalette
+    // is a doc-level map that code.ts reads as literals; wiring a second
+    // reference shape for eight keys would be a mechanism, not a row. A deck
+    // with no codePalette shows the built-in scheme as its starting values and
+    // the field is written only when a colour is changed, so a deck without
+    // one keeps rendering exactly as before.
+    const codeHead = document.createElement('p')
+    codeHead.className = 'ed-hint'
+    codeHead.textContent = t('Code colours — one per kind of token in code snippets.')
+    this.host.appendChild(codeHead)
+    for (const scope of CODE_SCOPES) {
+      slot(t(scope.label), () => this.store.doc.theme.codePalette?.[scope.key] ?? DEFAULT_CODE_COLORS[scope.key], (v) => {
+        const t2 = this.store.doc.theme
+        ;(t2.codePalette ??= {})[scope.key] = v
+      })
+    }
+    if (this.store.doc.theme.codePalette) {
+      const reset = document.createElement('button')
+      reset.className = 'ed-btn ed-btn-block'
+      reset.textContent = t('Use the built-in code colours')
+      reset.title = t('Removes the deck’s code palette; snippets render with the standard scheme again')
+      reset.addEventListener('click', () => this.edit(() => { delete this.store.doc.theme.codePalette }, true))
+      this.host.appendChild(reset)
     }
   }
 
@@ -2285,7 +2620,7 @@ export class PropsPanel {
   private colorAlpha(
     value: string,
     onEdit: (v: string, final: boolean) => void,
-    ref?: { id: string | null; path: string },
+    ref?: { id: string | null; path: string; slide?: Slide },
   ): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'ed-coloralpha'

@@ -6,8 +6,10 @@
 // are extensionful, but the kernel's parameter properties defeat node's
 // strip-only loader) and re-executes the bundle.
 //
-// WHAT THIS PROVES: syncHost() resolves localStorage 'bento-sync-url' first,
-// then the host the app configured, then the platform default; and a rig that
+// WHAT THIS PROVES: syncHost() resolves localStorage 'bento-sync-url' first
+// (only on an origin whose storage is the document's own, never on file://,
+// where every local deck shares one), then the host the app configured, then
+// the platform default; and a rig that
 // never calls configureApp() still gets the default rather than a throw.
 // The publicKeyJwk half of the lift is proven by test-release-channel.mjs §5.
 
@@ -56,7 +58,12 @@ ok(syncHost() === DEFAULT_SYNC_HOST, 'configured without syncHost: still the pla
 configureApp({ appId: 'test-app', appName: 'test', manifestUrl: 'https://example.test/manifest.json', syncHost: 'wss://sync.example.test' })
 ok(syncHost() === 'wss://sync.example.test', 'configured syncHost wins over the platform default')
 store.set('bento-sync-url', 'ws://localhost:8787')
-ok(syncHost() === 'ws://localhost:8787', "the localStorage 'bento-sync-url' dev override wins over both")
+// Upstream 1.2.x (kernel/src/net.ts sharedStorageOrigin): on a shared storage
+// origin, file:// or an opaque one, a local deck could plant the override and
+// steer another deck's collab at a hostile relay, so it is ignored there.
+ok(syncHost() === 'wss://sync.example.test', "on a shared storage origin (this rig has none of its own) the 'bento-sync-url' override is ignored")
+;(globalThis as any).self = { origin: 'https://slides.example.test' }
+ok(syncHost() === 'ws://localhost:8787', "on an origin of its own the localStorage 'bento-sync-url' dev override wins over both")
 store.delete('bento-sync-url')
 ok(syncHost() === 'wss://sync.example.test', 'clearing the override returns to the configured host')
 
