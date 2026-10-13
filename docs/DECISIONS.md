@@ -6835,6 +6835,11 @@ a store-side way to collect an approved pairing without a client-held secret.
   the ten minutes is accepted by the store and not collected; the run says the
   pairing lapsed and to run again, and the stray grant shows on the person's
   Agent access list until it ends or they revoke it. Pinned by the splice rig.
+- `SLIDES_GRANT_FILE` is used as given. "Never beside the deck" is the
+  tool's default and its refusal when there is no home; a caller who points
+  the variable into the deck folder has chosen that, and nothing checks the
+  path. Two security reviews raised it. Not settled by the plan or by the
+  maintainer: reopen it if a grant file ever turns up in a project folder.
 - The label on the Agent access list comes from `SLIDES_GRANT_LABEL`, a string
   the caller chooses. It tells a person's own agents apart; it is not an
   identity and nothing trusts it.
