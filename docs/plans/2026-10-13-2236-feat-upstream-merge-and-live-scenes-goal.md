@@ -19,7 +19,7 @@ The plan's Goal Capsule, session-settled Key Decisions and Scope Boundaries are 
    - Ask Codex, through `codex exec` in this worktree, to break the unit: write and run at least three new failing-first tests against the unit's test scenarios from the plan, including one for each failure path the unit builds, and report which passed and which found a bug. A bug Codex finds is fixed with a repro test before the unit continues.
    - Repeat review and break attempts until Codex reports no new finding at P0 or P1 two rounds in a row. That is "rock solid" for the unit.
 4. Browser-visible units (U10, U11, U13, U14) are verified by starting the dev server, loading the page, taking a screenshot, and recording a one-line regression check in the PR body.
-5. Each unit lands as one squash-merged PR to `main` with Beta's attribution trailers, after CI is green. Push after every commit.
+5. Each unit lands as one squash-merged PR to `main` with Beta's attribution trailers, after CI is green, except U1, which lands as a merge commit. Push after every commit.
 6. After the merge unit (U1) lands, run the sync rigs with `SEEDS=300` and the relay protocol rig once more on `main`.
 7. Keep a running status file at `docs/plans/2026-10-13-2236-goal-status.md`: unit, state (todo, in progress, blocked, merged), the last Codex verdict, and the stop reached if any. Commit it with every unit.
 
