@@ -1070,7 +1070,13 @@ export function startPresentation(
       num.className = 'sv-thumb-n'
       num.textContent = String(visibleIndex(idx))
       b.appendChild(num)
-      b.addEventListener('click', () => { runtimeShow.jump(idx); deck.slide(idx, 0); toggleGrid(false) })
+      b.addEventListener('click', () => {
+        const replay = idx === deck.getIndices().h
+        runtimeShow.jump(idx); deck.slide(idx, 0); toggleGrid(false)
+        // BETA FORK: Reveal fires no slidechanged for the slide already showing, so a
+        // scene replayed from its first step is announced here or the audience stays put.
+        if (replay) sendNav(idx)
+      })
       return b
     }
 
@@ -1550,7 +1556,11 @@ export function startPresentation(
       cacheSlideSymbols(doc, first, startIndex)
       mountLiveCharts(doc.slides[startIndex], first)
       startMediaIn(first)
-      runtimeShow.enter(startIndex, true)
+      // BETA FORK: only when the show really opens here. A presenter's nav that
+      // arrived before Reveal was ready (pendingIndex) has already moved the deck
+      // and mounted that slide's scene; entering the opening slide now would
+      // tear it down and run the opening scene off screen.
+      if (deck.getIndices().h === startIndex) runtimeShow.enter(startIndex, true)
     }
     if (opts?.onDocChange) {
       opts.onDocChange({ slidesEl, deck, buildSection })
