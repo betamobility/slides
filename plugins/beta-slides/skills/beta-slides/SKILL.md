@@ -538,6 +538,12 @@ store prints an approval link for the user (next section). It reads
 `https://slides.betamobility.ai`).
 
 ```bash
+# the approval alone, before any work (next section)
+node splice.mjs --link
+
+# a stored deck as it is now, and the ids an edit needs
+node splice.mjs --read <deckId> [--out current.bento.html]
+
 # a new deck: the published blank template, deck.json's slides, then the scenes
 node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
 
@@ -634,6 +640,9 @@ SLIDES_GRANT_LABEL="Claude Code" node splice.mjs --create <projectDir>
    started, and what you called yourself), and click **Approve** once.
 4. The command continues, saying who approved and until when. Every later
    `splice.mjs` command publishes as them, with no second approval.
+5. When it exits, read its last lines. Exit 0 ends with the deck's link:
+   give it to the user. Any other exit is a refusal that says what to run
+   next: report it, do not guess.
 
 **A command your shell kills while it waits takes the pairing with it**: a
 click made afterwards approves nothing you can use, and the next run prints a
@@ -666,8 +675,8 @@ outside the deck folder and run again.
 **Never ask the user for a token, a secret or anything to paste.** If a
 command refuses and says `CI` is set, the shell is marked as a machine run
 (the variable counts when set to anything, even empty). With a user present,
-run `node splice.mjs --link` there, which pairs regardless, then repeat the
-command. In a real unattended job, stop and say so; do not pair.
+run `node splice.mjs --link` there, in the background as above; it pairs
+regardless. Then repeat the command. In a real unattended job, stop and say so; do not pair.
 
 **When an approval lapses**, the next command asks for one more click the
 same way. If the store ends it mid-run (the user revoked it), the tool says

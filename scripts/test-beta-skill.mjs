@@ -202,6 +202,8 @@ function sectionOf(text, heading) {
   ok(/kills[^.]*takes\s+the\s+pairing\s+with\s+it/.test(people) && /new\s+link/.test(people), 'and that a command killed while waiting loses the pairing, so the next link is a new one')
   ok(/Never\s+open[^.]*yourself/.test(people), 'and that the click is the person\'s, never the agent\'s')
   ok(!/`curl`\s+recipe/.test(elsewhere), 'no part of the skill outside the machines section sends an agent to a curl recipe')
+  ok(/When\s+it\s+exits/.test(people), 'and what to read when the background command ends')
+  ok(/splice\.mjs --link/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')) && /splice\.mjs --read <deckId>/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')), 'the command synopsis lists --link and --read')
 }
 // The fallback is still documented, and is no longer the first answer: the
 // pairing command must come BEFORE Save to Beta in the publishing section.
@@ -234,7 +236,7 @@ function sectionOf(text, heading) {
 {
   const people = sectionOf(skill, '### Publishing: one click in a browser')
   const timeout = people.split('**When nobody clicks**')[1]?.split('**When the sandbox')[0] || ''
-  ok(!/file on disk is a complete deck/i.test(timeout) || /if|already|previously|saved.*html/i.test(timeout),
+  ok(timeout.length > 0 && !/file on disk is a complete deck/i.test(timeout),
     'timeout guidance does not promise a complete HTML deck for an unpublished --create project')
 }
 

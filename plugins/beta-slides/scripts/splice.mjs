@@ -500,7 +500,8 @@ function writePrivate(path, record) {
   // Removed first: `mode` applies only when the file is created, and a secret
   // must never spend a moment in a file someone else could already read.
   rmSync(path, { force: true })
-  writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { mode: 0o600 })
+  // 'wx': something put at this path since the line above is not written into.
+  writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
   chmodSync(path, 0o600)
 }
 
@@ -582,13 +583,19 @@ function storeEnv(env) {
  * nobody is there to click: that refuses and starts no pairing. `CI` and not a TTY test, because
  * an agent's shell has no TTY while a person is very much there.
  */
+/** Is this a machine run? A half-set token pair is refused, never read as "no token". */
+function hasToken(env) {
+  if (!env.CF_ACCESS_CLIENT_ID && !env.CF_ACCESS_CLIENT_SECRET) return false
+  for (const k of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
+    if (!env[k]) throw new Refusal(`${k} is not set; a machine run needs both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET. Unset both to publish with a browser approval instead`)
+  }
+  return true
+}
+
 async function access(env, log) {
   const { store, timeout } = storeEnv(env)
 
-  if (env.CF_ACCESS_CLIENT_ID || env.CF_ACCESS_CLIENT_SECRET) {
-    for (const k of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
-      if (!env[k]) throw new Refusal(`${k} is not set; a machine run needs both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET. Unset both to publish with a browser approval instead`)
-    }
+  if (hasToken(env)) {
     return {
       store, api: `${store}/api/harness`, timeout,
       auth: { 'CF-Access-Client-Id': env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': env.CF_ACCESS_CLIENT_SECRET },
@@ -674,7 +681,12 @@ async function failed(res, what, cfg) {
   // Only a run that SENT the token is told to check it: a person holding an
   // approval, or nothing at all, must never be sent after one.
   if ((res.status === 401 || res.status === 403) && cfg && !cfg.grantPath) return new Error(`${what}: ${res.status}; the service token was not accepted (check CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET)`)
-  if (res.status === 403 && cfg?.grantPath) return new Error(`${what}: the store refused this approval (403); run splice.mjs --link and ask the person to approve again, and tell the maintainer if it repeats`)
+  if (res.status === 403 && cfg?.grantPath) {
+    // Forgotten, as on a 401: with the file in place the `--link` this names
+    // would answer "already approved" and the next run would be refused again.
+    forgetGrant(cfg.grantPath)
+    return new Refusal(`${what}: the store refused this approval (403); run splice.mjs --link and ask the person to approve again, and tell the maintainer if it repeats`)
+  }
   return new Error(`${what}: the store answered ${res.status}${body ? ` (${body})` : ''}`)
 }
 
@@ -822,7 +834,7 @@ export async function link({ env = process.env, log = console.log, force = false
   if (typeof handle !== 'string' || !handle) throw new Error('starting the pairing: the store gave no handle to collect the approval with')
 
   // Read by an agent as often as by a person, so it says whose click it is.
-  log('Show this link to the person: they open it and click Approve (their click, never yours). This run carries on as soon as they have.')
+  log('Show this link to the person: they open it and click Approve (their click, never yours). This run waits up to ten minutes and carries on as soon as they have; keep it running.')
   log(url || `${store}/link/${code}`)
 
   const deadline = Date.parse(expires) || Date.now() + 10 * 60 * 1000
@@ -866,9 +878,11 @@ export async function link({ env = process.env, log = console.log, force = false
     // CF_ACCESS_* would send the reader after the wrong thing entirely.
     if (!poll.ok) throw new Error(`waiting for the approval: the store answered ${poll.status} on a route that needs no credential`)
     answered = true
-    let body
-    try { body = JSON.parse(await poll.text()) } catch { throw new Error('waiting for the approval: the store answered 200 but its body did not parse') }
-    if (!body.grant) {
+    // A 200 is the store handing the grant over, once. An answer that stalls or
+    // arrives broken is that one delivery lost, the same as an empty one.
+    let body = null
+    try { body = JSON.parse(await poll.text()) } catch { /* lost in transit */ }
+    if (!body?.grant) {
       // The store minted a grant and handed it to whoever held this handle —
       // which is this tool, so our own answer was lost in transit. It cannot
       // be repeated: the store keeps only a hash of it.
@@ -1009,6 +1023,7 @@ export async function create(dir, { dryRun = false, skipUrlCheck = false, env = 
   // the framing check, the public template and a dry run all come first, so
   // neither a refusal nor a dry run ever costs the person a click.
   const { store, timeout } = storeEnv(env)
+  hasToken(env) // a half-set token refuses now, as it will at the real run
   if (!skipUrlCheck) await checkUrls(project.scenes, { timeout }, warn)
   const ms = timeout('store')
   // Public path; the same template GET /new/blank mints from.

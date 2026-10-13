@@ -221,6 +221,12 @@ let hangPollAfter = 0
 let pollSeenAt: number[] = []
 let revokeBeforePublishPut = false
 let lastPairingHandle = ''
+// Break round 5: fail at distinct boundaries, including after consent was spent.
+// `refuseGrant` plays an edge that refuses a grant outright (403).
+let refuseGrant = false
+let startStatus = 0
+let truncateApprovedPoll = false
+let revokeBeforeAsset = false
 /** How many of the tool's next polls get no answer at all (a dropped connection). */
 let pollDrops = 0
 const approvals: string[] = []
@@ -273,6 +279,19 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (refuseGrant && path.startsWith('/api/publish/')) {
+      log.push({ method, path, status: 403, service })
+      res.writeHead(403); res.end(); return
+    }
+    if (startStatus && method === 'POST' && path === '/api/link/start') {
+      log.push({ method, path, status: startStatus, service })
+      res.writeHead(startStatus); res.end(); return
+    }
+    if (revokeBeforeAsset && method === 'PUT' && /^\/api\/publish\/decks\/[^/]+\/assets\//.test(path)) {
+      revokeBeforeAsset = false
+      const kv = await mf.getKVNamespace('GRANTS')
+      for (const k of (await kv.list({ prefix: 'grant:' })).keys) await kv.delete(k.name)
+    }
     if (method === 'GET' && /^\/api\/link\//.test(path)) {
       pollSeenAt.push(Date.now())
       if (hangPollAfter && pollSeenAt.length > hangPollAfter) {
@@ -311,6 +330,12 @@ const proxy = createServer(async (req, res) => {
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
     let out = Buffer.from(await r.arrayBuffer())
+    if (truncateApprovedPoll && method === 'GET' && /^\/api\/link\//.test(path) && r.status === 200) {
+      // The worker has delivered (and cannot repeat) the bearer. Let headers
+      // and a partial JSON body arrive, then stall until the client's timeout.
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': String(out.length) })
+      res.write('{'); hung.push(res); return
+    }
     if (method === 'POST' && path === '/api/link/start' && r.status === 200) {
       const started = JSON.parse(out.toString())
       lastPairingHandle = started.handle
@@ -884,6 +909,19 @@ try {
       const skipped = await runTool([id, withUrl('/deny'), '--skip-url-check'], { env: tls })
       eq(skipped.code, 0, `--skip-url-check bypasses the check${skipped.code ? `: ${skipped.err}` : ''}`)
       eq(hits.length, 0, '--skip-url-check sends no request to the page')
+      // A refusal the tool can make by itself comes before anyone is asked to
+      // click (upstream-merge plan U6): no pairing, no approval, no grant.
+      rmSync(GRANT_FILE, { force: true })
+      const clicks = approvals.length
+      for (const args of [
+        [id, withUrl('/deny')],
+        ['--create', project({ map: { manifest: { steps: 1, props: [], url: base + '/deny' } } }, { title: 'Rammet', slides: [{ id: 'cover', elements: [] }] })],
+      ]) {
+        log = []
+        const r = await runTool(args, { env: { ...tls, CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+        ok(r.code !== 0 && /X-Frame-Options/.test(r.err) && !log.some((l) => l.path === '/api/link/start') && approvals.length === clicks && !existsSync(GRANT_FILE),
+          `a framing refusal on ${args[0] === '--create' ? '--create' : 'an update'} with no credential costs no click`)
+      }
       const dry = await runTool([id, withUrl('/deny'), '--dry-run'], { env: tls })
       ok(dry.code !== 0 && /scene "map"[^\n]*X-Frame-Options/.test(dry.err), 'the check runs on --dry-run too')
       https.close()
@@ -1377,8 +1415,7 @@ try {
 
   console.log('\nCI is a presence test, and a poll that misbehaves stays inside the deadline (U6, break round 3)')
   {
-    // Additional round-1/2 variants: CI is a presence test, and a directory
-    // at the pending destination is as unusable as one at the grant itself.
+    // CI is a presence test, whatever its value.
     const proof = await seed()
     for (const ci of ['false', '0']) {
       rmSync(GRANT_FILE, { force: true }); log = []
@@ -1407,6 +1444,102 @@ try {
         && !existsSync(GRANT_FILE),
         `create poll ${status} respects deadline, hides handle and claims no HTML file`)
     }
+  }
+
+  console.log('\npairing start, delivery and revoked-write failures (U6, U7, break round 5)')
+  {
+    rmSync(GRANT_FILE, { force: true }); log = []
+    const draft = project({}, { title: 'Round 5', slides: [{ id: 'cover', elements: [] }] })
+    const before = readFileSync(join(draft, 'deck.json'), 'utf8')
+    startStatus = 429
+    let throttled
+    try { throttled = await runTool(['--create', draft], { env: noCredential }) }
+    finally { startStatus = 0 }
+    ok(throttled.code !== 0 && /wait a minute.*same command again/i.test(throttled.err)
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && readFileSync(join(draft, 'deck.json'), 'utf8') === before,
+      'automatic create gives retry advice and leaves project unpublished')
+
+    log = []; truncateApprovedPoll = true; pairingLifetimeMs = 1800
+    const deliveryBegan = Date.now()
+    let truncated
+    try { truncated = await runTool(['--create', draft], { env: { ...noCredential, SPLICE_TIMEOUT_MS: '3000' } }) }
+    finally { truncateApprovedPoll = false; pairingLifetimeMs = 0 }
+    ok(truncated.code !== 0 && /run .* again/i.test(truncated.err)
+      && Date.now() - deliveryBegan < 2800
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && !(truncated.out + truncated.err).includes(lastPairingHandle),
+      `partial approval response gives retry advice without secrets (${truncated.err.trim()})`)
+
+    // Unlike the earlier PUT refusal case, --create has already made a deck
+    // when its first asset discovers revocation. Retrying must target that id.
+    log = []; revokeBeforeAsset = true
+    const scene = project({ live: { manifest: { steps: 0, props: [], assets: ['pts.json'] }, assets: { 'pts.json': '[1]' } } },
+      { title: 'Round 5 revoked asset', slides: [] })
+    let revoked
+    try { revoked = await runTool(['--create', scene], { env: noCredential }) }
+    finally { revokeBeforeAsset = false }
+    const made = /created deck ([0-9A-Za-z]{10}):/.exec(revoked.out)?.[1]
+    ok(revoked.code !== 0 && !!made && /approval is no longer valid/.test(revoked.err)
+      && revoked.err.includes(`splice.mjs ${made} `) && /do not run --create a second time/.test(revoked.err)
+      && !existsSync(GRANT_FILE) && log.filter(l => l.method === 'POST' && l.path === '/api/publish/decks').length === 1
+      && (await store('GET', `/api/harness/decks/${made}`)).status === 200,
+      'retains created deck id, forgets grant and gives nonduplicating recovery')
+
+    // A half-set machine credential must win even over a foreign approval;
+    // no read, deletion, fallback pairing or credential disclosure is allowed.
+    await runTool(['--link'], { env: noCredential })
+    const foreign = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+    foreign.store = 'https://other.invalid'
+    writeFileSync(GRANT_FILE, JSON.stringify(foreign))
+    const saved = readFileSync(GRANT_FILE, 'utf8')
+    log = []
+    const half = await runTool(['--read', await seed()], { env: { CF_ACCESS_CLIENT_ID: undefined } })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_ID is not set/.test(half.err) && log.length === 0
+      && readFileSync(GRANT_FILE, 'utf8') === saved && !(half.out + half.err).includes(CLIENT_SECRET),
+      'missing token variable refuses before consulting foreign grant')
+    rmSync(GRANT_FILE, { force: true })
+  }
+
+  console.log('\ncases the second review asked for (U6)')
+  {
+    // A 403 under a grant: the advice it gives must be advice that works.
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    const id = await seed()
+    refuseGrant = true
+    const refused = await runTool(['--read', id], { env: noCredential })
+    refuseGrant = false
+    ok(refused.code !== 0 && /--link/.test(refused.err) && !/CF_ACCESS|token/i.test(refused.err), 'a 403 under an approval names --link and never a token')
+    ok(!existsSync(GRANT_FILE), 'and forgets the approval, so --link is not answered with "already approved"')
+    const before = approvals.length
+    const relinked = await runTool(['--link'], { env: noCredential })
+    ok(relinked.code === 0 && approvals.length === before + 1 && !/Already approved/.test(relinked.out), 'the --link it names then really pairs')
+
+    // The machine case: a token with CI set is exactly what a CI job has.
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    const machine = await runTool(['--read', id], { env: { CI: 'true' } })
+    eq(machine.code, 0, `the service token with CI set reads the deck${machine.code ? `: ${machine.err}` : ''}`)
+    ok(log.some((l) => l.service && l.path === `/api/harness/decks/${id}`) && !log.some((l) => l.path === '/api/link/start'), 'through the harness path, with no pairing')
+
+    const half = await runTool(['--create', project({}, { title: 'Halv', slides: [{ id: 'cover', elements: [] }] }), '--dry-run'], { env: { CF_ACCESS_CLIENT_SECRET: undefined } })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_SECRET is not set/.test(half.err), 'a half-set token refuses a --create dry run too, as it will the real run')
+
+    // A poll that hangs is cut off at the pairing's deadline, not at the request timeout (30 s).
+    autoApprove = false; pairingLifetimeMs = 2500; hangPollAfter = 1; pollSeenAt = []
+    const began = Date.now()
+    const hungRun = await runTool(['--link'], { env: noCredential })
+    const took = Date.now() - began
+    autoApprove = true; pairingLifetimeMs = 0; hangPollAfter = 0
+    ok(hungRun.code !== 0 && pollSeenAt.length === 2 && took < 6000, `a hung poll ends with the pairing (polls ${pollSeenAt.length}, ${took} ms)`)
+    ok(/nobody approved/.test(hungRun.err), 'and a pairing the store answered at least once says nobody approved')
+
+    // The other message: the store never got a word in.
+    autoApprove = false; pairingLifetimeMs = 1500; pollDrops = 99
+    const silent = await runTool(['--link'], { env: noCredential })
+    autoApprove = true; pairingLifetimeMs = 0; pollDrops = 0
+    ok(silent.code !== 0 && /without the store ever answering/.test(silent.err) && !/nobody approved/.test(silent.err), 'a pairing the store never answered says so, and does not blame the person')
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
