@@ -6830,6 +6830,11 @@ a store-side way to collect an approved pairing without a client-held secret.
   ground as before (a service token could already do the same, and
   `form-action 'none'` removed the escalation that made it urgent); the open
   options in the 2026-09-16 entries are unchanged.
+- The tool makes no wait and no request that outlives a pairing's deadline, so
+  it stops polling about a second before it. A click in that last second of
+  the ten minutes is accepted by the store and not collected; the run says the
+  pairing lapsed and to run again, and the stray grant shows on the person's
+  Agent access list until it ends or they revoke it. Pinned by the splice rig.
 - The label on the Agent access list comes from `SLIDES_GRANT_LABEL`, a string
   the caller chooses. It tells a person's own agents apart; it is not an
   identity and nothing trusts it.

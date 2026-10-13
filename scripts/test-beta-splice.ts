@@ -227,6 +227,14 @@ let refuseGrant = false
 let startStatus = 0
 let truncateApprovedPoll = false
 let revokeBeforeAsset = false
+// Break round 6: lose a consumed delivery before headers, and expire a server-side
+// grant without altering the caller's private file.
+let dropApprovedDelivery = false
+let expireBeforeCreate = false
+let delayedApprovalMs = 0
+let delayedApproval: Promise<void> | undefined
+let advertisedDeadline = 0
+let lateApprovalAt = 0
 /** How many of the tool's next polls get no answer at all (a dropped connection). */
 let pollDrops = 0
 const approvals: string[] = []
@@ -279,6 +287,14 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (expireBeforeCreate && method === 'POST' && path === '/api/publish/decks') {
+      expireBeforeCreate = false
+      const kv = await mf.getKVNamespace('GRANTS')
+      for (const k of (await kv.list({ prefix: 'grant:' })).keys) {
+        const record = await kv.get(k.name, 'json') as Record<string, unknown>
+        await kv.put(k.name, JSON.stringify({ ...record, exp: Math.floor(Date.now() / 1000) - 1 }))
+      }
+    }
     if (refuseGrant && path.startsWith('/api/publish/')) {
       log.push({ method, path, status: 403, service })
       res.writeHead(403); res.end(); return
@@ -330,6 +346,10 @@ const proxy = createServer(async (req, res) => {
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
     let out = Buffer.from(await r.arrayBuffer())
+    if (dropApprovedDelivery && method === 'GET' && /^\/api\/link\//.test(path) && r.status === 200) {
+      dropApprovedDelivery = false
+      res.destroy(); return // the real worker has already consumed the approval
+    }
     if (truncateApprovedPoll && method === 'GET' && /^\/api\/link\//.test(path) && r.status === 200) {
       // The worker has delivered (and cannot repeat) the bearer. Let headers
       // and a partial JSON body arrive, then stall until the client's timeout.
@@ -339,8 +359,15 @@ const proxy = createServer(async (req, res) => {
     if (method === 'POST' && path === '/api/link/start' && r.status === 200) {
       const started = JSON.parse(out.toString())
       lastPairingHandle = started.handle
+      if (delayedApprovalMs) {
+        delayedApproval = new Promise<void>((resolve, reject) => setTimeout(() => {
+          lateApprovalAt = Date.now()
+          approveAsRobert(started.code).then(resolve, reject)
+        }, delayedApprovalMs))
+      }
       if (pairingLifetimeMs) {
-        started.expires = new Date(Date.now() + pairingLifetimeMs).toISOString()
+        advertisedDeadline = Date.now() + pairingLifetimeMs
+        started.expires = new Date(advertisedDeadline).toISOString()
         out = Buffer.from(JSON.stringify(started))
       }
     }
@@ -1540,6 +1567,72 @@ try {
     const silent = await runTool(['--link'], { env: noCredential })
     autoApprove = true; pairingLifetimeMs = 0; pollDrops = 0
     ok(silent.code !== 0 && /without the store ever answering/.test(silent.err) && !/nobody approved/.test(silent.err), 'a pairing the store never answered says so, and does not blame the person')
+  }
+
+  console.log('\nrefusal boundaries and a lost approval delivery (U6, U7, break round 6)')
+  {
+    const draft = project({}, { title: 'Round 6', slides: [{ id: 'cover', elements: [] }] })
+    // An empty value on the missing side must not defeat the half-pair guard,
+    // even with CI set and a valid browser approval available.
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    const saved = readFileSync(GRANT_FILE, 'utf8')
+    log = []
+    const half = await runTool(['--create', draft, '--dry-run'], {
+      env: { CF_ACCESS_CLIENT_ID: '', CI: '' },
+    })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_ID is not set/.test(half.err)
+      && log.length === 0 && readFileSync(GRANT_FILE, 'utf8') === saved
+      && !(half.out + half.err).includes(CLIENT_SECRET),
+      'empty client id refuses create dry run before network or grant fallback')
+
+    // Local expiry can still look current when the store has ended access.
+    // Exercise create's 401 (not read's or an asset upload's) against real KV.
+    log = []; expireBeforeCreate = true
+    let expired
+    try { expired = await runTool(['--create', draft], { env: noCredential }) }
+    finally { expireBeforeCreate = false }
+    ok(expired.code !== 0 && /approval is no longer valid/.test(expired.err)
+      && /--link/.test(expired.err) && !existsSync(GRANT_FILE)
+      && log.some(l => l.method === 'POST' && l.path === '/api/publish/decks' && l.status === 401)
+      && !log.some(l => l.method === 'POST' && l.status === 201),
+      'server-expired approval refuses create and deletes the cached grant')
+
+    // No headers reach the client, unlike round 5's partial-body case. Its
+    // next poll must report the worker's consumed approval, not blame the user.
+    log = []; dropApprovedDelivery = true; autoApprove = false; delayedApprovalMs = 250
+    const clicks = approvals.length
+    let lost
+    try {
+      lost = await runTool(['--create', draft], { env: noCredential })
+      await delayedApproval
+    } finally {
+      dropApprovedDelivery = false; autoApprove = true; delayedApprovalMs = 0
+      delayedApproval = undefined
+    }
+    ok(lost.code !== 0 && approvals.length === clicks + 1
+      && /run .* again/i.test(lost.err) && !/nobody approved/i.test(lost.err)
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && !(lost.out + lost.err).includes(lastPairingHandle),
+      `consumed delivery lost before headers does not blame the approver (${lost.err.trim()})`)
+
+    // THE ACCEPTED EDGE, pinned so it cannot change unnoticed: the tool makes
+    // no request in the pairing's last second (nothing may outlive the
+    // deadline), so a click that late is not collected. The store accepted it;
+    // the run says the pairing lapsed and to run again. docs/DECISIONS.md.
+    rmSync(GRANT_FILE, { force: true }); log = []
+    autoApprove = false; pairingLifetimeMs = 3500; delayedApprovalMs = 2750
+    let late
+    try {
+      late = await runTool(['--link'], { env: noCredential })
+      await delayedApproval
+    } finally {
+      autoApprove = true; pairingLifetimeMs = 0; delayedApprovalMs = 0
+      delayedApproval = undefined
+    }
+    ok(lateApprovalAt < advertisedDeadline && advertisedDeadline - lateApprovalAt < 1000
+      && late.code !== 0 && /again/.test(late.err) && !existsSync(GRANT_FILE),
+      `a click in the pairing's final second is not collected, and the run says to run again (remaining ${advertisedDeadline - lateApprovalAt} ms, exit ${late.code})`)
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
