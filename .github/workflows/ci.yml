@@ -302,7 +302,8 @@ jobs:
         # Written by the independent tester for the v1.2.7 merge: a pre-merge
         # runtime deck through the merged gate and a save; the store conflict
         # latch behind upstream's save queue; recovery behind the restore
-        # gate; runtime stepping against reveal steps; and the built bundle
+        # gate; runtime stepping against reveal steps and a following audience;
+        # a manual save's queue outcomes; and the built bundle
         # carrying no import.meta (the loader cannot start a module-only
         # script on its first two paths). After the build step.
         run: |
@@ -312,6 +313,12 @@ jobs:
           node --no-warnings "$RUNNER_TEMP/test-beta-merge-store.mjs"
           slides/node_modules/.bin/esbuild scripts/test-beta-merge-steps.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-steps.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-merge-steps.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-follow.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-follow.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-follow.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-manual-outcomes.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-manual-outcomes.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-manual-outcomes.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-handle-queue.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-handle-queue.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-handle-queue.mjs"
           node scripts/test-beta-merge-bundle.ts
 
       - name: Reveal steps, with the fork's runtime hook in place

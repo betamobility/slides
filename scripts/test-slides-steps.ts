@@ -87,11 +87,12 @@ console.log('\npresent.ts asks steps.ts, and the wire carries the step\n')
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const present = readFileSync(join(root, 'slides/src/present.ts'), 'utf8')
 // BETA FORK: a runtime slide's scene takes the arrow first (one marked line), then upstream's steps.
-ok(/const goNext = \(\) => \{\s*(?:if \(runtimeShow\.next\(\)\) return[^\n]*\n\s*)?const r = steps\.next\(\)/.test(present), 'goNext asks steps.next() before moving to the next slide')
-ok(/const goPrev = \(\) => \{\s*(?:if \(runtimeShow\.prev\(\)\) return[^\n]*\n\s*)?const r = steps\.prev\(\)/.test(present), 'goPrev asks steps.prev() before moving to the previous slide')
+ok(/const goNext = \(\) => \{\s*(?:if \(runtimeShow\.next\(\)\)[^\n]*\n\s*)?const r = steps\.next\(\)/.test(present), 'goNext asks steps.next() before moving to the next slide')
+ok(/const goPrev = \(\) => \{\s*(?:if \(runtimeShow\.prev\(\)\)[^\n]*\n\s*)?const r = steps\.prev\(\)/.test(present), 'goPrev asks steps.prev() before moving to the previous slide')
 // BETA FORK: entered through steppedElements (a runtime slide has no reveal steps).
 ok(/steps\.enter\((?:doc\.slides\[toIdx\]\?\.elements \?\? \[\]|steppedElements\(doc\.slides\[toIdx\]\)), forward\)/.test(present), 'slidechanged enters the slide\'s steps with the direction')
-ok(/nav\(\{[^}]*step: steps\.step/.test(present), 'the presenter\'s nav payload carries the step')
+// BETA FORK: on a runtime slide the step sent is the scene's, else upstream's.
+ok(/nav\(\{[^}]*step: (?:runtimeShow\.step\(\) \?\? )?steps\.step/.test(present), 'the presenter\'s nav payload carries the step')
 ok(/followStep\(jump, /.test(present), 'the audience applies the presenter\'s step')
 ok(/\.bento-step-hidden/.test(readFileSync(join(root, 'slides/src/styles.css'), 'utf8')), 'the hidden-step class is styled (visibility, not display)')
 ok(/step: num\(0, 1e4\)/.test(readFileSync(join(root, 'slides/src/untrusted.ts'), 'utf8')), 'the shape gate bounds fx.step')

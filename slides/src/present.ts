@@ -191,7 +191,7 @@ export function startPresentation(
     goNext: () => goNext(), goPrev: () => goPrev(), exit: () => exit(), reduceMotion: () => reduceMotion,
   })
   const goNext = () => {
-    if (runtimeShow.next()) return // BETA FORK
+    if (runtimeShow.next()) { sendNav(deck.getIndices().h); return } // BETA FORK: the scene took the arrow; a following audience hears its step
     const r = steps.next()
     if (r.kind === 'step') return revealStep(r)
     const cur = deck.getIndices().h
@@ -200,7 +200,7 @@ export function startPresentation(
     }
   }
   const goPrev = () => {
-    if (runtimeShow.prev()) return
+    if (runtimeShow.prev()) { sendNav(deck.getIndices().h); return } // BETA FORK
     const r = steps.prev()
     if (r.kind === 'step') return hideStep(r)
     const cur = deck.getIndices().h
@@ -787,7 +787,7 @@ export function startPresentation(
   }
   const sendNav = (idx: number) => {
     if (!showOn) return
-    bc?.presenter?.verbs()?.nav({ id: doc.slides[idx]?.id, i: visibleIndex(idx), lock: showLock, step: steps.step })
+    bc?.presenter?.verbs()?.nav({ id: doc.slides[idx]?.id, i: visibleIndex(idx), lock: showLock, step: runtimeShow.step() ?? steps.step }) // BETA FORK: on a runtime slide the step is the scene's (it has no reveal steps)
   }
 
   // Second-screen placement is set up in the EDITOR (properties panel) before
@@ -1338,6 +1338,7 @@ export function startPresentation(
     // Reveal steps: forward arrives with them hidden, backward fully shown —
     // unless the audience is following a presenter who named the step.
     steps.enter(steppedElements(doc.slides[toIdx]), forward) // BETA FORK: a runtime slide has no reveal steps
+    const followed = pendingStep // BETA FORK: kept for the scene, mounted further down
     if (pendingStep !== null) { steps.set(pendingStep); pendingStep = null }
     applyStep(to, doc.slides[toIdx], steps.step)
     // Morph forward into a morph slide, and un-morph when backing out of one.
@@ -1363,6 +1364,7 @@ export function startPresentation(
     if (from) runtimeShow.leave(fromIdx)
     startMediaIn(to)
     runtimeShow.enter(toIdx, forward)
+    if (followed !== null) runtimeShow.follow(toIdx, followed) // BETA FORK: the presenter named the scene's step
     // Capture where this slide's formula symbols sit WHILE it is on screen —
     // once it becomes the outgoing slide there is no layout left to measure.
     // Synchronously, not in rAF: a backgrounded tab never runs animation
@@ -1436,6 +1438,7 @@ export function startPresentation(
   const followStep = (index: number, step: number | undefined) => {
     if (typeof step !== 'number') return
     if (index !== deck.getIndices().h) { pendingStep = step; return }
+    if (runtimeShow.follow(index, step)) return // BETA FORK: a runtime slide's step is its scene's
     const was = steps.step
     steps.set(step)
     if (steps.step === was) return

@@ -39,7 +39,7 @@ let slideIndex = 0
 const runtimeShow = createRuntimeShow(doc, { children: [{ querySelector: () => ({ appendChild() {} }) }] } as any, null, { goNext() {}, goPrev() {}, exit() {}, reduceMotion: () => false })
 runtimeShow.enter(0, true)
 listener({ source: frame.contentWindow, data: { type: 'bento:ready' } })
-const deps = { runtimeShow, steps, doc, deck: { getIndices: () => ({ h: slideIndex }), slide: (i: number) => { slideIndex = i } }, isState: () => false, anchorOf: (i: number) => i, revealStep() {}, hideStep() {} }
+const deps = { runtimeShow, steps, doc, deck: { getIndices: () => ({ h: slideIndex }), slide: (i: number) => { slideIndex = i } }, isState: () => false, anchorOf: (i: number) => i, revealStep() {}, hideStep() {}, sendNav() {} }
 const js = ts.transpile([...declarations.values()].map(d => 'const ' + d + ';').join('\n'), { target: ts.ScriptTarget.ES2022 })
 const nav = new Function(...Object.keys(deps), js + '; return {goNext,goPrev,hasNext,hasPrev}')(...Object.values(deps))
 let failures = 0
