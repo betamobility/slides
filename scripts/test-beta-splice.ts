@@ -215,6 +215,12 @@ let pollGone = false
 // Break-round probes: transport failures and a shortened server deadline.
 let pollUnavailable = false
 let pairingLifetimeMs = 0
+// Break round 2: stall the poll that starts after the deadline; delay delivery of
+// a collected grant to expose two processes sharing the same pending file.
+let hangPollAfter = 0
+let pollSeenAt: number[] = []
+let delayGrantDelivery = false
+let grantDeliveryStarted: (() => void) | undefined
 let revokeBeforePublishPut = false
 let lastPairingHandle = ''
 /** How many of the tool's next polls get no answer at all (a dropped connection). */
@@ -269,6 +275,12 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (method === 'GET' && /^\/api\/link\//.test(path)) {
+      pollSeenAt.push(Date.now())
+      if (hangPollAfter && pollSeenAt.length > hangPollAfter) {
+        log.push({ method, path, status: 0, service: false }); hung.push(res); return
+      }
+    }
     if (pollDrops > 0 && method === 'GET' && /^\/api\/link\//.test(path) && path !== '/api/link/start') {
       pollDrops--
       log.push({ method, path, status: 0, service: false })
@@ -312,6 +324,12 @@ const proxy = createServer(async (req, res) => {
       } catch (e) {
         out = Buffer.from(JSON.stringify({ error: `rig approval failed: ${String(e)}` }))
       }
+    }
+    if (delayGrantDelivery && method === 'GET' && /^\/api\/link\//.test(path)
+      && r.status === 200 && JSON.parse(out.toString()).grant) {
+      delayGrantDelivery = false
+      grantDeliveryStarted?.()
+      await new Promise(resolve => setTimeout(resolve, 800))
     }
     const h: Record<string, string> = {}
     r.headers.forEach((v: string, k: string) => { if (k !== 'content-length' && k !== 'transfer-encoding' && !(stripEtag && k === 'etag' && /text\/html/.test(r.headers.get('content-type') || ''))) h[k] = v })
@@ -1350,6 +1368,129 @@ try {
     const r = await runTool(['--link'], { env: noCredential })
     eq(r.code, 0, `--link exits 0${r.code ? `: ${r.err}` : ''}`)
     eq(statSync(GRANT_FILE).mode & 0o777, 0o600, 'the grant lands in a file only its owner can read')
+  }
+
+  console.log('\na pending pairing is untrusted on the way back in, and may be shared (U6, break round 2)')
+  {
+    async function pendingFixture() {
+      const res = await mf.dispatchFetch(ORIGIN + '/api/link/start', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Round 2 fixture' }),
+      })
+      const p = await res.json() as any
+      if (!p.handle) throw new Error('round 2 could not start fixture pairing')
+      return { ...p, store: STORE_URL }
+    }
+    function savePending(p: unknown, mode = 0o600) {
+      rmSync(GRANT_FILE, { force: true }); rmSync(PENDING_FILE, { force: true })
+      writeFileSync(PENDING_FILE, JSON.stringify(p), { mode })
+    }
+
+    // The round-1 clock check used fast 202 replies. A slow reply exposes the
+    // extra request made after the last sleep has already spent the lifetime.
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false; pairingLifetimeMs = 250; hangPollAfter = 1; pollSeenAt = []
+    const began = Date.now()
+    const deadlineRun = await runTool(['--link'], { env: { ...noCredential, SPLICE_TIMEOUT_MS: '1500' } })
+    const elapsed = Date.now() - began
+    autoApprove = true; pairingLifetimeMs = 0; hangPollAfter = 0
+    ok(deadlineRun.code !== 0 && pollSeenAt.length === 1 && elapsed < 1200,
+      `deadline stops before another poll (polls ${pollSeenAt.length}, elapsed ${elapsed} ms)`)
+
+    // Parent W_OK is not enough: an existing directory cannot be replaced by
+    // writePrivate's non-recursive rm. No consent should be spent discovering it.
+    const home = mkdtempSync(join(tmpdir(), 'beta-r2-destination-')); temps.push(home)
+    const directoryGrant = join(home, '.bento', 'slides-grant.json')
+    mkdirSync(directoryGrant, { recursive: true })
+    log = []; const approvalsBefore = approvals.length
+    const destination = await runTool(['--link'], { env: { ...noCredential, HOME: home, USERPROFILE: undefined, SLIDES_GRANT_FILE: undefined } })
+    ok(destination.code !== 0 && approvals.length === approvalsBefore && !log.some(l => l.path === '/api/link/start'),
+      `grant destination directory refuses before consent (approvals spent ${approvals.length - approvalsBefore})`)
+
+    // A structurally valid pending file can carry a URL containing its own
+    // live bearer. Do not print that field blindly, even when polling fails.
+    const hostile = await pendingFixture()
+    hostile.url = `${STORE_URL}/link/${hostile.code}?handle=${hostile.handle}`
+    savePending(hostile); pollUnavailable = true
+    const leaked = await runTool(['--link'], { env: noCredential, keepPending: true })
+    pollUnavailable = false
+    await approveAsRobert(hostile.code)
+    const collected = await (await mf.dispatchFetch(ORIGIN + `/api/link/${hostile.handle}`)).json() as any
+    const proofId = await seed()
+    const usable = collected.grant && await mf.dispatchFetch(ORIGIN + `/api/publish/decks/${proofId}`, { headers: { authorization: `Bearer ${collected.grant}` } })
+    ok(!(leaked.out + leaked.err).includes(hostile.handle) && usable?.status === 200,
+      'hostile pending URL never prints a usable collection handle')
+
+    // Delay ONLY the first collector's response. The other process observes
+    // "collected" while the grant is still in transit, not yet on disk.
+    const shared = await pendingFixture(); savePending(shared)
+    await approveAsRobert(shared.code)
+    log = []; const clicks = approvals.length
+    delayGrantDelivery = true
+    const delivery = new Promise<void>(resolve => { grantDeliveryStarted = resolve })
+    const first = runTool(['--link'], { env: noCredential, keepPending: true })
+    await Promise.race([delivery, new Promise(resolve => setTimeout(resolve, 5000))])
+    const second = runTool(['--link'], { env: noCredential, keepPending: true })
+    const both = await Promise.all([first, second])
+    delayGrantDelivery = false; grantDeliveryStarted = undefined
+    ok(both.every(r => r.code === 0) && approvals.length === clicks && !log.some(l => l.path === '/api/link/start') && !existsSync(PENDING_FILE),
+      `shared pairing waits for collector to save (extra approvals ${approvals.length - clicks})`)
+
+    // Invalid records must not trap recursive retries or send their handles
+    // to another store. Expired and unknown handles should recover once.
+    for (const kind of ['corrupt', 'foreign', 'expired', 'unknown']) {
+      const p = await pendingFixture()
+      if (kind === 'foreign') p.store = 'https://other.invalid'
+      if (kind === 'expired') p.expires = new Date(Date.now() - 1000).toISOString()
+      if (kind === 'unknown') p.handle = 'z'.repeat(43)
+      savePending(p)
+      if (kind === 'corrupt') writeFileSync(PENDING_FILE, '{broken')
+      log = []
+      const r = await runTool(['--link'], { env: noCredential, keepPending: true })
+      ok(r.code === 0 && log.filter(l => l.path === '/api/link/start').length === 1 && !existsSync(PENDING_FILE)
+        && !(r.out + r.err).includes(p.handle) && (kind === 'unknown' || !log.some(l => l.path.includes(p.handle))),
+        `${kind} pending recovers once without exposing or misrouting handle`)
+    }
+
+    // The environment path is an explicit namespace: changing it must not
+    // collect the old pending capability or erase it for the original run.
+    const old = await pendingFixture(); savePending(old)
+    const other = join(home, 'other-grant.json'); log = []
+    const moved = await runTool(['--link'], { env: { ...noCredential, SLIDES_GRANT_FILE: other }, keepPending: true })
+    ok(moved.code === 0 && existsSync(PENDING_FILE) && !existsSync(`${other}.pending`)
+      && !log.some(l => l.path.includes(old.handle)) && (statSync(other).mode & 0o777) === 0o600,
+      'changing grant path isolates pending state and saves privately')
+
+    const ciPending = await pendingFixture(); savePending(ciPending)
+    log = []
+    const unattended = await runTool([proofId, '--title', 'CI must not resume'], { env: { ...noCredential, CI: '' }, keepPending: true })
+    ok(unattended.code !== 0 && /--link/.test(unattended.err) && log.length === 0
+      && readFileSync(PENDING_FILE, 'utf8') === JSON.stringify(ciPending),
+      'empty CI refuses even with a resumable pending pairing')
+
+    // A dropped poll near expiry must not invent a standalone create result.
+    rmSync(GRANT_FILE, { force: true }); autoApprove = false; pairingLifetimeMs = 200; pollDrops = 1
+    const draft = project({}, { title: 'Only a project', slides: [{ id: 'cover', elements: [] }] })
+    const createDrop = await runTool(['--create', draft], { env: noCredential })
+    autoApprove = true; pairingLifetimeMs = 0; pollDrops = 0
+    ok(createDrop.code !== 0 && /run .* again/i.test(createDrop.err)
+      && !/complete deck|file on disk/i.test(createDrop.out + createDrop.err)
+      && !existsSync(GRANT_FILE) && !existsSync(PENDING_FILE),
+      'create with dropped poll times out without claiming an HTML file')
+
+    // More round-1 variants: a dropped response, then 503, preserves the
+    // same private pending capability and can resume successfully next run.
+    savePending(await pendingFixture()); pairingLifetimeMs = 0
+    pollDrops = 1; pollUnavailable = true
+    const dropped = await runTool(['--link'], { env: noCredential, keepPending: true })
+    pollUnavailable = false
+    const remembered = JSON.parse(readFileSync(PENDING_FILE, 'utf8'))
+    ok(dropped.code !== 0 && !(dropped.out + dropped.err).includes(remembered.handle)
+      && (statSync(PENDING_FILE).mode & 0o777) === 0o600,
+      'dropped poll then 503 preserves private pending without secret output')
+    await approveAsRobert(remembered.code)
+    const resumed = await runTool(['--link'], { env: { ...noCredential, CI: '' }, keepPending: true })
+    ok(resumed.code === 0 && !existsSync(PENDING_FILE), 'explicit link with empty CI resumes and cleans pending')
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')

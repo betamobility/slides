@@ -112,6 +112,8 @@ const LINK_LABEL = 'Claude (Cowork)'
 // out the next pairing's start. The first poll still goes out immediately, so
 // a click that has already happened is collected at once.
 const POLL_MS = 7000
+// Room kept before a pairing's deadline for the last poll's answer.
+const LAST_POLL_MS = 1000
 const TIMEOUT = { store: 30_000, asset: 120_000, url: 10_000 }
 // The origin a url scene is framed by (the store host people open decks on),
 // fixed rather than taken from SLIDES_STORE_URL: that one can be a test proxy.
@@ -524,6 +526,9 @@ function grantPlace(env, again) {
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     accessSync(dirname(path), fsConstants.W_OK)
+    for (const f of [path, `${path}.pending`]) {
+      if (existsSync(f) && !statSync(f).isFile()) throw new Error(`${f} is not a file`)
+    }
   } catch (e) {
     throw new Refusal(`the approval could not be kept in ${path} (${e.message}). Set ${GRANT_FILE_ENV} to a file this shell can write, outside the deck folder, and run ${again} again.`)
   }
@@ -537,10 +542,21 @@ function grantPlace(env, again) {
 // a grant nobody can collect and the next run asks for a second one.
 const pendingPath = (env) => `${grantPath(env)}.pending`
 
+// What a pending pairing may hold: the approval URL is printed, so it is a
+// bare /link/<code> and nothing else (never a query that could carry the
+// handle); the handle is the store's own token shape; and a pairing never
+// outlives the store's ten minutes, whatever the file says.
+const PENDING_URL_RE = /^https?:\/\/[^/\s?#]+\/link\/[0-9A-Za-z]{10}$/
+const PENDING_HANDLE_RE = /^[A-Za-z0-9_-]{43}$/
+const PAIRING_MAX_MS = 10 * 60 * 1000
+
 function readPending(env, store) {
   try {
     const p = JSON.parse(readFileSync(pendingPath(env), 'utf8'))
-    if (p && typeof p.handle === 'string' && p.handle && typeof p.url === 'string' && p.store === store && Date.parse(p.expires) > Date.now()) return p
+    const until = Date.parse(p?.expires)
+    if (p && PENDING_HANDLE_RE.test(p.handle) && PENDING_URL_RE.test(p.url) && p.store === store && until > Date.now()) {
+      return { handle: p.handle, url: p.url, store, expires: new Date(Math.min(until, Date.now() + PAIRING_MAX_MS)).toISOString() }
+    }
   } catch { /* none, or unreadable: start a new pairing */ }
   return null
 }
@@ -832,7 +848,7 @@ export async function link({ env = process.env, log = console.log, force = false
     try { started = JSON.parse(await bodyText(res, 'POST', startUrl, ms)) } catch { throw new Error('starting the pairing: the store answered 200 but its body did not parse') }
     const { code, handle, url, expires } = started
     if (typeof handle !== 'string' || !handle) throw new Error('starting the pairing: the store gave no handle to collect the approval with')
-    pending = { handle, url: url || `${store}/link/${code}`, expires: new Date(Date.parse(expires) || Date.now() + 10 * 60 * 1000).toISOString(), store }
+    pending = { handle, url: url || `${store}/link/${code}`, expires: new Date(Date.parse(expires) || Date.now() + PAIRING_MAX_MS).toISOString(), store }
     writePrivate(pendingPath(env), pending)
   }
   const forgetPending = () => forgetGrant(pendingPath(env))
@@ -849,9 +865,14 @@ export async function link({ env = process.env, log = console.log, force = false
   const pollUrl = `${store}/api/link/${pending.handle}`
   // Another run of the tool may hold the same pending pairing and collect
   // first; the grant it saved is this run's answer too.
-  const savedMeanwhile = () => {
-    const g = readGrant(env)
-    return g && !expiredGrant(g) && g.store.replace(/\/+$/, '') === store ? g : null
+  const savedMeanwhile = async () => {
+    // Collected is not yet saved: the other run still has the answer in hand.
+    for (let tries = resumed ? 20 : 1; tries > 0; tries--) {
+      const g = readGrant(env)
+      if (g && !expiredGrant(g) && g.store.replace(/\/+$/, '') === store) return g
+      if (tries > 1) await wait(250)
+    }
+    return null
   }
   // `answered` tells a pairing nobody clicked apart from one where the store
   // never got a word in to us. Without it, a run throttled or disconnected for
@@ -860,15 +881,18 @@ export async function link({ env = process.env, log = console.log, force = false
   let answered = false
   let backoff = POLL_MS
   for (let first = true; ; first = false) {
+    let left = deadline - Date.now()
     if (!first) {
-      // Never past the pairing's own lifetime: the last wait is cut short.
-      const left = deadline - Date.now()
-      if (left <= 0) break
-      await wait(Math.min(backoff, left))
+      // Never past the pairing's own lifetime: the last wait is cut short so
+      // the last poll still fits before the deadline, and a pairing with less
+      // than that left is over.
+      if (left <= LAST_POLL_MS) break
+      await wait(Math.min(backoff, left - LAST_POLL_MS))
+      left = deadline - Date.now()
     }
     let poll
     try {
-      poll = await harness(pollUrl, {}, ms)
+      poll = await harness(pollUrl, {}, Math.max(1, Math.min(ms, left)))
     } catch {
       // A dropped connection must not end the pairing: the person may be about
       // to click, or may already have, and this handle is the only thing that
@@ -883,7 +907,7 @@ export async function link({ env = process.env, log = console.log, force = false
     if (poll.status === 429) { backoff = Math.min(backoff * 2, 15_000); continue }
     if (poll.status === 410) {
       forgetPending()
-      const saved = savedMeanwhile()
+      const saved = await savedMeanwhile()
       if (saved) return saved
       // A pairing picked up from an earlier run that has since ended: ask anew.
       if (resumed) return link({ env, log, force, again })
@@ -892,13 +916,13 @@ export async function link({ env = process.env, log = console.log, force = false
     if (poll.status === 503) throw new Error('waiting for the approval: the store cannot answer pairings right now (its rate limiter is not configured); tell the maintainer')
     // NOT `failed()`: this route takes no credential, so its wording about
     // CF_ACCESS_* would send the reader after the wrong thing entirely.
+    forgetPending()
     if (!poll.ok) throw new Error(`waiting for the approval: the store answered ${poll.status} on a route that needs no credential`)
     answered = true
     let body
     try { body = JSON.parse(await poll.text()) } catch { throw new Error('waiting for the approval: the store answered 200 but its body did not parse') }
-    forgetPending()
     if (!body.grant) {
-      const saved = savedMeanwhile()
+      const saved = await savedMeanwhile()
       if (saved) return saved
       // Collected already by the run that started it, and not kept: ask anew.
       if (resumed) return link({ env, log, force, again })
