@@ -214,12 +214,15 @@ let autoApprove = true
 let pollGone = false
 // Break-round probes: transport failures and a shortened server deadline.
 let pollUnavailable = false
+let pollStatusR3 = 0
 let pairingLifetimeMs = 0
 // Break round 2: stall the poll that starts after the deadline; delay delivery of
 // a collected grant to expose two processes sharing the same pending file.
 let hangPollAfter = 0
 let pollSeenAt: number[] = []
 let delayGrantDelivery = false
+let grantDeliveryDelayMs = 800
+let streamGrantBody = false
 let grantDeliveryStarted: (() => void) | undefined
 let revokeBeforePublishPut = false
 let lastPairingHandle = ''
@@ -287,6 +290,10 @@ const proxy = createServer(async (req, res) => {
       res.destroy()   // a dropped connection mid-poll, not an answer
       return
     }
+    if (pollStatusR3 && method === 'GET' && /^\/api\/link\//.test(path)) {
+      log.push({ method, path, status: pollStatusR3, service: false })
+      res.writeHead(pollStatusR3, { location: `https://other.invalid/${lastPairingHandle}` }); res.end(); return
+    }
     if (pollUnavailable && method === 'GET' && /^\/api\/link\//.test(path)) {
       log.push({ method, path, status: 503, service: false })
       res.writeHead(503); res.end(); return
@@ -328,8 +335,15 @@ const proxy = createServer(async (req, res) => {
     if (delayGrantDelivery && method === 'GET' && /^\/api\/link\//.test(path)
       && r.status === 200 && JSON.parse(out.toString()).grant) {
       delayGrantDelivery = false
+      if (streamGrantBody) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.write(out.subarray(0, 1))
+        grantDeliveryStarted?.()
+        await new Promise(resolve => setTimeout(resolve, grantDeliveryDelayMs))
+        res.end(out.subarray(1)); return
+      }
       grantDeliveryStarted?.()
-      await new Promise(resolve => setTimeout(resolve, 800))
+      await new Promise(resolve => setTimeout(resolve, grantDeliveryDelayMs))
     }
     const h: Record<string, string> = {}
     r.headers.forEach((v: string, k: string) => { if (k !== 'content-length' && k !== 'transfer-encoding' && !(stripEtag && k === 'etag' && /text\/html/.test(r.headers.get('content-type') || ''))) h[k] = v })
@@ -1491,6 +1505,95 @@ try {
     await approveAsRobert(remembered.code)
     const resumed = await runTool(['--link'], { env: { ...noCredential, CI: '' }, keepPending: true })
     ok(resumed.code === 0 && !existsSync(PENDING_FILE), 'explicit link with empty CI resumes and cleans pending')
+  }
+
+  console.log('\nonly one run collects a pairing, and nothing from the pending file is printed (U6, break round 3)')
+  {
+    async function fixtureR3() {
+      const res = await mf.dispatchFetch(ORIGIN + '/api/link/start', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: 'Round 3 fixture' }),
+      })
+      const p = await res.json() as any
+      if (!p.handle) throw new Error('round 3 fixture could not start')
+      return { ...p, store: STORE_URL }
+    }
+    function pendingR3(p: unknown) {
+      rmSync(GRANT_FILE, { force: true }); rmSync(PENDING_FILE, { force: true })
+      writeFileSync(PENDING_FILE, JSON.stringify(p), { mode: 0o600 })
+    }
+    // A query is not the only URL field that can carry a bearer. Keep a real
+    // pending handle uncollected, then prove the transcript bearer is usable.
+    const authority = await fixtureR3()
+    authority.url = `${STORE_URL.replace('://', `://${authority.handle}@`)}/link/${authority.code}`
+    pendingR3(authority); pollUnavailable = true
+    const leaked = await runTool(['--link'], { env: noCredential, keepPending: true })
+    pollUnavailable = false
+    await approveAsRobert(authority.code)
+    const collected = await (await mf.dispatchFetch(ORIGIN + `/api/link/${authority.handle}`)).json() as any
+    const proof = await seed()
+    const usable = collected.grant && await mf.dispatchFetch(ORIGIN + `/api/publish/decks/${proof}`, {
+      headers: { authorization: `Bearer ${collected.grant}` },
+    })
+    ok(!(leaked.out + leaked.err).includes(authority.handle) && usable?.status === 200,
+      'pending URL userinfo never prints a usable handle')
+
+    // Both cases use ordinary untouched pending state. First delay headers
+    // beyond the new 4.75 s grace, but well within the request timeout. Then
+    // stream headers immediately and delay only the body: pending must remain
+    // discoverable until the grant is actually on disk.
+    for (const streaming of [false, true]) {
+      const p = await fixtureR3(); pendingR3(p); await approveAsRobert(p.code)
+      log = []; const clicks = approvals.length
+      delayGrantDelivery = true; streamGrantBody = streaming
+      grantDeliveryDelayMs = streaming ? 1500 : 6500
+      const delivery = new Promise<void>(resolve => { grantDeliveryStarted = resolve })
+      const first = runTool(['--link'], { env: noCredential, keepPending: true })
+      await Promise.race([delivery, new Promise(resolve => setTimeout(resolve, 5000))])
+      if (streaming) await new Promise(resolve => setTimeout(resolve, 300))
+      const second = runTool(['--link'], { env: noCredential, keepPending: true })
+      const both = await Promise.all([first, second])
+      delayGrantDelivery = false; streamGrantBody = false; grantDeliveryDelayMs = 800; grantDeliveryStarted = undefined
+      ok(both.every(r => r.code === 0) && approvals.length === clicks
+        && !log.some(l => l.path === '/api/link/start') && !existsSync(PENDING_FILE),
+        `${streaming ? 'streaming grant body retains pending until saved' : 'slow collector within request timeout needs no second approval'} (extra approvals ${approvals.length - clicks})`)
+    }
+
+    // Additional round-1/2 variants: CI is a presence test, and a directory
+    // at the pending destination is as unusable as one at the grant itself.
+    for (const ci of ['false', '0']) {
+      rmSync(GRANT_FILE, { force: true }); log = []
+      const r = await runTool([proof, '--title', 'unattended'], { env: { ...noCredential, CI: ci } })
+      ok(r.code !== 0 && /--link/.test(r.err) && log.length === 0, `CI=${ci} refuses without pairing`)
+    }
+    rmSync(PENDING_FILE, { force: true }); mkdirSync(PENDING_FILE)
+    log = []
+    const directory = await runTool(['--link'], { env: noCredential, keepPending: true })
+    ok(directory.code !== 0 && !log.length, 'pending destination directory refuses before pairing')
+    rmSync(PENDING_FILE, { recursive: true })
+
+    const badHome = mkdtempSync(join(tmpdir(), 'beta-r3-home-')); temps.push(badHome)
+    writeFileSync(join(badHome, '.bento'), 'a file, not a directory')
+    log = []
+    const homeResult = await runTool(['--link'], { env: { ...noCredential, HOME: badHome, USERPROFILE: undefined, SLIDES_GRANT_FILE: undefined } })
+    ok(homeResult.code !== 0 && !log.length, 'home with file at .bento refuses before pairing')
+
+    // Different transport failure (redirect) and throttling must not expose
+    // the handle, extend the deadline, or invent an HTML output for --create.
+    for (const status of [302, 429]) {
+      rmSync(GRANT_FILE, { force: true })
+      autoApprove = false; pairingLifetimeMs = 1800; pollSeenAt = []; pollStatusR3 = status
+      const draft = project({}, { title: 'Round 3 draft', slides: [{ id: 'cover', elements: [] }] })
+      const startedAt = Date.now()
+      const r = await runTool(['--create', draft], { env: noCredential })
+      const elapsed = Date.now() - startedAt
+      pollStatusR3 = 0; autoApprove = true; pairingLifetimeMs = 0
+      ok(r.code !== 0 && elapsed < 2600 && pollSeenAt.length <= 2
+        && /run .* again/i.test(r.err) && !(r.out + r.err).includes(lastPairingHandle)
+        && !/complete deck|file on disk/i.test(r.out + r.err)
+        && !existsSync(GRANT_FILE) && !existsSync(PENDING_FILE),
+        `create poll ${status} respects deadline, hides handle and claims no HTML file`)
+    }
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')

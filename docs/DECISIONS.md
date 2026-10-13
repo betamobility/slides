@@ -6811,6 +6811,19 @@ with it. The click that followed minted a grant nobody could collect, and the
 next run asked for a second one. The pending pairing (`<grant file>.pending`,
 mode 0600) lets the next run show the same link and collect. The handle is a
 bearer until collected, so it is never printed, in an error message either.
+Two rules came out of three rounds of an independent tester breaking the first
+versions, and neither should be relaxed:
+
+1. **Nothing read back from the pending file is printed except its
+   ten-character code.** The link on a resume is rebuilt from the store the run
+   already talks to. A stored URL, however validated, is a field that can carry
+   the handle into the output.
+2. **One run at a time collects a pairing.** The collector holds a lock
+   (`<grant file>.pairing`) from before its first poll until the grant is on
+   disk; any other run waits for the saved grant and never polls. Two runs
+   polling one handle is a race no grace period settles: the store hands the
+   grant to whichever asks first, and the other sees "collected" before the
+   grant is saved and asks the person to click again.
 
 **Accepted, with reason:**
 
