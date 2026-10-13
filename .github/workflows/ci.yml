@@ -2667,6 +2667,8 @@ jobs:
         # no write actions and is locked; owner and writer copies keep theirs.
         run: node scripts/test-slides-audience-gate-browser.mjs
       - name: PowerPoint converter links in Chromium
+        # BETA FORK: upstream only. The Beta build hides both converter links (they open bento.page and yield a deck on upstream's shell); scripts/test-beta-about.ts checks they stay hidden.
+        if: github.repository == 'nyblnet/bento'
         # Save as → Import PowerPoint… (/convert?from=pptx) and Export for
         # PowerPoint… (/convert), in that order after Replace from JSON…, each
         # opens only its URL in a new tab with no opener, and says it needs
@@ -2677,6 +2679,8 @@ jobs:
         # that cannot render; unknown keys and element types survive (additivity).
         run: node scripts/test-slides-minimal-doc-browser.mjs
       - name: Top bar in Chromium
+        # BETA FORK: upstream only. It asserts upstream's name on the wordmark button and drives the language picker, which the Beta build replaced with the Beta wordmark and an English pin (v1.1 U3, U5).
+        if: github.repository == 'nyblnet/bento'
         # 30px row and 44px phone targets, the wordmark as a named button, Save
         # primary in both themes, and N language rebuilds leaving one set of
         # window/document listeners and bar observers.
@@ -2692,6 +2696,8 @@ jobs:
         # fences convert, and an unclosed fence stays text.
         run: node scripts/test-slides-code-fence-browser.mjs
       - name: Copy several slides in Chromium
+        # BETA FORK: upstream only. It needs a parent slide with a state in the starter deck; Beta's starter deck has none. The copy logic itself is covered by the clipboard rig in the beta job.
+        if: github.repository == 'nyblnet/bento'
         # Two selected thumbnails → ⌘C copies both, in order; a Shift-click
         # range across a parent copies parents only, never its states; plural
         # and singular toasts.

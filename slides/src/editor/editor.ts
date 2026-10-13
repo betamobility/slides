@@ -108,6 +108,8 @@ const SHAPE_MENU: Array<{ kind: ShapeKind; label: string; icon: string; heads?: 
  */
 export const IMPORT_PPTX_URL = 'https://bento.page/convert?from=pptx'
 export const EXPORT_PPTX_URL = 'https://bento.page/convert'
+/** BETA FORK: whether Save as offers upstream's two converter links (see the menu). */
+const CONVERTER_LINKS: boolean = false
 
 /**
  * May this copy write? An ALLOWLIST that fails closed: a deck with no live
@@ -1036,6 +1038,11 @@ export class Editor {
       item(ICONS.code, t('Replace from JSON…'),
         t('Paste edited document JSON to replace this deck’s content — ⌘Z undoes.'),
         () => this.openReplaceJson())
+      // BETA FORK: no converter links in this build. Both open bento.page: its
+      // importer builds a deck on UPSTREAM's shell, which then updates from
+      // upstream's channel and knows nothing of the store or runtime slides,
+      // and Beta exports PowerPoint itself (Export PPTX, in the top bar).
+      if (CONVERTER_LINKS) {
       // with the other import, where spaces has Import Markdown…
       item(ICONS.importDoc, t('Import PowerPoint…'),
         t('Opens the PowerPoint importer on bento.page in a new tab — it turns a .pptx into a Bento deck. Needs an internet connection.'),
@@ -1043,6 +1050,7 @@ export class Editor {
       item(ICONS.exportDoc, t('Export for PowerPoint…'),
         t('Opens the converter on bento.page in a new tab — drop this deck’s saved file there to get a .pptx. The deck is not uploaded. Needs an internet connection.'),
         () => { window.open(EXPORT_PPTX_URL, '_blank', 'noopener,noreferrer') })
+      }
       item(ICONS.template, t('Start from scratch…'),
         t('Replace every slide with one blank slide. Keeps the deck’s theme, name and live session — ⌘Z undoes.'),
         () => this.startFromScratch())

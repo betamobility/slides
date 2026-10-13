@@ -102,7 +102,8 @@ try {
   console.log('\ncontrol\n')
   {
     const r = await boot(null) // the empty block boots the starter deck
-    ok(r.booted && r.errors.length === 0 && r.doc?.slides?.length > 10, `the starter deck boots (${r.doc?.slides?.length} slides)`)
+    ok(r.booted && r.errors.length === 0 && r.doc?.slides?.length > 3, // BETA FORK: Beta's starter deck is four slides, upstream's more than ten
+       `the starter deck boots (${r.doc?.slides?.length} slides)`)
   }
 } finally { await browser.close() }
 
