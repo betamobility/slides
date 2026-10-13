@@ -333,6 +333,10 @@ jobs:
           node --no-warnings "$RUNNER_TEMP/test-beta-merge-round5-update.mjs"
           slides/node_modules/.bin/esbuild scripts/test-beta-merge-round5-export.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-round5-export.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-merge-round5-export.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-round6-templates.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-round6-templates.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-round6-templates.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-round6-encrypted.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-round6-encrypted.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-round6-encrypted.mjs"
           node scripts/test-beta-merge-bundle.ts
 
       - name: Reveal steps, with the fork's runtime hook in place
