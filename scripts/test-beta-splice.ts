@@ -239,6 +239,8 @@ async function robertSaves(id: string) {
   if (w.status !== 200) throw new Error(`robert's save failed: ${w.status}`)
 }
 
+// The body of every pairing start, so a case can read the label the tool sent.
+const startBodies: string[] = []
 const proxy = createServer(async (req, res) => {
   try {
     const chunks: Buffer[] = []
@@ -277,6 +279,7 @@ const proxy = createServer(async (req, res) => {
     const deckPut = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
     if (service && method === 'PUT' && deckPut && bumps > 0) { bumps--; await robertSaves(deckPut[1]) }
     if (service && method === 'PUT' && /\/assets\//.test(path) && hangAssets > 0) { hangAssets--; log.push({ method, path, status: 0, service }); hung.push(res); return }
+    if (method === 'POST' && path === '/api/link/start') startBodies.push(body ? body.toString() : '')
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
     let out = Buffer.from(await r.arrayBuffer())
@@ -304,11 +307,13 @@ const STORE_URL = `http://127.0.0.1:${(proxy.address() as { port: number }).port
 // have a real ~/.bento/slides-grant.json, and without this every existing
 // case would quietly gain a second credential.
 const GRANT_FILE = join(mkdtempSync(join(tmpdir(), 'beta-grant-')), 'slides-grant.json')
+// A person's shell: no service token at all.
+const noCredential = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
 temps.push(dirname(GRANT_FILE))
 
 function runTool(args: string[], { tool = TOOL, env = {} as Record<string, string | undefined> } = {}): Promise<{ code: number; out: string; err: string }> {
   const e: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL' && k !== 'SLIDES_GRANT_FILE') e[k] = v
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL' && k !== 'SLIDES_GRANT_FILE' && k !== 'SLIDES_GRANT_LABEL' && k !== 'CI') e[k] = v
   Object.assign(e, { CF_ACCESS_CLIENT_ID: CLIENT_ID, CF_ACCESS_CLIENT_SECRET: CLIENT_SECRET, SLIDES_STORE_URL: STORE_URL, SLIDES_GRANT_FILE: GRANT_FILE })
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete e[k]; else e[k] = v }
   return new Promise((resolve) => {
@@ -491,6 +496,7 @@ try {
     log = []
     const nocreds = await runTool([id, project({ map: {} })], { env: { CF_ACCESS_CLIENT_SECRET: undefined } })
     ok(nocreds.code !== 0 && /CF_ACCESS_CLIENT_SECRET/.test(nocreds.err), 'missing credentials: exits non-zero naming the variable')
+    ok(!/1Password/i.test(nocreds.err), 'missing credentials: nobody is sent to a password manager')
     eq(log.length, 0, 'missing credentials: no request made')
   }
 
@@ -955,15 +961,102 @@ try {
     ok(!existsSync(GRANT_FILE), 'and writes no grant file')
   }
 
-  console.log('\nneither credential: the refusal names both ways in (U5)')
+  console.log('\nno credential, a person at the keyboard: the run pairs by itself (upstream-merge plan U6, R5/AE2)')
   {
     rmSync(GRANT_FILE, { force: true })
-    const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
-    })
+    log = []
+    startBodies.length = 0
+    const before = approvals.length
+    const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Uten nøkkel', slides: [{ id: 'cover', elements: [] }] })
+    // Piped standard streams and no CI variable: what Claude Code's shell is.
+    const r = await runTool(['--create', dir], { env: noCredential })
+    eq(r.code, 0, `--create with no credential exits 0${r.code ? `: ${r.err}` : ''}`)
+    ok(/\/link\/[0-9A-Za-z]{10}/.test(r.out), 'it prints the approval link')
+    eq(approvals.length, before + 1, 'one approval was asked for')
+    ok(/\/d\/[0-9A-Za-z]{10}/.test(r.out), 'and the run carries on to publish the deck')
+    ok(log.some((l) => l.method === 'POST' && l.path === '/api/publish/decks' && l.status === 201), 'through the publish path, as the person who approved')
+    ok(!/1Password|token|CF_ACCESS/i.test(r.out + r.err), 'no output mentions 1Password or a token')
+    ok(!/[A-Za-z0-9_-]{43}/.test(r.out + r.err), 'and no grant material is printed')
+    ok(existsSync(GRANT_FILE), 'the grant is remembered for the next run')
+    eq(JSON.parse(startBodies[0] || '{}').label, 'Claude (Cowork)', 'the label defaults to the Cowork one')
+
+    // The next command in the same week asks nobody.
+    const again = await runTool(['--create', dir], { env: noCredential })
+    eq(again.code, 0, 'a second run exits 0')
+    eq(approvals.length, before + 1, 'without a second approval')
+    ok(!/\/link\//.test(again.out), 'and prints no approval link')
+  }
+
+  console.log('\nthe label on the Agent access list says which agent holds the grant (U6, R8)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    startBodies.length = 0
+    const r = await runTool(['--link'], { env: { ...noCredential, SLIDES_GRANT_LABEL: 'Claude Code' } })
+    eq(r.code, 0, `--link with a label exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(JSON.parse(startBodies[0] || '{}').label, 'Claude Code', 'SLIDES_GRANT_LABEL is the label the store is given')
+    const index = await (await store('GET', '/', { as: 'robert' })).text()
+    ok(index.includes('&quot;Claude Code&quot;'), "and it is what the person's Agent access list shows")
+  }
+
+  console.log('\nno credential and CI set: refuse, name --link, start no pairing (U6, R6/AE3)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    const r = await runTool([await seed(), project({ map: {} })], { env: { ...noCredential, CI: 'true' } })
     ok(r.code !== 0, 'the run is refused')
     ok(/--link/.test(r.err), 'and names --link')
-    ok(/CF_ACCESS_CLIENT_ID/.test(r.err), 'as well as the service token, for a terminal run')
+    ok(!/1Password/i.test(r.err), 'never 1Password')
+    ok(!log.some((l) => l.path === '/api/link/start'), 'no pairing was started')
+    ok(!log.some((l) => l.method !== 'GET' && !l.service), 'and the tool wrote nothing')
+    ok(!existsSync(GRANT_FILE), 'no grant file appears')
+    // --link itself is the person's own explicit act and still works there.
+    const explicit = await runTool(['--link'], { env: { ...noCredential, CI: 'true' } })
+    eq(explicit.code, 0, 'an explicit --link still pairs with CI set')
+  }
+
+  console.log('\nno credential and nobody approves: the run ends saying how to retry (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false
+    pollGone = true
+    log = []
+    const r = await runTool(['--create', project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Ingen klikker', slides: [{ id: 'cover', elements: [] }] })], { env: noCredential })
+    autoApprove = true
+    pollGone = false
+    ok(r.code !== 0, 'the run exits non-zero')
+    ok(/\/link\/[0-9A-Za-z]{10}/.test(r.out), 'after printing the link')
+    ok(/same command again|run .* again/i.test(r.err), 'and says to run the command again')
+    ok(!existsSync(GRANT_FILE), 'no grant file is written')
+    ok(!log.some((l) => l.path.startsWith('/api/publish/')), 'and nothing was published')
+  }
+
+  console.log('\nno home directory: the grant is never written beside the deck (U6)')
+  {
+    log = []
+    const cwdGrant = join(tmpdir(), '.bento-grant.json')
+    rmSync(cwdGrant, { force: true })
+    const r = await runTool(['--create', project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Uten hjem', slides: [{ id: 'cover', elements: [] }] })], {
+      env: { ...noCredential, SLIDES_GRANT_FILE: undefined, HOME: undefined, USERPROFILE: undefined },
+    })
+    ok(r.code !== 0, 'the run is refused')
+    ok(/SLIDES_GRANT_FILE/.test(r.err), 'naming the variable that says where to keep the approval')
+    ok(!log.some((l) => l.path === '/api/link/start'), 'before any pairing is started')
+    ok(!existsSync(cwdGrant), 'and nothing is written in the working directory')
+  }
+
+  console.log('\nthe service token wins over a grant file, and the output names it (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    ok(existsSync(GRANT_FILE), 'a grant file is on disk')
+    log = []
+    const id = await seed()
+    const outFile = join(mkdtempSync(join(tmpdir(), 'beta-read-')), 'current.bento.html')
+    temps.push(dirname(outFile))
+    const r = await runTool(['--read', id, '--out', outFile])
+    eq(r.code, 0, `--read exits 0${r.code ? `: ${r.err}` : ''}`)
+    ok(/service token/.test(r.out), 'the output names the service token')
+    ok(log.every((l) => !l.path.startsWith('/api/publish/')) && log.some((l) => l.service), 'and every request used it')
   }
 
   console.log('\n--read: the ids an edit needs, through whichever credential is live (U5)')
@@ -999,7 +1092,7 @@ try {
   console.log('\n--link twice does not cost a second click (U5)')
   {
     // An agent that re-runs --link defensively must not ask the person again:
-    // one approval covers eight hours and any number of decks.
+    // one approval covers seven days and any number of decks.
     const before = approvals.length
     const again = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
     eq(again.code, 0, 'the second --link exits 0')
@@ -1024,13 +1117,21 @@ try {
     const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
     delete saved.expires
     writeFileSync(GRANT_FILE, JSON.stringify(saved), { mode: 0o600 })
+    const undated = readFileSync(GRANT_FILE, 'utf8')
     log = []
     const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+      env: { ...noCredential, CI: 'true' },
     })
-    ok(r.code !== 0, 'the run is refused')
+    ok(r.code !== 0, 'a machine run is refused')
     ok(/--link/.test(r.err), 'and names --link rather than letting the store answer 401')
-    eq(log.length, 0, 'no request was made with a grant that cannot be dated')
+    ok(!log.some((l) => !l.service), 'no request was made with a grant that cannot be dated')
+    // With a person there, the same dead file is simply replaced by a new approval.
+    writeFileSync(GRANT_FILE, undated, { mode: 0o600 })
+    const before = approvals.length
+    const paired = await runTool([await seed(), project({ map: {} })], { env: noCredential })
+    eq(paired.code, 0, `a person's run pairs again instead${paired.code ? `: ${paired.err}` : ''}`)
+    eq(approvals.length, before + 1, 'with one new approval')
+    ok(typeof JSON.parse(readFileSync(GRANT_FILE, 'utf8')).expires === 'string', 'and the file now holds a dated grant')
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')

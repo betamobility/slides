@@ -11,6 +11,9 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Publishing asks for one click, never a secret.** The splice tool starts the browser approval by itself when a person has none, and the beta-slides skill (0.3.0) no longer points anyone at a token. The service token is for unattended runs only.
+- **One approval covers a week.** A publishing approval lasts 7 days, and the Agent access list names which agent holds it. Needs the deck store worker deployed.
+
 ## [2026.10.9] — 2026-10-09
 
 - **One general Beta template with 35 layouts.** Adds agenda, metric, people, partner, diagram, photographic chapter and closing formats, plus two chart comparisons.

@@ -29,7 +29,7 @@ import { mintDocIntoBlock, indexPage } from '../src/pages.js'
 // The grant store, exercised directly against Miniflare's own KV: mint,
 // verify, list and revoke are worker-side functions with no route of their
 // own, and the routes that use them arrive in U2 and U3.
-import { mintGrant, verifyGrant, listGrants, revokeGrant } from '../src/grant.js'
+import { mintGrant, verifyGrant, listGrants, revokeGrant, GRANT_TTL_S } from '../src/grant.js'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -1098,9 +1098,22 @@ export async function run(Miniflare) {
     eq(raws, 0, 'no KV value holds the raw token, only its hash')
     ok(dump.keys.some((k) => k.name === `grant:${g1.hash}`), 'the grant is keyed by its hash')
 
-    // Expiry is the value's own clock, not only KV's TTL: a grant minted nine
-    // hours ago is dead even while the key survives.
-    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    // The lifetime is seven days and one constant (upstream-merge plan U7, R7):
+    // the value's clock and KV's own expiry both come from it.
+    eq(GRANT_TTL_S, 7 * 24 * 60 * 60, 'a grant lasts seven days')
+    eq(g1.exp - Math.floor(Date.parse(g1.created) / 1000), GRANT_TTL_S, "the grant's stored expiry is the constant after its creation")
+    for (const name of [`grant:${g1.hash}`, `person:alice@betamobility.io:${g1.hash}`]) {
+      const key = (await kv.list({ prefix: name })).keys[0]
+      ok(Math.abs(key.expiration - g1.exp) <= 5, `KV retires ${name.split(':')[0]}:… at the same moment`)
+    }
+    // AE4: approved on Monday morning, still good on Friday.
+    const sixDays = await mintGrant(grantEnv, 'alice@betamobility.io', 'day six', { now: Date.now() - 6 * 86400_000 })
+    eq((await verifyGrant(asReq(bearer(sixDays.token)), grantEnv))?.id, 'alice@betamobility.io', 'a grant used on day 6 still verifies')
+    await revokeGrant(grantEnv, 'alice@betamobility.io', sixDays.hash)
+
+    // Expiry is the value's own clock, not only KV's TTL: a grant minted eight
+    // days ago is dead even while the key survives.
+    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 8 * 86400_000 })
     ok(await kv.get(`grant:${stale.hash}`), 'a stale grant can still be in KV')
     ok(!(await verifyGrant(asReq(bearer(stale.token)), grantEnv)), 'and does not verify: its stored exp has passed')
 
@@ -1214,7 +1227,9 @@ export async function run(Miniflare) {
     eq(r.status, 200, 'a signed-in person gets the page')
     const approvePage = await r.text()
     ok(approvePage.includes('publish decks as you'), 'it says what is being granted')
-    ok(approvePage.includes('8 hours'), 'it says for how long')
+    ok(approvePage.includes('publish decks as you for 7 days.'), 'it says for how long, in days, in one sentence')
+    ok(approvePage.includes('Approve for 7 days'), 'and the button repeats it')
+    ok(!/\d+ hours/.test(approvePage), 'never as a count of hours')
     ok(approvePage.includes('Approve only if you asked an agent to publish in the last few minutes.'),
       'it says when not to approve')
     ok(approvePage.includes('&quot;Claude (Cowork)&quot;'), "the agent's label is shown as quoted, escaped text")
@@ -1264,6 +1279,7 @@ export async function run(Miniflare) {
     eq(r.status, 200, 'alice approves, same-origin, with the nonce')
     const donePage = await r.text()
     ok(/close this tab/i.test(donePage), 'and is told she can close the tab')
+    ok(donePage.includes('for the next 7 days.'), 'and for how long, in days')
 
     // AE9: approved, not yet polled — the namespace holds nothing usable.
     const beforeDelivery = await kv.list({})
@@ -1568,7 +1584,7 @@ export async function run(Miniflare) {
     r = await publish('POST', '/api/publish/decks', { headers: asGrant(deadGrant.token), body: deck(slidesDoc('Revoked')) })
     eq(r.status, 401, 'a revoked grant cannot create')
     eq((await bodyOf(r)).length, 0, 'and the refusal carries no body')
-    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 9 * 3600_000 })
+    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 8 * 86400_000 })
     r = await publish('POST', '/api/publish/decks', { headers: asGrant(expiredGrant.token), body: deck(slidesDoc('Expired')) })
     eq(r.status, 401, 'an expired grant cannot create either (F3)')
 

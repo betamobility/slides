@@ -724,8 +724,8 @@ regenerate a deck from a script once people have edited it.
 **The splice tool.** `plugins/beta-slides/scripts/splice.mjs` in
 betamobility/slides, installed with the beta-slides plugin, is the only
 supported way for an agent to change a deck in the store. Node 18 or newer,
-no dependencies. Credentials come from `CF_ACCESS_CLIENT_ID` and
-`CF_ACCESS_CLIENT_SECRET`, the store from `SLIDES_STORE_URL` (default
+no dependencies. It needs no credential from you: with none, it asks the user
+for one click in a browser (below). The store is `SLIDES_STORE_URL` (default
 `https://slides.betamobility.ai`).
 
 ```bash
@@ -796,18 +796,23 @@ same bytes; the same name with different bytes is refused before any request.
 - A deck that is in a live session while the tool writes is unsupported:
   collaborators are not told the store copy changed.
 
-Cowork cannot hold the two variables — a cloud session has only
-session-scoped credentials, and connector tokens never enter the shell — and
-the token must never be pasted into a conversation, because it runs for a year
-and a deck read with it carries that deck's live-session keys. Pair instead:
-`node splice.mjs --link` prints one URL, the user opens it in a browser they
-are already signed into and clicks **Approve** once, and the tool collects a
-grant that acts as them for 8 hours. Every later command in that session
-publishes as them, against `/api/publish/` rather than `/api/harness/`, with no
-second approval. A grant can create decks and change any deck by its link; it
-cannot list the store, delete a deck, or read a deck's live-session keys, and
-the user can end it from the deck list under **Agent access**. When it lapses
-the tool says so and names `--link`; it never asks for a token. Where the
+Publishing is one click in a browser, and nobody handles a secret. The first
+command that reaches the store with no approval on the machine prints one URL
+and waits; the user opens it in a browser they are already signed into and
+clicks **Approve** once, and the tool collects a grant that acts as them for
+7 days, kept in `~/.bento/slides-grant.json` and never beside the deck.
+`node splice.mjs --link` does the pairing alone. Every later command publishes
+as them, against `/api/publish/`, with no second approval. Set
+`SLIDES_GRANT_LABEL` (for example `"Claude Code"`) so the approval page and
+the user's list say which agent asked. A grant can create decks and change any
+deck by its link; it cannot list the store, delete a deck, or read a deck's
+live-session keys, and the user can end it from the deck list under
+**Agent access**. When it lapses the next command asks for one more click; the tool
+never asks for a token, and a token must never be pasted into a conversation.
+An unattended run (a CI job) sets `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` from its own secret store and writes through
+`/api/harness/`; with `CI` set and neither variable, the tool refuses instead
+of pairing. Where the
 sandbox cannot run `node` or reach the store at all, authoring still needs no
 credentials (`/agents.md`, `/templates/` and `/releases/` are public): build
 the deck, hand the `.bento.html` over, and tell the user to open it and pick

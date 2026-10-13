@@ -6769,3 +6769,51 @@ HEAD is invisible to the probe too).
 How it was verified before a release, the idle gate, and the race test that
 passed against broken code until the fake held the PUT's answer back:
 `docs/solutions/design-patterns/idle-tab-follows-the-store-auto-reload.md`.
+
+## 2026-10-13 — BETA FORK: a grant lasts seven days, and people publish by pairing
+
+Supersedes the eight-hour figure in the 2026-09-16 entry above; everything
+else in that entry stands. Plan:
+`docs/plans/2026-10-13-2236-feat-upstream-merge-and-live-scenes-plan.md`, U6
+and U7.
+
+**A grant lasts 7 days, fixed.** `GRANT_TTL_S` in
+`server/deck-store/src/grant.js` is the one number; the approval page derives
+whole days from it, and `scripts/test-beta-skill.mjs` cross-checks the skill,
+`docs/agents.md`, the store README and `CONCEPTS.md` against it. Eight hours
+meant an approval a day, and the splice tool's answer to a person with no
+approval was to name the service token, which sent every person who updated a
+deck to a password manager for a credential the product was built never to
+ask of them. Seven days means a working week asks once and a lost laptop
+stops publishing within the week with nothing to clean up. Chosen over 14
+days with an admin revoke-all route.
+
+**Fixed, not sliding.** A self-renewing grant needs a refresh route, token
+rotation, a grace window and an audit record, on a store where KV allows one
+write per key per second and revocation lags by about a minute. Reopen this
+only for a lifetime measured in months.
+
+**Pairing is how people get in; the token is for machines.** With no
+credential the splice tool starts the pairing itself and prints the link. The
+service token is used only when its two variables are set, and then always. A
+run with `CI` set and no credential refuses and starts no pairing. `CI`, not a
+TTY test: an agent's shell has no TTY while a person is there to click. The
+grant file lives in the home directory or at `SLIDES_GRANT_FILE`, never beside
+the deck, because a week-long grant in a project folder travels with the
+folder.
+
+**Accepted, with reason:**
+
+- Revocation stays eventually consistent (about a minute) and per person, from
+  inside their own login. Offboarding therefore revokes a person's grants
+  before removing them from Access (`server/deck-store/README.md`,
+  "Offboarding"). No admin revoke-all exists; a grant that slips through ends
+  within the week.
+- A grant CREATE is still not shell-pinned, and a longer lifetime grows the
+  pool of people holding a live grant at any moment. Accepted on the same
+  ground as before (a service token could already do the same, and
+  `form-action 'none'` removed the escalation that made it urgent); the open
+  options in the 2026-09-16 entries are unchanged.
+- The label on the Agent access list comes from `SLIDES_GRANT_LABEL`, a string
+  the caller chooses. It tells a person's own agents apart; it is not an
+  identity and nothing trusts it.

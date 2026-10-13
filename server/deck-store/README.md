@@ -99,11 +99,15 @@ Approve and revoke are **same-origin form posts, never GETs**. Access attaches t
 
 `/link/*` and `/` also carry `frame-ancestors 'none'` with `x-frame-options: DENY`, `cross-origin-resource-policy` and `referrer-policy: no-referrer`.
 
-A grant is 32 random bytes. **The store keeps only `sha256` of it**, under `grant:<hash>` and `person:<email>:<hash>` in the `GRANTS` KV namespace, with an eight-hour `expirationTtl` and the same expiry checked against the value's own clock on every verify (KV is eventually consistent; the clock in the value is what fails closed). So a namespace dump between an approval and its delivery holds nothing usable, and the raw token exists in the open exactly once — in the answer to the poll that minted it. There is no signing key and no secret anywhere in the flow.
+A grant is 32 random bytes. **The store keeps only `sha256` of it**, under `grant:<hash>` and `person:<email>:<hash>` in the `GRANTS` KV namespace, with a seven-day `expirationTtl` (`GRANT_TTL_S`, 7 days, fixed and never renewed) and the same expiry checked against the value's own clock on every verify (KV is eventually consistent; the clock in the value is what fails closed). So a namespace dump between an approval and its delivery holds nothing usable, and the raw token exists in the open exactly once — in the answer to the poll that minted it. There is no signing key and no secret anywhere in the flow.
 
 A grant CREATE is **not** shell-pinned, unlike a grant replace: there is no stored shell to pin it against, which the plan accepted on the grounds that a service token could already do the same. `form-action 'none'` above removes the specific escalation that made this urgent; the open options (an allowlist of trusted shell digests, or serving decks from a separate origin) are recorded in `docs/DECISIONS.md` rather than half-built.
 
-A grant read drops the **whole** `collab` block, not its private keys only: room plus symmetric key is what a read-only copy carries, a reader capability that would outlive the eight hours. The restore on write is what keeps a read-modify-write from destroying the live session instead. An encrypted deck (`bento/enc`) is served and stored unchanged — its keys are inside the ciphertext.
+A grant read drops the **whole** `collab` block, not its private keys only: room plus symmetric key is what a read-only copy carries, a reader capability that would outlive the grant. The restore on write is what keeps a read-modify-write from destroying the live session instead. An encrypted deck (`bento/enc`) is served and stored unchanged — its keys are inside the ciphertext.
+
+### Offboarding
+
+When someone leaves, revoke the person's listed grants, then remove them from Access, in that order. Revocation is per person and happens from inside their own login (**Agent access** on the deck list, one Revoke per grant), so once their Access membership is gone nobody can reach that list, and a grant still on a machine of theirs keeps publishing as them until it ends by itself. There is no admin route that revokes every grant for an email: at 7 days a grant that slips through expires within the week. Revocation is eventually consistent; allow about a minute before the next write is refused everywhere.
 
 ### The retired host
 
