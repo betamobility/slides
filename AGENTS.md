@@ -299,7 +299,8 @@ Upstream base: `v1.2.7` (merged 2026-10-14, #41). `scripts/test-beta-markers.ts`
    `slides-font-browser` job runs in the fork too, with three steps gated to
    upstream (each says why).
 5a. **Every Beta hook inside an upstream file carries the marker `BETA FORK`**,
-   on the changed line or in a comment directly above it. One spelling.
+   as a comment on the changed line or within the three lines above it; a run
+   of added lines is one hook, headed by its marker. One spelling.
    `scripts/test-beta-markers.ts` diffs the fork against the upstream tag
    named above and fails CI on a hook without it, so `git grep -n "BETA FORK"`
    lists the fork's whole footprint in upstream's files. Code upstream takes
