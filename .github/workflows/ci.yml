@@ -351,7 +351,11 @@ jobs:
         run: node scripts/test-beta-markers.ts --quiet
 
       - name: Beta schema (the stamp, the file, the public path, the tooling comment)
-        run: node scripts/test-beta-schema.ts
+        # --check pins schema/slides.json AND its version-pinned twin, the two
+        # files a release publishes, to what the gate's tables generate.
+        run: |
+          node scripts/build-schema.mjs --check
+          node scripts/test-beta-schema.ts
 
       - name: Upstream rigs whose subject the fork touches
         # In upstream's `validate` job, which is gated off here, so registered

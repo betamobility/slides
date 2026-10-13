@@ -148,7 +148,8 @@ const colorSchema = { type: 'string', maxLength: 64, pattern: '^(?![\\s\\S]*(?:[
 const valueSchema = { anyOf: [textSchema, { type: 'number' }] }
 const propSchema = (kind: RuntimeProp['kind'], dflt: Record<string, unknown>) => ({
   type: 'object', additionalProperties: false, required: ['key', 'label', 'kind', 'default'],
-  properties: { key: { type: 'string', pattern: PROP_KEY.source }, label: { type: 'string', maxLength: 200 }, kind: { const: kind }, default: dflt },
+  // the gate drops a prop keyed __proto__, so the schema refuses it
+  properties: { key: { type: 'string', pattern: PROP_KEY.source.replace('^', `^(?!${PROTO}$)`) }, label: { type: 'string', maxLength: 200 }, kind: { const: kind }, default: dflt },
 })
 const assetRefSchema = (description: string) => ({ type: 'string', maxLength: 206, pattern: '^asset:[^"\'<>{};]+$', description })
 export const RUNTIME_SCHEMA: Record<string, unknown> = {

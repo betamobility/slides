@@ -336,6 +336,14 @@ export async function run(Miniflare) {
       eq(await response.text(), '', `schema HEAD ${path} has no body`)
       eq(proxied.length - before, 1, `schema HEAD ${path} only reaches static Pages`)
     }
+    // break round 2: URL-normalized traversal must not turn the schema bypass into a store read.
+    for (const path of ['/schema/./../../api/decks', '/schema/%2E%2E/api/decks', '/schema/..\\api/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      eq(response.status, 401, `normalized schema traversal refuses ${path}`)
+      eq(proxied.length, before, `normalized schema traversal never proxies ${path}`)
+      await response.text()
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

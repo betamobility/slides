@@ -303,7 +303,8 @@ Upstream base: `v1.2.7` (merged 2026-10-14, #41). `scripts/test-beta-markers.ts`
    of added lines is one hook, headed by its marker. One spelling.
    `scripts/test-beta-markers.ts` diffs the fork against the upstream tag
    named above and fails CI on a hook without it, so `git grep -n "BETA FORK"`
-   lists the fork's whole footprint in upstream's files. Code upstream takes
+   lists the fork's footprint in upstream's source, scripts and workflows
+   (prose and site pages are not in the rig's scope). Code upstream takes
    over loses its marker in the same merge.
 6. **Commits in this fork carry Beta's session attribution** (the
    `Co-Authored-By` and `Claude-Session` trailers Beta's harness requires).

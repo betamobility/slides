@@ -41,18 +41,45 @@ const EXEMPT: Array<[RegExp, string]> = [
   [/^kernel\/src\/charts\.ts$/, 'horizontal bars and bar corners (#39) predate the marker rule; marking them is itself a kernel-zone edit, see AGENTS.md "Rules for the fork"'],
 ]
 /**
- * Added lines that cannot carry a comment where they stand: each is TEXT inside
- * a template literal, and the marker is on the definition it interpolates.
- * Matched whole, start to end, so no other line that happens to use the same
- * variable rides through.
+ * A hook that is PURE PARAMETERISATION needs no marker of its own: the added
+ * lines are upstream's removed lines with a literal swapped for a build flag,
+ * and the marker is on the flag's definition. These lines are text inside
+ * template literals (the shipped tooling comment, the loader), where a comment
+ * would become bytes in every file. The test is equality after substituting
+ * each flag's upstream default back, so nothing else on the line rides through.
  */
-const UNMARKABLE: Array<[string, RegExp, string]> = [
-  ['scripts/postbuild-compress.mjs', /^  Full authoring guide \(schema \+ copy-paste snippets\): \$\{agentsUrl\}$/, 'the tooling comment; marked at `const agentsUrl`'],
-  ['scripts/postbuild-compress.mjs', /^  · Schema: \$\{schemaUrl\} \(= window\.bento\.schema\(\)\)\$\{llmsUrl === 'none' \? '' : `; agent index: \$\{llmsUrl\}`\}$/, 'the tooling comment; marked at `const schemaUrl`'],
-  ['scripts/postbuild-compress.mjs', /^    fail\('<b>This is a \$\{failName\}\.<\/b><br>Opening it needs a browser released in 2023 or later /, 'the loader\'s old-browser message; marked at `const failName`'],
+const PARAMS: Array<[string, string]> = [
+  ["${llmsUrl === 'none' ? '' : `; agent index: ${llmsUrl}`}", '; agent index: https://bento.page/llms.txt'],
+  ['${schemaUrl}', 'https://bento.page/schema/slides.json'],
+  ['${agentsUrl}', 'https://bento.page/agents.md'],
+  ['${failName}', 'bento/dash spreadsheet'],
 ]
-/** The marker as a COMMENT: after `//`, inside a block or JSDoc comment, after `#`, or in an html comment. A string that says it is not one. */
-const MARKER = /(?:\/\/|\/\*|^\s*\*|#|<!--)[^\n]*BETA FORK/
+const deparam = (line: string) => PARAMS.reduce((l, [from, to]) => l.split(from).join(to), line)
+
+/**
+ * The comment on a line of `file`, or '' when it has none. A marker is a
+ * COMMENT: text in a string that happens to say `// BETA FORK` is data. Walks
+ * the line once, skipping string and template literals, to the first comment
+ * opener the file's language has. (One line at a time: a line that sits wholly
+ * inside a multi-line template literal is not seen as one, which errs toward
+ * "marked" for text nobody executes.)
+ */
+export function commentOf(file: string, line: string): string {
+  const ext = file.slice(file.lastIndexOf('.') + 1)
+  const openers = ext === 'html' ? ['<!--', '/*'] : ext === 'css' ? ['/*'] : ['toml', 'yml', 'yaml', 'sh'].includes(ext) ? ['#'] : ['//', '/*']
+  if (openers.includes('/*') && /^\s*\*(?!\/)/.test(line)) return line // a block comment's continuation line
+  const quotes = ext === 'html' || ext === 'css' ? ['"', "'"] : ['toml', 'yml', 'yaml', 'sh'].includes(ext) ? ['"', "'"] : ['"', "'", '`']
+  for (let i = 0; i < line.length; i++) {
+    const q = quotes.find((c) => line[i] === c)
+    if (q) {
+      for (i++; i < line.length && line[i] !== q; i++) if (line[i] === '\\') i++
+      continue
+    }
+    if (openers.some((o) => line.startsWith(o, i))) return line.slice(i)
+  }
+  return ''
+}
+const isMarker = (file: string, line: string) => commentOf(file, line).includes(TOKEN)
 
 export interface Hook { file: string; line: number; text: string; marked: boolean }
 
@@ -62,6 +89,7 @@ export function hooksOf(file: string, diff: string, after: string[]): Hook[] {
   const re = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@.*\n((?:[-+\\].*\n?)*)/gm
   for (let m; (m = re.exec(diff)); ) {
     const added = m[3].split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1))
+    const removed = m[3].split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1))
     if (!added.length) continue
     const line = Number(m[1])
     const above = after.slice(Math.max(0, line - 1 - NEAR), line - 1)
@@ -69,8 +97,9 @@ export function hooksOf(file: string, diff: string, after: string[]): Hook[] {
     // next merge), and its marker heads it: on one of its first lines or just
     // above. A marker further down does not reach back, and one in a string
     // is not a marker.
-    const marked = added.slice(0, NEAR + 1).some((l) => MARKER.test(l)) || above.some((l) => MARKER.test(l))
-      || added.every((l) => UNMARKABLE.some(([f, r]) => f === file && r.test(l)))
+    const parameterised = added.length === removed.length && added.some((l) => PARAMS.some(([from]) => l.includes(from)))
+      && added.every((l, i) => deparam(l) === removed[i])
+    const marked = added.slice(0, NEAR + 1).some((l) => isMarker(file, l)) || above.some((l) => isMarker(file, l)) || parameterised
     out.push({ file, line, text: added[0].trim().slice(0, 100), marked })
   }
   return out
@@ -111,6 +140,20 @@ console.log('the rule itself (no git needed)')
   ok(hooksOf(file, '@@ -0,0 +1,6 @@\n' + headed.map((l) => '+' + l).join('\n') + '\n', headed)[0].marked, 'a hook headed by its marker is marked as a whole, however long')
   const escaped = 'sendSecret(`${schemaUrl}`)'
   ok(!hooksOf('scripts/postbuild-compress.mjs', '@@ -0,0 +1 @@\n+' + escaped + '\n', [escaped])[0].marked, 'code that merely uses schemaUrl is not the tooling-comment line and is not exempt')
+}
+
+// From break round 2: comment syntax inside a literal is still data, not a marker.
+{
+  const file = 'slides/src/editor/editor.ts'
+  for (const line of ['const caption = "// BETA FORK"; enableNewFeature()',
+    'const caption = "# BETA FORK"; enableNewFeature()',
+    'const caption = `<!-- BETA FORK -->`; enableNewFeature()']) {
+    const hook = hooksOf(file, '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0]
+    ok(!hook.marked && hook.file === file && hook.line === 1, `comment syntax inside a string is not a marker: ${line}`)
+  }
+  const line = "    fail('<b>This is a ${failName}.</b><br>Opening it needs a browser released in 2023 or later '); enableNewFeature()"
+  ok(!hooksOf('scripts/postbuild-compress.mjs', '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0].marked,
+    'code appended to an exempt template line is not exempt')
 }
 
 console.log('\nthe upstream this fork tracks')

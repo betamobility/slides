@@ -2001,7 +2001,7 @@
                     "properties": {
                       "key": {
                         "type": "string",
-                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                        "pattern": "^(?!__proto__$)[A-Za-z_][A-Za-z0-9_-]{0,63}$"
                       },
                       "label": {
                         "type": "string",
@@ -2028,7 +2028,7 @@
                     "properties": {
                       "key": {
                         "type": "string",
-                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                        "pattern": "^(?!__proto__$)[A-Za-z_][A-Za-z0-9_-]{0,63}$"
                       },
                       "label": {
                         "type": "string",
@@ -2054,7 +2054,7 @@
                     "properties": {
                       "key": {
                         "type": "string",
-                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                        "pattern": "^(?!__proto__$)[A-Za-z_][A-Za-z0-9_-]{0,63}$"
                       },
                       "label": {
                         "type": "string",

@@ -224,6 +224,20 @@ console.log('\na runtime slide validates; a broken one does not\n')
     const errors = check(stampSchema(d), file)
     ok((JSON.stringify(saved) === JSON.stringify(record)) === unchanged && errors.length === 0, `${name}: what the gate keeps validates${unchanged ? ', unchanged' : ', repaired'} (${errors.join('; ')})`)
   }
+  // BETA FORK, break round 2: a reserved key is expressible in schema, unlike values/props joins.
+  const reserved = { steps: 0, props: [{ key: '__proto__', label: 'Reserved', kind: 'text', default: 'hello' }] }
+  ok(validate(rt, reserved, file).length > 0 && checkRuntime(reserved)!.props.length === 0,
+    'the schema rejects the reserved __proto__ prop that the gate drops')
+  const matrix: J[] = []
+  for (const steps of [-1, 0, 10000, 10001, '3', null]) {
+    for (const kind of ['text', 'number', 'color', 'unknown']) {
+      for (const value of ['', 'hello', '#fff', 'url(x)', 12, null]) {
+        matrix.push({ steps, props: [{ key: 'setting', label: 'Setting', kind, default: value }], values: { setting: value } })
+      }
+    }
+  }
+  const invalidOutputs = matrix.filter((record) => validate(rt, checkRuntime(record), file).length)
+  ok(invalidOutputs.length === 0, `all ${matrix.length} generated repaired runtime records validate (${invalidOutputs.length} failures)`)
   const repairedDefault = { steps: 0, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 'banana' }] }
   ok(validate(rt, repairedDefault, file).length > 0 && ((checkRuntime(repairedDefault) as unknown as J).props as J[])[0].default === 0, 'a number prop with a text default: the schema refuses what the gate would repair to 0')
   ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'url(x)' }] }, file).length > 0, 'a colour default that smuggles url() is refused, as the gate refuses it')
