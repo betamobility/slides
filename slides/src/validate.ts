@@ -26,7 +26,7 @@ import type { BentoDoc, Slide, SlideElement, TextElement } from './model.ts'
 import { MODEL_KEYS } from './modelkeys.generated.ts'
 import { isRemoteUrl } from '../../kernel/src/net.ts'
 import { measureElements } from './measure.ts'
-import { isRuntimeSlide } from './runtime.ts'
+import { isRuntimeSlide } from './runtime.ts' // BETA FORK
 import { BUILTIN_FONTS } from './fonts.ts'
 import { eachRef, paletteOf, parseThemeRef, resolveRef, _readPath } from './palette.ts'
 
@@ -66,14 +66,14 @@ export interface ValidateOpts {
  * else in an `option` is ignored at render time with no warning — the engine
  * reads the ECharts option SHAPE, it is not ECharts.
  *
- * Kept close to the renderer: pie and bar series support labels; line and
+ * BETA FORK: Kept close to the renderer: pie and bar series support labels; line and
  * scatter series do not.
  */
 const CHART_KEYS = {
   top: ['color', 'series', 'xAxis', 'yAxis', 'legend', 'grid', 'tooltip', 'textStyle', 'dataZoom'],
   series: ['type', 'name', 'data', 'yAxisIndex', 'itemStyle'],
   seriesByType: {
-    bar: ['barWidth', 'label'],
+    bar: ['barWidth', 'label'], // BETA FORK
     line: ['smooth', 'symbol', 'symbolSize', 'lineStyle', 'areaStyle'],
     scatter: ['symbol', 'symbolSize'],
     pie: ['radius', 'label'],
@@ -250,7 +250,7 @@ export function validateDoc(doc: BentoDoc, opts: ValidateOpts = {}): ValidateRes
           message: `Slide key "${k}" is not part of the format — it is ignored.` })
       }
     }
-    // Beta build, runtime slides: the still element is what older shells,
+    // BETA FORK, runtime slides: the still element is what older shells,
     // thumbnails, print and export paint. Advice only; the deck still opens.
     if (isRuntimeSlide(slide)) {
       if (!slide.elements.some((el) => el.type === 'image')) {
@@ -439,7 +439,7 @@ function validateChart(
       // the one people reach for most, and the one that reads as a bug
       if (k === 'label') {
         note(`option.series[${i}].label`,
-          'value labels on a line or scatter series (labels are supported for pie and bar)')
+          'value labels on a line or scatter series (labels are supported for pie and bar)') // BETA FORK
       } else {
         note(`option.series[${i}].${k}`, `"${k}" on a ${s.type ?? 'series'} series`)
       }

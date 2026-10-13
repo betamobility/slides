@@ -12,7 +12,7 @@ import { resolveAsset } from '../render'
 import { measureElement } from '../measure'
 import { PALETTE_SLOTS, paletteOf, refAt, setColor, slotIsSet } from '../palette'
 import { isMacOS } from '../screens'
-import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
+import { isRuntimeSlide } from '../runtime' // BETA FORK: runtime slides (U5)
 import { CHART_PRESETS } from '../charts'
 import { FONT_CHOICES, firstFamily, injectFonts } from '../fonts'
 import { CODE_SCOPES, DEFAULT_CODE_COLORS } from '../code'
@@ -296,7 +296,7 @@ export class PropsPanel {
 
   private buildSlidePanel() {
     const slide = this.store.slide
-    // Beta build (runtime slides U5, KTD9): a live scene has no background,
+    // BETA FORK (runtime slides U5, KTD9): a live scene has no background,
     // transition or layout of its own to edit; its declared values and the
     // speaker notes are the whole panel.
     if (isRuntimeSlide(slide)) {
@@ -512,7 +512,7 @@ export class PropsPanel {
     })
     this.host.appendChild(saveLy)
 
-    this.buildNotes(slide)
+    this.buildNotes(slide) // BETA FORK
   }
 
   private buildNotes(slide: Slide) {
@@ -1482,7 +1482,7 @@ export class PropsPanel {
   }
 
   private buildChartCartesian(el: ChartElement, opt: Record<string, any>, series: any[]) {
-    const horizontal = opt.yAxis?.type === 'category' && opt.xAxis?.type === 'value'
+    const horizontal = opt.yAxis?.type === 'category' && opt.xAxis?.type === 'value' // BETA FORK
     const valueAxis = horizontal ? 'xAxis' : 'yAxis'
     const yAxis: any[] = horizontal ? [opt.xAxis] : Array.isArray(opt.yAxis) ? opt.yAxis : opt.yAxis ? [opt.yAxis] : [{ type: 'value' }]
     const twoAxes = yAxis.length > 1
@@ -1490,7 +1490,7 @@ export class PropsPanel {
     this.row('Legend', this.toggle(!!opt.legend, (on) =>
       this.editOption(el.id, (o) => { if (on) o.legend = { bottom: 0 }; else delete o.legend })))
 
-    if (!horizontal) this.row('Second axis', this.toggle(twoAxes, (on) => this.editOption(el.id, (o) => {
+    if (!horizontal) this.row('Second axis', this.toggle(twoAxes, (on) => this.editOption(el.id, (o) => { // BETA FORK
       const ss: any[] = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []
       if (on) {
         const first = Array.isArray(o.yAxis) ? (o.yAxis[0] ?? {}) : (o.yAxis ?? {})
@@ -1513,7 +1513,7 @@ export class PropsPanel {
       name.placeholder = t('Series {n}', { n: i + 1 })
       name.addEventListener('input', () => this.editOption(el.id, (o) => { o.series[i].name = name.value }, false))
       name.addEventListener('change', () => this.editOption(el.id, (o) => { o.series[i].name = name.value }, true))
-      const type = this.labeledSelect(horizontal ? [['bar', t('Bar')]] : [['bar', t('Bar')], ['line', t('Line')]], s?.type === 'line' ? 'line' : 'bar',
+      const type = this.labeledSelect(horizontal ? [['bar', t('Bar')]] : [['bar', t('Bar')], ['line', t('Line')]], s?.type === 'line' ? 'line' : 'bar', // BETA FORK
         (v) => this.editOption(el.id, (o) => { o.series[i].type = v }))
       row.append(name, type)
       if (twoAxes) {
@@ -1537,7 +1537,7 @@ export class PropsPanel {
     addBtn.textContent = t('＋ Add series')
     addBtn.addEventListener('click', () => this.editOption(el.id, (o) => {
       const ss: any[] = Array.isArray(o.series) ? o.series : o.series ? [o.series] : []
-      const n = ((o.yAxis?.type === 'category' ? o.yAxis : o.xAxis)?.data?.length) || 4
+      const n = ((o.yAxis?.type === 'category' ? o.yAxis : o.xAxis)?.data?.length) || 4 // BETA FORK
       ss.push({ type: 'bar', name: t('Series {n}', { n: ss.length + 1 }), data: Array(n).fill(0) })
       o.series = ss
     }))
@@ -1546,7 +1546,7 @@ export class PropsPanel {
 
     // --- per-axis min/max ---------------------------------------------------
     yAxis.forEach((ax, ai) => {
-      const label = twoAxes ? (ai === 0 ? t('Left axis') : t('Right axis')) : horizontal ? t('X') : t('Y axis')
+      const label = twoAxes ? (ai === 0 ? t('Left axis') : t('Right axis')) : horizontal ? t('X') : t('Y axis') // BETA FORK
       const wrap = document.createElement('div')
       wrap.className = 'ed-axis-range'
       const mk = (key: 'min' | 'max', ph: string) => {
@@ -1554,7 +1554,7 @@ export class PropsPanel {
         inp.type = 'number'; inp.placeholder = ph
         inp.value = typeof ax?.[key] === 'number' ? String(ax[key]) : ''
         const commit = (final: boolean) => this.editOption(el.id, (o) => {
-          const a = Array.isArray(o[valueAxis]) ? o[valueAxis][ai] : o[valueAxis]
+          const a = Array.isArray(o[valueAxis]) ? o[valueAxis][ai] : o[valueAxis] // BETA FORK
           const raw = inp.value.trim()
           if (raw === '' || Number.isNaN(parseFloat(raw))) delete a[key]
           else a[key] = parseFloat(raw)
@@ -1574,7 +1574,7 @@ export class PropsPanel {
   /** Editable categories × series grid. Adding/removing rows keeps every
    *  series data array and the x-axis categories in lockstep. */
   private buildChartGrid(el: ChartElement, opt: Record<string, any>, series: any[]) {
-    const categoryAxis = opt.yAxis?.type === 'category' ? 'yAxis' : 'xAxis'
+    const categoryAxis = opt.yAxis?.type === 'category' ? 'yAxis' : 'xAxis' // BETA FORK
     const cats: any[] = opt[categoryAxis]?.data ?? []
     this.section(t('Data'))
     const scroll = document.createElement('div')
@@ -1606,7 +1606,7 @@ export class PropsPanel {
       const tr = document.createElement('tr')
       const cat = document.createElement('td')
       cat.appendChild(cellInput(String(cats[r] ?? ''), (v, final) => this.editOption(el.id, (o) => {
-        if (!Array.isArray(o[categoryAxis]?.data)) { o[categoryAxis] = { ...(o[categoryAxis] ?? { type: 'category' }), data: [] } }
+        if (!Array.isArray(o[categoryAxis]?.data)) { o[categoryAxis] = { ...(o[categoryAxis] ?? { type: 'category' }), data: [] } } // BETA FORK
         o[categoryAxis].data[r] = v
       }, final), false))
       tr.appendChild(cat)
@@ -1621,7 +1621,7 @@ export class PropsPanel {
       })
       const rmTd = document.createElement('td')
       rmTd.appendChild(this.opBtn('✕', t('Remove row'), () => this.editOption(el.id, (o) => {
-        if (Array.isArray(o[categoryAxis]?.data)) o[categoryAxis].data.splice(r, 1)
+        if (Array.isArray(o[categoryAxis]?.data)) o[categoryAxis].data.splice(r, 1) // BETA FORK
         o.series.forEach((s: any) => { if (Array.isArray(s?.data)) s.data.splice(r, 1) })
       })))
       tr.appendChild(rmTd)
@@ -1636,7 +1636,7 @@ export class PropsPanel {
     addBtn.className = 'ed-btn'
     addBtn.textContent = t('＋ Add row')
     addBtn.addEventListener('click', () => this.editOption(el.id, (o) => {
-      if (!Array.isArray(o[categoryAxis]?.data)) o[categoryAxis] = { ...(o[categoryAxis] ?? { type: 'category' }), data: [] }
+      if (!Array.isArray(o[categoryAxis]?.data)) o[categoryAxis] = { ...(o[categoryAxis] ?? { type: 'category' }), data: [] } // BETA FORK
       o[categoryAxis].data.push(t('Item {n}', { n: o[categoryAxis].data.length + 1 }))
       const ss: any[] = Array.isArray(o.series) ? o.series : [o.series]
       ss.forEach((s) => { if (s) (s.data ?? (s.data = [])).push(0) })

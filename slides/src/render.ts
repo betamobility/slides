@@ -10,7 +10,7 @@ import { chartSnapshotSvg } from './charts'
 import { renderMath as mathsLite, mathError } from './maths/index.ts'
 import { resolveMathHtml } from './maths/delimiters.ts'
 import { renderCodeInto } from './code'
-import { runtimePaint } from './runtime.ts'
+import { runtimePaint } from './runtime.ts' // BETA FORK
 import { formatDate } from './datefmt'
 import { cropImgStyle, isIdentityCrop } from './crop'
 
@@ -1344,7 +1344,7 @@ export function renderSlide(slide: Slide, doc: BentoDoc, opts: RenderOpts = {}):
   surface.style.height = `${doc.size.height}px`
   surface.style.background = slide.background
   const fields = opts.fields ?? fieldContext(doc, slide)
-  // Beta build: a runtime slide paints its still only (runtime.ts)
+  // BETA FORK: a runtime slide paints its still only (runtime.ts)
   for (const el of runtimePaint(slide, doc) ?? slide.elements) surface.appendChild(renderElement(el, doc, { ...opts, fields }))
   return surface
 }

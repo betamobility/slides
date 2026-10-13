@@ -45,7 +45,7 @@ import { isWebUrl, REQUIRED_ELEMENT_KEYS } from './model'
 import { parseThemeRef } from './palette.ts'
 import { MODEL_KEYS } from './modelkeys.generated'
 import { TIP_KINDS } from './tips'
-import { checkRuntime } from './runtime.ts' // BETA FORK: runtime slides
+import { checkRuntime, RUNTIME_SCHEMA } from './runtime.ts' // BETA FORK: runtime slides
 
 /** Reject. JSON has no `undefined`, so it can never collide with a real value. */
 const DROP = undefined
@@ -608,7 +608,7 @@ export const SLIDE_CHECKS: Record<string, Check> = {
     ? v.map((el, i) => within(String(i), () => sanitizeElement(el))).filter((el): el is SlideElement => el !== null)
     : DROP), { type: 'array', maxItems: LIMITS.elements, items: { $ref: '#/$defs/element' } }),
   // BETA FORK: the runtime slide record; its shape lives with its helpers
-  runtime: (v) => checkRuntime(v),
+  runtime: tag((v) => checkRuntime(v), RUNTIME_SCHEMA),
 }
 
 /**

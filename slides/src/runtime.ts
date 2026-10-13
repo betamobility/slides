@@ -132,6 +132,43 @@ function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | un
 }
 
 /**
+ * What `checkRuntime` accepts, in the JSON Schema vocabulary the published
+ * document schema is built from (slides/src/schema.ts reads it off the
+ * `runtime` entry of SLIDE_CHECKS). Kept beside the gate it describes, built
+ * from the same limits, so the two cannot drift. One honest gap, the same one
+ * the rest of the schema has: the gate REPAIRS a bad `steps` or prop default
+ * where a validator following this reports it.
+ */
+const valueSchema = { anyOf: [{ type: 'string', maxLength: MAX_TEXT }, { type: 'number' }] }
+const assetRefSchema = (description: string) => ({ type: 'string', maxLength: 206, pattern: '^asset:[^"\'<>{};]+$', description })
+export const RUNTIME_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  description: 'Beta build: a runtime slide. One live HTML scene fills the slide in present mode; everywhere else the slide shows its still, an ordinary full-bleed image element in `elements`.',
+  properties: {
+    src: assetRefSchema('the scene: an asset holding its HTML (256 KB at most)'),
+    url: { type: 'string', maxLength: MAX_URL, pattern: '^https://', description: 'a hosted page to frame, in place of src' },
+    still: assetRefSchema('the picture shown wherever the scene is not running (200 KB at most)'),
+    steps: { type: 'integer', minimum: 0, maximum: MAX_STEPS, description: 'how many arrow presses the scene takes before the slide advances' },
+    props: {
+      type: 'array', maxItems: MAX_PROPS,
+      description: 'the settings the scene declares',
+      items: {
+        type: 'object', additionalProperties: false, required: ['key', 'label', 'kind', 'default'],
+        properties: {
+          key: { type: 'string', pattern: PROP_KEY.source },
+          label: { type: 'string', maxLength: 200 },
+          kind: { enum: ['text', 'number', 'color'] },
+          default: valueSchema,
+        },
+      },
+    },
+    values: { type: 'object', maxProperties: MAX_PROPS, additionalProperties: valueSchema, description: 'what a presenter set, by declared key' },
+    assets: { type: 'array', maxItems: MAX_ASSETS, items: { type: 'string', pattern: ASSET_NAME.source }, description: 'store-origin files the scene is handed when presented from the store' },
+  },
+}
+
+/**
  * Rebuild a foreign `runtime` record. Unlike most of untrusted.ts this repairs
  * a little: a bad `steps` becomes 0 and a bad prop default becomes its kind's
  * default. Both are numeric or constant coercions that cannot smuggle anything,

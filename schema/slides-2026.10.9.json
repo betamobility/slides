@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://bento.page/schema/slides.json",
+  "$id": "https://slides.betamobility.ai/schema/slides.json",
   "title": "bento/slides document",
-  "description": "The #bento-doc JSON of a Bento Slides file, generated from the app's validation tables. Guide: https://bento.page/agents.md",
+  "description": "The #bento-doc JSON of a Bento Slides file, generated from the app's validation tables. Guide: https://slides.betamobility.ai/agents.md",
   "x-bento-version": "2026.10.9",
   "$ref": "#/$defs/doc",
   "$defs": {
@@ -1954,7 +1954,105 @@
           "type": "string",
           "maxLength": 65536
         },
-        "runtime": {},
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Beta build: a runtime slide. One live HTML scene fills the slide in present mode; everywhere else the slide shows its still, an ordinary full-bleed image element in `elements`.",
+          "properties": {
+            "src": {
+              "type": "string",
+              "maxLength": 206,
+              "pattern": "^asset:[^\"'<>{};]+$",
+              "description": "the scene: an asset holding its HTML (256 KB at most)"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 4000,
+              "pattern": "^https://",
+              "description": "a hosted page to frame, in place of src"
+            },
+            "still": {
+              "type": "string",
+              "maxLength": 206,
+              "pattern": "^asset:[^\"'<>{};]+$",
+              "description": "the picture shown wherever the scene is not running (200 KB at most)"
+            },
+            "steps": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "description": "how many arrow presses the scene takes before the slide advances"
+            },
+            "props": {
+              "type": "array",
+              "maxItems": 64,
+              "description": "the settings the scene declares",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "label",
+                  "kind",
+                  "default"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "kind": {
+                    "enum": [
+                      "text",
+                      "number",
+                      "color"
+                    ]
+                  },
+                  "default": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4000
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "values": {
+              "type": "object",
+              "maxProperties": 64,
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "description": "what a presenter set, by declared key"
+            },
+            "assets": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+              },
+              "description": "store-origin files the scene is handed when presented from the store"
+            }
+          }
+        },
         "stateOf": {
           "type": "string",
           "maxLength": 200,

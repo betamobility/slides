@@ -300,6 +300,7 @@ export async function run(Miniflare) {
       '/agents.md', '/slides/agents.md',
       '/skills/SKILL.md', '/skills/beta-slides.zip',
       '/logo/favicon-32.png',
+      '/schema/slides.json', '/schema/slides-2026.10.9.json',
       '/robots.txt', '/sitemap.xml', '/LICENSE',
     ]
     for (const p of PUBLIC_PATHS) {

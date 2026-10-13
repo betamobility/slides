@@ -113,7 +113,9 @@ console.log('one source\n')
 const built = buildSchema(version)
 const file = JSON.parse(read('schema/slides.json')) as J
 ok(JSON.stringify(built) === JSON.stringify(file), 'schema/slides.json is byte-for-byte what buildSchema(version) returns (build-schema.mjs --check pins it in CI too)')
-ok(file.$id === SCHEMA_URL && file.$id === 'https://bento.page/schema/slides.json', `$id is the published URL (${file.$id})`)
+// BETA FORK: Beta's shell stamps Beta's copy of the schema (it describes slide.runtime).
+const BETA_SCHEMA_URL = 'https://slides.betamobility.ai/schema/slides.json'
+ok(file.$id === SCHEMA_URL && file.$id === BETA_SCHEMA_URL, `$id is the published URL (${file.$id})`)
 ok(file['x-bento-version'] === version, `stamped with the shell version ${version}`)
 ok(existsSync(join(root, `schema/slides-${version}.json`)), 'a version-pinned twin exists')
 const mainSrc = read('slides/src/main.ts')
@@ -172,7 +174,7 @@ console.log('\nthe saved JSON opens with its pointer\n')
   const stamped = stampSchema(live)
   ok(Object.keys(stamped)[0] === '$schema' && stamped.$schema === SCHEMA_URL, 'stampSchema puts $schema FIRST, with the published URL')
   ok(!('$schema' in live), 'the input object is untouched (a new object, not a mutation)')
-  ok(JSON.stringify(stamped).startsWith('{"$schema":"https://bento.page/schema/slides.json",'), 'serialized, the file starts with the pointer (50 B)')
+  ok(JSON.stringify(stamped).startsWith(`{"$schema":"${BETA_SCHEMA_URL}",`), 'serialized, the file starts with the pointer (about 60 B)') // BETA FORK
   const again = parseDoc(JSON.stringify(stamped))
   ok(!!again && !('$schema' in again), 'load → save → load: the live document never carries it')
   const facade = read('slides/src/save.ts')
@@ -188,9 +190,9 @@ for (const dir of ['slides/src', 'kernel/src']) {
       if (f.isDirectory()) walk(p)
       else if (/\.(ts|css|html)$/.test(f.name) && !/\.generated\./.test(f.name)) {
         const src = readFileSync(join(root, p), 'utf8')
-        if (!src.includes('bento.page/schema')) continue
+        if (!src.includes('/schema/slides.json')) continue // BETA FORK: either host's schema URL
         carriers.push(p)
-        const lines = src.split('\n').filter((l) => l.includes('bento.page/schema'))
+        const lines = src.split('\n').filter((l) => l.includes('/schema/slides.json'))
         ok(!lines.some((l) => /fetch\(|import\(|href=|src=|new URL\(/.test(l)), `${p}: the URL is text only (${lines.length} line${lines.length === 1 ? '' : 's'})`)
       }
     }
@@ -202,7 +204,38 @@ const tooling = read('scripts/postbuild-compress.mjs')
 ok(tooling.includes('https://bento.page/schema/slides.json') && tooling.includes('https://bento.page/llms.txt') && tooling.includes('window.bento.schema()'), 'the Tooling comment names the URL, schema() and llms.txt')
 const llms = read('site-src/llms.txt')
 ok(/^# /.test(llms) && llms.includes('https://bento.page/schema/slides.json') && llms.includes('agents.md'), 'llms.txt exists with the schema and the agent guide')
-ok(read('scripts/release.mjs').includes("'llms.txt'") && read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages llms.txt and schema/ into the site')
+// BETA FORK: Beta's site publishes the schema and no llms.txt (scripts/test-beta-schema.ts covers the Beta build's own tooling comment).
+ok(read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages schema/ into the site')
+
+// BETA FORK: the runtime slide in the published schema (upstream-merge plan U3, R4, AE11).
+console.log('\na runtime slide validates; a broken one does not\n')
+{
+  const rt = (defs.slide.properties as Record<string, J>).runtime
+  ok(!!rt && rt.type === 'object' && rt.additionalProperties === false, 'slide.runtime is described, and closed to unknown keys')
+  ok(Object.keys(rt.properties as J).sort().join() === 'assets,props,src,steps,still,url,values', `with the keys the gate accepts (${Object.keys(rt.properties as J).sort().join()})`)
+  const deck = JSON.parse(JSON.stringify(starter))
+  deck.assets = { ...(deck.assets ?? {}), 'scene-src': 'data:text/html;base64,PHA+aGk8L3A+', 'scene-still': 'data:image/svg+xml;base64,PHN2Zy8+' }
+  deck.slides.push({
+    id: 'live', notes: '',
+    elements: [{ id: 'still', type: 'image', x: 0, y: 0, w: 1280, h: 720, rotation: 0, opacity: 1, src: 'asset:scene-still' }],
+    runtime: { src: 'asset:scene-src', still: 'asset:scene-still', steps: 3, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 11 }, { key: 'tint', label: 'Tint', kind: 'color', default: '#1b1b1b' }], values: { zoom: 12 }, assets: ['points.json'] },
+  })
+  const errs = check(deck, file)
+  ok(errs.length === 0, `a deck with a runtime slide validates (${errs.length}${errs.length ? ': ' + errs.slice(0, 3).join('; ') : ''})`)
+  // and what validates loads with nothing dropped: the gate keeps the record whole
+  const kept = parseDoc(JSON.stringify(stampSchema(deck)))?.slides.find((s) => s.id === 'live') as unknown as J
+  ok(JSON.stringify((kept?.runtime as J)) === JSON.stringify(deck.slides.at(-1).runtime), 'and the gate keeps that record byte for byte')
+  ok(check({ ...deck, slides: [{ ...deck.slides.at(-1), runtime: { steps: 0, props: [] } }] }, file).length === 0, 'a placeholder record (no scene yet) validates')
+  const bad = (mutate: (r: J) => void) => { const d = JSON.parse(JSON.stringify(deck)); mutate(d.slides.at(-1).runtime); return check(d, file) }
+  ok(bad((r) => { (r.props as J[])[0].kind = 'select' }).some((m) => /kind/.test(m)), 'a prop of an unknown kind fails, naming kind')
+  ok(bad((r) => { r.sandbox = 'allow-same-origin' }).some((m) => /unknown key sandbox/.test(m)), 'a key the record does not have (a sandbox, say) fails with the key named')
+  ok(bad((r) => { r.url = 'http://example.com/' }).some((m) => /url/.test(m)), 'a url that is not https fails')
+  ok(bad((r) => { r.src = 'data:text/html,<p>x</p>' }).some((m) => /src/.test(m)), 'a src that is not an asset ref fails')
+  ok(bad((r) => { r.steps = -1 }).some((m) => /steps/.test(m)), 'a negative step count fails')
+  const typoSlide = JSON.parse(JSON.stringify(deck)); typoSlide.slides.at(-1).runtim = {}
+  ok(check(typoSlide, file).some((m) => /unknown key runtim/.test(m)), 'a slide with an unknown key fails with the key named')
+  ok(check(7 as unknown, rt).length > 0, 'runtime: 7 is refused by the schema, as the gate drops it')
+}
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

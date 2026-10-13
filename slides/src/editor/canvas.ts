@@ -641,7 +641,7 @@ export class SlideCanvas {
 
   /** notified when the comment tool arms/disarms (topbar button state) */
   onCommentModeChange: ((on: boolean) => void) | null = null
-  /** Beta build (runtime slides U5): an insert aimed at a live scene slide. */
+  /** BETA FORK (runtime slides U5): an insert aimed at a live scene slide. */
   onRuntimeRefused: (() => void) | null = null
   onSlideNav: ((dir: 1 | -1) => void) | null = null
   private wheelNavAccum = 0
@@ -2046,7 +2046,7 @@ export class SlideCanvas {
 
   /** Insert an element, select it, and (for text) drop straight into editing. */
   insert(el: SlideElement, startEditing = false) {
-    if (isRuntimeSlide(this.store.slide)) { this.onRuntimeRefused?.(); return }
+    if (isRuntimeSlide(this.store.slide)) { this.onRuntimeRefused?.(); return } // BETA FORK
     // inserting while previewing a non-default hover set joins that set —
     // "I'm editing the italy panel" means new content belongs to it
     const slide = this.store.slide

@@ -26,7 +26,7 @@ import { FORMAT, FORMAT_VERSION } from './model'
 import { MODEL_KEYS } from './modelkeys.generated'
 import { ELEMENT_CHECKS, SLIDE_CHECKS, REQUIRED_KEYS, LIMITS, objectSchema, type JsonSchema } from './untrusted'
 
-export const SCHEMA_URL = 'https://bento.page/schema/slides.json'
+export const SCHEMA_URL = 'https://slides.betamobility.ai/schema/slides.json' // BETA FORK: Beta's copy describes slide.runtime; upstream's is https://bento.page/schema/slides.json
 
 /**
  * The saved JSON names its schema as its FIRST key, so a reader with only
@@ -122,7 +122,7 @@ export function buildSchema(version: string): JsonSchema {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $id: SCHEMA_URL,
     title: 'bento/slides document',
-    description: `The #bento-doc JSON of a Bento Slides file, generated from the app's validation tables. Guide: https://bento.page/agents.md`,
+    description: `The #bento-doc JSON of a Bento Slides file, generated from the app's validation tables. Guide: https://slides.betamobility.ai/agents.md`, // BETA FORK: Beta's guide
     'x-bento-version': version,
     $ref: '#/$defs/doc',
     $defs,

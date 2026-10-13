@@ -44,7 +44,7 @@ import { t, isRtl } from '../i18n' // BETA FORK (v1.1 U3): the locale picker is 
 import { markFileSaved } from '../packs' // BETA FORK (v1.1 U3): pack management UI removed; the save path still marks packs saved
 import { stepOf } from '../steps'
 import { injectFonts } from '../fonts'
-import { isRuntimeSlide } from '../runtime' // Beta build: runtime slides (U5)
+import { isRuntimeSlide } from '../runtime' // BETA FORK: runtime slides (U5)
 import { appConfig } from '../../../kernel/src/app.ts'
 import { disconnectOnline, joinFromDoc, mintCollab, mintInvite, mintRoomKey, onlineTransport, rotateKeys, sharingOn, startSharing, stopSharing } from '../sync/online'
 import { readerCopy, inviteCopy } from '../share'
@@ -200,7 +200,7 @@ export class Editor {
     store.on('doc', () => this.syncLinkedCharts())
     store.on('doc', () => this.syncConnectors())
     store.on('doc', () => this.syncThemeRefs())
-    // Beta build (runtime slides U5): a live scene holds no other elements
+    // BETA FORK (runtime slides U5): a live scene holds no other elements
     store.on('current', () => this.syncRuntimeChrome())
     store.on('doc', () => this.syncRuntimeChrome())
     this.syncRuntimeChrome()
@@ -339,7 +339,7 @@ export class Editor {
     // topbar
     const bar = div('ed-topbar')
     // A real button: it opens About, so it takes focus, answers Enter/Space and
-    // has a name a screen reader can read.
+    // BETA FORK: has a name a screen reader can read.
     const logo = document.createElement('button')
     logo.type = 'button'
     logo.className = 'ed-logo'
@@ -431,7 +431,7 @@ export class Editor {
       : t('Save — download an updated copy (⌘S). This browser can’t rewrite the open file.'))
     saveB.appendChild(this.dirtyDot) // the amber unsaved-changes dot lives ON Save
     const pdfB = btn(ICONS.pdf, '', () => this.exportPdf(), t('Export PDF (print)'))
-    const pptxB = btn(ICONS.pptx, '', () => { void this.exportPptx() }, t('Export PPTX (editable PowerPoint)'))
+    const pptxB = btn(ICONS.pptx, '', () => { void this.exportPptx() }, t('Export PPTX (editable PowerPoint)')) // BETA FORK
     const helpB = btn('<b class="ed-help-q">?</b>', '', () => this.openHelp(), t('Shortcuts & tips (?)'))
     helpB.classList.add('ed-btn-help')
     this.avatarsBox = div('ed-avatars')
@@ -608,13 +608,13 @@ export class Editor {
     this.canvas = new SlideCanvas(canvasWrap, this.store)
     this.canvas.onCommentModeChange = (on) => commentB.classList.toggle('ed-btn-armed', on)
     this.canvas.onSlideNav = (dir) => this.store.goToLinear(dir)
-    this.canvas.onRuntimeRefused = () => this.refuseOnRuntimeSlide()
+    this.canvas.onRuntimeRefused = () => this.refuseOnRuntimeSlide() // BETA FORK
     this.panel = new PropsPanel(this.props, this.store)
 
     if (!canWriteDeck(this.store.doc.collab)) this.enterReaderMode()
   }
 
-  /** Beta build (runtime slides U5): hide the insert tools while the current
+  /** BETA FORK (runtime slides U5): hide the insert tools while the current
    *  slide is a live scene. Inline display, because .ed-group sets its own. */
   private syncRuntimeChrome() {
     const p = this.phoneChrome
@@ -1050,7 +1050,7 @@ export class Editor {
       item(ICONS.exportDoc, t('Export for PowerPoint…'),
         t('Opens the converter on bento.page in a new tab — drop this deck’s saved file there to get a .pptx. The deck is not uploaded. Needs an internet connection.'),
         () => { window.open(EXPORT_PPTX_URL, '_blank', 'noopener,noreferrer') })
-      }
+      } // BETA FORK
       item(ICONS.template, t('Start from scratch…'),
         t('Replace every slide with one blank slide. Keeps the deck’s theme, name and live session — ⌘Z undoes.'),
         () => this.startFromScratch())
@@ -2416,7 +2416,7 @@ export class Editor {
       if (!dt) return
       // 1) an image from the OS clipboard (screenshot, copied picture…)
       const imgItem = [...dt.items].find((it) => it.kind === 'file' && it.type.startsWith('image/'))
-      if (imgItem && isRuntimeSlide(this.store.slide)) { ev.preventDefault(); this.refuseOnRuntimeSlide(); return }
+      if (imgItem && isRuntimeSlide(this.store.slide)) { ev.preventDefault(); this.refuseOnRuntimeSlide(); return } // BETA FORK
       if (imgItem) {
         const file = imgItem.getAsFile()
         if (file) { ev.preventDefault(); this.pasteImageFile(file); return }
@@ -2436,7 +2436,7 @@ export class Editor {
   private pasteFromText(text: string): boolean {
     // 2) Bento elements / slides copied from this or another deck
     const clip = parseClip(text)
-    // Beta build (runtime slides U5): slides paste beside a live scene; nothing pastes onto one
+    // BETA FORK (runtime slides U5): slides paste beside a live scene; nothing pastes onto one
     if (clip?.kind !== 'slides' && text?.trim() && isRuntimeSlide(this.store.slide)) {
       this.refuseOnRuntimeSlide()
       return true
@@ -4019,7 +4019,7 @@ export class Editor {
     setTimeout(() => {
       t.classList.remove('show')
       setTimeout(() => t.remove(), 300)
-    }, ms)
+    }, ms) // BETA FORK
   }
 }
 

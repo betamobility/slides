@@ -29,7 +29,7 @@ export default defineConfig({
   // The app version baked into every shipped shell — what update checks
   // compare against the release manifest. Single source: package.json.
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
-  plugins: [noNodeImports, ...(process.env.SINGLEFILE ? [viteSingleFile()] : [])],
+  plugins: [noNodeImports, ...(process.env.SINGLEFILE ? [viteSingleFile()] : [])], // BETA FORK
   // Dev-only: allow serving ../kernel (shared TS-source kernel) — without a
   // workspace root, vite's fs allow-list stops at the app dir. Build output
   // is unaffected (rollup has no such restriction).

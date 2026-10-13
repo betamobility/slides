@@ -53,7 +53,7 @@ import { onlineTransport, startSharing, stopSharing, disconnectOnline, joinFromD
 // here, and in scripts/apps.mjs (test-release-apps.mjs pins the pair). Every
 // shipped Beta deck verifies its update manifest against this key.
 configureApp({
-  appId: 'beta-slides',
+  appId: 'beta-slides', // BETA FORK
   appName: 'beta/slides',
   publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'o1ZkClAbOuGbFc-xHuTCgeUH5tS5ciHrKiQ6UPxvHN4', y: '00pSDB4EwBZiCctbTzWNC_anUHjpS_RTkUVsGiMgibg' },
   manifestUrl: 'https://slides.betamobility.ai/releases/slides/manifest.json',

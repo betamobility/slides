@@ -139,7 +139,7 @@ for (const expected of [
   ok(codes.has(expected), `the broken deck trips ${expected}`)
 }
 ok(!r.ok, 'a deck with broken references is not ok')
-ok(!r.findings.some((f) => f.code === 'chart-key-ignored' && f.path === 'option.series[0].label'),
+ok(!r.findings.some((f) => f.code === 'chart-key-ignored' && f.path === 'option.series[0].label'), // BETA FORK
   'a label on a bar series is supported by the renderer')
 ok(r.findings.some((f) => f.code === 'unknown-key' && f.path === 'fx.wobble'),
   'an unknown key nested under fx is reported with its path')

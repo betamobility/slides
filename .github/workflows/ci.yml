@@ -345,6 +345,27 @@ jobs:
       - name: Shell payload fingerprint (b64 and b86)
         run: node scripts/test-apphash.ts
 
+      - name: Beta markers (every hook in an upstream file says BETA FORK)
+        # Diffs the fork against the upstream tag AGENTS.md names; fetches that
+        # one tag from upstream, since this checkout has no history.
+        run: node scripts/test-beta-markers.ts --quiet
+
+      - name: Beta schema (the stamp, the file, the public path, the tooling comment)
+        run: node scripts/test-beta-schema.ts
+
+      - name: Upstream rigs whose subject the fork touches
+        # In upstream's `validate` job, which is gated off here, so registered
+        # and never run until listed in this job: the document schema (with
+        # the fork's runtime cases), the embed element upstream now owns, and
+        # the sidebar multi-select the grid view will build on.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-slides-schema.ts --bundle --platform=node --format=esm --log-level=error --outfile="$RUNNER_TEMP/test-slides-schema.mjs"
+          node "$RUNNER_TEMP/test-slides-schema.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-embed.ts --bundle --platform=node --format=esm --log-level=error --outfile="$RUNNER_TEMP/test-embed.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-embed.mjs"
+          node scripts/test-slides-multiselect.ts
+          node scripts/test-slides-assets.ts
+
       - name: Beta deck store rig
         # U7: server/deck-store under Miniflare (a devDependency of slides/,
         # so after `npm ci`): every route is 401 without a verified Access
