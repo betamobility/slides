@@ -27,7 +27,6 @@ The plan's Goal Capsule, session-settled Key Decisions and Scope Boundaries are 
 
 Stop the loop and write the status file with the exact reason when any of these holds. These are decisions or actions only Johan can take.
 
-- A unit needs the grant lifetime (U7) or the two seed scenes (U8) and the plan's Outstanding Questions still show the defaults. Proceed on the defaults for everything else and name the two decisions in the status file.
 - A unit needs a release, a worker deploy (`server/deck-store` or `server/sync-worker`), or an Access change. Prepare everything up to that point, write the exact maintainer step into the status file, and stop that unit. Continue with units that do not depend on it.
 - A change would touch `kernel/src/` outside the three named files, regenerate a `docId`, or let a deck control its own frame sandbox.
 - Two consecutive attempts at the same step fail. Write one paragraph on what was assumed, what the evidence says, and what changes, before any third attempt.
