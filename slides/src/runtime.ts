@@ -52,6 +52,16 @@ export function runtimePaint(slide: Slide, doc: BentoDoc): SlideElement[] | null
 }
 
 /**
+ * The elements present mode reveals step by step (upstream's `fx.step`). A
+ * runtime slide has none: its scene owns ← and →, and nothing but the still
+ * is painted, so a step on the still, or on an element the slide still
+ * carries from before it became a scene, would be an arrow press that shows
+ * nothing, or a still hidden until one.
+ */
+export const steppedElements = (slide: Slide | undefined): SlideElement[] =>
+  !slide || isRuntimeSlide(slide) ? [] : slide.elements ?? []
+
+/**
  * What a present-mode frame loads: the url override when set, else the scene
  * HTML decoded from its asset. null when the slide has neither (a placeholder,
  * or a source refused on paste), in which case the still stays.

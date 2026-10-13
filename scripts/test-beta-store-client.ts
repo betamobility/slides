@@ -71,6 +71,23 @@ if (import.meta.url.endsWith('.ts')) {
   // asks recoveryChoice() rather than always offering whole-document Restore.
   ok(/markStoreConflict\(/.test(editor), 'editor.ts marks the conflict when a save latches')
   ok(/recoveryChoice\(/.test(editor) && /hasStoreConflict\(/.test(editor), 'editor.ts decides the recovery banner through recoveryChoice()')
+  // The v1.2.7 merge moved every save behind upstream's save queue, which turns
+  // a throwing write into an outcome (`out.kind === 'failed'`, `out.error`)
+  // instead of an exception. The fork's handling sat in a catch that no longer
+  // sees the error, so a manual save swallowed a store conflict and an expired
+  // login as "Save failed — see console". Each save path must read out.error.
+  {
+    const body = (name: string) => {
+      const at = editor.indexOf(`  ${name}(`)
+      return at < 0 ? '' : editor.slice(at, editor.indexOf('\n  }\n', at))
+    }
+    const failed = /if \(out\.kind === 'failed'\) \{([\s\S]*?)\n    \}/.exec(body('async save'))?.[1] ?? ''
+    ok(/out\.error instanceof StoreConflictError[\s\S]*noteStoreConflict\(out\.error, true\)/.test(failed), 'a manual save the store refuses latches the conflict and says so (read from the save queue outcome)')
+    ok(/out\.error instanceof StoreSignedOutError/.test(failed), 'a manual save with an expired login says to sign in, not "see console"')
+    const auto = body('private async runAutosave')
+    ok(/out\.kind === 'failed' && out\.error instanceof StoreConflictError\) this\.noteStoreConflict\(out\.error\)/.test(auto), 'autosave latches a store conflict from the save queue outcome too')
+    ok(/hasFileHandle\(\) && !this\.storeConflict/.test(auto), 'and sends nothing more once latched')
+  }
   ok(editor.includes("t('Save my version as a new deck')"), 'editor.ts offers "Save my version as a new deck"')
   ok(/handoffToStore\(/.test(editor), 'editor.ts routes it through handoffToStore()')
   ok(/isStoreOrigin\(\)/.test(editor), 'editor.ts branches on isStoreOrigin()')

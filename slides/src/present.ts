@@ -21,6 +21,7 @@ import { FollowState, laserDue } from './follow'
 import { StepState, stepOf, shownAt } from './steps'
 import { offlineEnabled } from './update'
 import { createRuntimeShow } from './runtime-present.ts' // BETA FORK: runtime slides
+import { steppedElements } from './runtime.ts' // BETA FORK
 import { storeIdFromLocation } from './beta/store.ts' // BETA FORK
 
 const MORPH_DURATION_DEFAULT = 0.65
@@ -154,7 +155,7 @@ export function startPresentation(
   const steps = new StepState<SlideElement>()
   /** Hide/show every stepped element of a section for the current step. */
   const applyStep = (section: HTMLElement, slide: Slide, step: number) => {
-    for (const el of slide.elements ?? []) {
+    for (const el of steppedElements(slide)) { // BETA FORK: a runtime slide has no reveal steps
       if (!stepOf(el)) continue
       const node = section.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
       node?.classList.toggle('bento-step-hidden', !shownAt(el, step))
@@ -1336,7 +1337,7 @@ export function startPresentation(
     const forward = toIdx > fromIdx
     // Reveal steps: forward arrives with them hidden, backward fully shown —
     // unless the audience is following a presenter who named the step.
-    steps.enter(doc.slides[toIdx]?.elements ?? [], forward)
+    steps.enter(steppedElements(doc.slides[toIdx]), forward) // BETA FORK: a runtime slide has no reveal steps
     if (pendingStep !== null) { steps.set(pendingStep); pendingStep = null }
     applyStep(to, doc.slides[toIdx], steps.step)
     // Morph forward into a morph slide, and un-morph when backing out of one.
@@ -1533,7 +1534,7 @@ export function startPresentation(
     setTimeout(onResize, 600)
     const first = slidesEl.children[startIndex] as HTMLElement | undefined
     if (first) {
-      steps.enter(doc.slides[startIndex]?.elements ?? [], true)
+      steps.enter(steppedElements(doc.slides[startIndex]), true) // BETA FORK
       applyStep(first, doc.slides[startIndex], steps.step)
       if (!reduceMotion) {
         runEnterFx(doc.slides[startIndex], first, undefined, false, steps.step)

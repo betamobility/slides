@@ -298,6 +298,28 @@ jobs:
         # in slides/src/assets.ts the first save deletes every scene.
         run: node scripts/test-beta-assets.ts
 
+      - name: Beta merge rigs (the fork's hooks in files upstream rewrote)
+        # Written by the independent tester for the v1.2.7 merge: a pre-merge
+        # runtime deck through the merged gate and a save; the store conflict
+        # latch behind upstream's save queue; recovery behind the restore
+        # gate; runtime stepping against reveal steps; and the built bundle
+        # carrying no import.meta (the loader cannot start a module-only
+        # script on its first two paths). After the build step.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-roundtrip.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-roundtrip.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-roundtrip.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-store.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-store.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-store.mjs"
+          slides/node_modules/.bin/esbuild scripts/test-beta-merge-steps.ts --bundle --platform=node --format=esm --external:typescript --log-level=error --outfile="$RUNNER_TEMP/test-beta-merge-steps.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-merge-steps.mjs"
+          node scripts/test-beta-merge-bundle.ts
+
+      - name: Reveal steps, with the fork's runtime hook in place
+        run: node scripts/test-slides-steps.ts
+
+      - name: Shell payload fingerprint (b64 and b86)
+        run: node scripts/test-apphash.ts
+
       - name: Beta deck store rig
         # U7: server/deck-store under Miniflare (a devDependency of slides/,
         # so after `npm ci`): every route is 401 without a verified Access

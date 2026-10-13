@@ -110,6 +110,10 @@ if (doGallery) {
 // exactly what this publish checks.
 const shellFile = join(site, 'releases/slides/Bento_Slides.bento.html')
 if (existsSync(shellFile)) {
+  // A file with NO payload is a refusal too: null === null once let this gate
+  // pass while comparing nothing (upstream's check, kept ahead of Beta's list).
+  const shellHash = appHash(readFileSync(shellFile, 'utf8'))
+  if (shellHash === null) die(`the release shell carries no runtime payload blocks — cannot check the example decks against it:\n    · ${shellFile.slice(site.length + 1)}`)
   const decks = embeddedShellDecks(site)
   const stale = staleEmbeddedDecks(shellFile, decks)
   if (stale.length) {

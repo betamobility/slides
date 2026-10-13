@@ -3209,7 +3209,12 @@ export class Editor {
     if (out.kind === 'discarded' || out.kind === 'cancelled') return
     if (out.kind === 'failed') {
       console.error(out.error)
-      this.toast(t('Save failed — see console'))
+      // BETA FORK (v1.1 U8): the save queue hands a refused write back as an
+      // outcome, not an exception. A deck that changed in the store latches
+      // (a manual save always answers, even after autosave said it once), and
+      // an expired Access session is a sign-in, not a bug.
+      if (out.error instanceof StoreConflictError) { this.noteStoreConflict(out.error, true); return }
+      this.toast(out.error instanceof StoreSignedOutError ? out.error.message : t('Save failed — see console'), out.error instanceof StoreSignedOutError ? 6000 : undefined)
       return
     }
     const result = out.result
@@ -3241,10 +3246,7 @@ export class Editor {
         : t('Saved'))
     } catch (err) {
       console.error(err)
-      // BETA FORK (v1.1 U8): an expired Access session is a sign-in, not a bug.
-      // a manual save always answers, even after autosave already said it once
-      if (err instanceof StoreConflictError) { this.noteStoreConflict(err, true); return }
-      this.toast(err instanceof StoreSignedOutError ? err.message : t('Save failed — see console'), err instanceof StoreSignedOutError ? 6000 : undefined)
+      this.toast(t('Save failed — see console'))
     }
   }
 
