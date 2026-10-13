@@ -6,6 +6,7 @@ topic: upstream-merge-and-live-scenes
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-plan-bootstrap
 execution: code
+deepened: 2026-10-13
 ---
 
 # Upstream Merge, Publishing Without a Secret, and a Live Scene Library - Plan
@@ -53,18 +54,21 @@ Updating a stored deck from a terminal goes through the splice tool, which prefe
 - R3. The fork keeps exactly one PowerPoint exporter, chosen by a test that exports a Beta template deck and a deck with runtime slides through both; the editor's export button and the skill's command keep working either way.
 - R4. A saved Beta deck advertises a schema that accepts it: the published schema describes `slide.runtime`, and the `$schema` stamp points at a Beta-served copy.
 - R19. Existing stored decks receive the new shell the way they already do: the signed update channel, applied in place from a store tab by the person who accepts it.
+- R23. A save on the merged shell keeps every asset a runtime slide references; no runtime slide loses its HTML or still to upstream's save-time pruning.
+- R24. The sync relay is deployed from the merged tree before the shell release, so a new shell never talks to an older relay.
 - R22. Every Beta hook inside an upstream file carries the single marker token `BETA FORK`, a rig fails CI when a hook lacks it, and a written smoke checklist names what only the fork does.
 
 **Phase B: publishing without a secret**
 
 - R5. A person running the splice tool with no credential in an interactive terminal is offered the pairing link immediately; the tool never asks for a token and never mentions 1Password.
 - R6. The service token is used only when its variables are set explicitly; a non-interactive run with no credential refuses and starts no pairing.
-- R7. A grant lasts long enough that a week of ordinary work asks for approval once; the approval page states the lifetime in one sentence, and the lifetime is one constant the rigs cross-check.
+- R7. A grant lasts long enough that a week of ordinary work asks for approval once; the approval page states the lifetime in days in one sentence, and the lifetime is one constant the rigs cross-check.
 - R8. The Agent access list shows each grant's label, start and end, and a person can revoke any of their own grants; the label distinguishes Claude Code from Cowork.
+- R25. Offboarding a person revokes their grants before their Access membership is removed, and the runbook says so, because revocation is per person from inside the login.
 
 **Phase C: the scene library**
 
-- R9. A library manifest on the store origin lists reusable scenes, each with an id, a version, a name, a still, a settings schema with defaults, and presets; it is fetched by the gallery and by the skill, never restated.
+- R9. A library manifest on the store origin lists reusable scenes, each with an id, a version, a name, a still, a settings schema with defaults, and presets; the gallery fetches it with the person's login and the splice tool fetches it with its credential, and nothing restates it.
 - R10. A person inserts a library scene from a gallery dialog in the editor; a runtime scene fills a new slide with its HTML inlined and its still as the slide's image element; a web scene becomes an embed element with the library-provided view and its URL.
 - R11. The gallery is available in a deck opened from the store; a deck opened from a file or offline shows why the gallery is unavailable instead of a failed fetch.
 - R12. Settings travel in the deck as plain fields: on a runtime scene as `runtime.values` beside its declared `props`; on a web scene as the URL's query string; collaborators in a live session see a change without reload.
@@ -104,13 +108,14 @@ Updating a stored deck from a terminal goes through the splice tool, which prefe
 
 - **Live previews on the editor canvas.** The canvas re-renders on every edit and a frame there would navigate to the scene's URL on each repaint, which is why upstream keeps the canvas still-only (`slides/src/render.ts`, embed case). The still is the canvas. Evidence that would change this: a scene whose still cannot convey its state and a measured, cheap way to keep one inert frame alive across re-renders.
 - **A bulk reshell of every stored deck.** R19 covers delivery through the existing update channel. A maintainer script that re-splices every stored deck into the new shell through the service token would push a service write at every open tab at once. Evidence that would change this: decks that nobody opens for weeks and still need the new shell.
+- **An admin revoke of every grant for an email.** Not needed at a 7-day lifetime: offboarding revokes from the person's own list first (R25), and a grant that slips through expires within the week. Evidence that would change this: a lifetime of 14 days or more, which makes this unit's smallest form (a service-token route that deletes `person:<email>:*`) part of U7.
 - **Sliding, self-renewing grants.** A fixed longer lifetime meets R7. Renewal needs a refresh route, token rotation, a grace window and an audit record on a store where KV writes are limited to one per key per second and revocation lags by about a minute (research in Sources). Evidence that would change this: a lifetime decision measured in months, where a fixed grant becomes the larger risk.
 - **A public, credential-free manifest.** Gated on the store origin by Key Decision. Evidence that would change this: partners outside Beta needing the gallery from file-based decks.
 
 **Deferred to Follow-Up Work**
 
 - Splice parity for web embeds: `embed` has no entry in the tool's content map, so Claude edits a web scene's settings only after a `url` carve-out is designed.
-- Audit fields on a grant (last used, write count) and an admin revoke of all grants for an email; needed if the lifetime chosen under R7 is measured in weeks.
+- Audit fields on a grant (last used, write count); needed if the lifetime chosen under R7 is measured in weeks.
 - Capturing a view for a web embed added by hand (a raster still wrapped in an svg carrier).
 - Widening the live window beyond one neighbour, after the measurement in U13's verification.
 - Converting the colleague's reveal.js decks to library scenes.
@@ -136,7 +141,7 @@ Updating a stored deck from a terminal goes through the splice tool, which prefe
 
 **Johan's decisions, with defaults the plan proceeds on**
 
-- The grant lifetime under R7. Default: 14 days, fixed, stated on the approval page as "This approval lasts 14 days or until you revoke it."
+- The grant lifetime under R7. Default: 7 days, fixed, stated on the approval page as "This approval lasts 7 days or until you revoke it." Seven covers a Monday-to-Friday week (AE4) without the admin revoke that a longer lifetime would need (Scope Boundaries).
 - The two seed scenes for the library under R20. Default: a map scene and a counter scene, authored in `beta/library/`.
 
 ### Sources
@@ -155,17 +160,17 @@ Updating a stored deck from a terminal goes through the splice tool, which prefe
 
 - KTD1. **Merge v1.2.7 by tag with a merge commit in this worktree, not a rebase and not a squash.** A rebase replays thirty Beta commits through the same hot files; a squash loses the ancestry the next merge needs. Regenerate `modelkeys.generated.ts`, `packed.ts` and `schema/slides.json` from their generators; take upstream's `package-lock.json` and run `npm install`; take upstream's core catalogues and re-add Beta's strings from the fork's own diff against the merge base, because `scripts/test-i18n-coverage.mjs` requires every core catalogue to carry every key the source uses. (session-settled: user-approved, chosen over features first: the features land in the files the merge conflicts on.)
 - KTD2. **Prefer upstream's `convert/` exporter and retire `slides/src/export/pptx.ts` when U2's test shows no loss on Beta decks.** One exporter is one set of degradations to explain; the fork keeps the export button and `scripts/export-pptx.mjs` as thin calls into whichever wins. The test, not the plan, decides.
-- KTD3. **The runtime schema is a `.schema` annotation on the `runtime` entry of `SLIDE_CHECKS` in `slides/src/untrusted.ts`, and the fork stamps its own `SCHEMA_URL` on the store origin.** Upstream's generator reads `checks[key].schema ?? {}`, so an unannotated check publishes an empty object and an agent validating a Beta deck learns nothing about runtime slides; the stamp otherwise points every Beta deck at a schema that rejects it. The schema file is served from a new public path on the store, which is a worker allowlist entry plus an Access Bypass destination (maintainer step).
+- KTD3. **The runtime schema is a `.schema` annotation on the `runtime` entry of `SLIDE_CHECKS` in `slides/src/untrusted.ts`, and the fork stamps its own `SCHEMA_URL` on the store origin.** Upstream's generator reads `checks[key].schema ?? {}`, so an unannotated check publishes an empty object and an agent validating a Beta deck learns nothing about runtime slides; the stamp otherwise points every Beta deck at a schema that rejects it. The schema file is served under a new `/schema/` prefix in the worker's public allowlist plus an Access Bypass destination entered with its trailing slash (maintainer step), with a `check-store-live --routes` entry, because the worker has already measured that a bare path and a prefix behave differently there.
 - KTD4. **One marker token, `BETA FORK`, on every hook line inside an upstream file, enforced by `scripts/test-beta-markers.ts`.** Two spellings exist today (`BETA FORK`, `Beta build:`) across about forty sites, and the sweep that normalises them is part of the merge. The rig lists hooks by diffing the fork against the upstream tag in the files upstream owns and asserting each added hunk carries the token; code that upstream now owns byte for byte loses its marker.
 - KTD5. **The `beta` CI job runs every upstream rig whose subject the fork touches.** `test-ci-registered.ts` only checks that a filename appears somewhere in `ci.yml`, so a rig left in the gated-off `validate` job passes registration while never running. After the merge the job gains `test-embed`, `test-slides-multiselect`, `test-schema` and, if KTD2 keeps it, `test-convert`.
 - KTD6. **Pairing is the path for people; the service token is for machines and wins only when its variables are set.** `config()` keeps its precedence (a leftover grant file must never reroute a machine run), but with no credential and a TTY the tool starts the pairing itself and prints the link, where today it refuses and names 1Password. Non-interactive runs refuse. The skill stops sending people to 1Password anywhere.
-- KTD7. **The grant lifetime is one constant, `GRANT_TTL_S` in `server/deck-store/src/grant.js`, raised to the value Johan picks (default 14 days), with the approval page, `CONCEPTS.md` and the skill text cross-checked by the existing rigs.** Fixed, not sliding (Scope Boundaries). The label comes from an environment variable with the Cowork default so the access list tells Claude Code grants apart.
-- KTD8. **A library scene's HTML is copied into the deck at insert; the manifest is fetched from a gated route on the store origin.** A URL-referenced scene behind Access paints an error document over its still inside a sandboxed frame, cannot receive assets and cannot work offline. Inline is the shape `applyScene` in the splice tool already writes. The deck grows by the scene's size, bounded by the existing `RUNTIME_SRC_BUDGET`.
+- KTD7. **The grant lifetime is one constant, `GRANT_TTL_S` in `server/deck-store/src/grant.js`, raised to the value Johan picks (default 7 days), with the approval page, `CONCEPTS.md` and the skill text cross-checked by the existing rigs.** Fixed, not sliding (Scope Boundaries). The approval page derives days from the constant; today it rounds to hours and would print "168 hours". The label comes from an environment variable with the Cowork default so the access list tells Claude Code grants apart. The growth in long-lived grant holders against a create that is not shell-pinned is accepted with reason in `docs/DECISIONS.md`.
+- KTD8. **A library scene's HTML is copied into the deck at insert; the manifest is served from the store origin on two gated routes, one for the person's login and one for an agent's credential.** Neither the service token nor a grant can reach a cookie-only path (the token answers only under `/api/harness/`, a grant only under `/api/publish/`), so the worker serves the same JSON at `GET /api/harness/library.json` and `GET /api/publish/library.json` as well as the login route the gallery uses. A URL-referenced scene behind Access paints an error document over its still inside a sandboxed frame, cannot receive assets and cannot work offline. Inline is the shape `applyScene` in the splice tool already writes. The deck grows by the scene's size, bounded by the existing `RUNTIME_SRC_BUDGET`.
 - KTD9. **An inserted runtime scene carries `runtime.library = { id, version }` plus its own copy of `props` and the chosen `values`.** Self-describing offline, editable in the panel without the manifest, and the marker is what the splice tool's ownership rule keys on (R17). New field kinds ride on `text` and `number` with a `format` hint (`select`, `bool`, `latlon`, `range`) because `checkRuntime` drops unknown kinds and a downloaded copy on an older shell would strip them on save (R18).
-- KTD10. **A web scene is upstream's `embed` element with `app: 'web'`, `live: true`, the library's `view`, and settings in the URL query string, rewritten by the panel form.** The frame's sandbox stays the shell's (`allow-scripts allow-forms`, never from the document). Settings parsing and writing is one pure module shared by the gallery and the panel.
-- KTD11. **One frame owner for both scene kinds, in `slides/src/runtime-present.ts`, with the live window a constant `LIVE_WINDOW = 1`.** Today embed frames are appended at render for every section when the show starts, while runtime frames are mounted on slide enter; two models cannot share a window. The owner mounts frames for the current slide and its neighbours on every slide change and tears down the rest; the embed case in `render.ts` stops appending a frame under `liveMedia` and the owner adds it.
-- KTD12. **The grid view is a class on the existing sidebar plus pure geometry helpers in `slides/src/beta/lighttable.ts`.** Upstream v1.2.3 and later already carry `thumbSel`, shift and modifier selection, `dropSlides` and states following parents; the fork adds the grid layout, row-aware drop-gap geometry, a drop bar, double-click and Escape. No second slide list.
-- KTD13. **The manifest is generated by `scripts/build-beta-library.mjs` from `beta/library/<scene>/` folders and published with the site; the skill fetches it at authoring time like it fetches the agent guide.** One source for the gallery, the skill and the splice tool's validation of values.
+- KTD10. **A web scene is upstream's `embed` element with `app: 'web'`, `live: true`, the library's `view`, and settings in the URL query string, rewritten by the panel form.** The frame's sandbox stays the shell's (`allow-scripts allow-forms`, never from the document). Settings parsing and writing is one pure module shared by the gallery and the panel; it reads the current `url` from the store at commit time, never from the panel's build-time snapshot, so a colleague's concurrent change is not overwritten, and it keeps the result under the gate's 4000-character prose limit, above which the gate drops the URL silently.
+- KTD11. **One frame owner for both scene kinds, in `slides/src/runtime-present.ts`, with the live window a constant `LIVE_WINDOW = 1`.** Today embed frames are appended at render for every section when the show starts, while runtime frames are mounted on slide enter; two models cannot share a window. The owner keeps a map of frames by slide, mounts frames for the current slide and its neighbours on every slide change and tears down the rest, filters `bento:navigate` to the current frame, and sends `bento:step` when the show enters a frame that was pre-mounted. `render.ts` keeps its upstream behaviour under `liveMedia` so upstream's embed rig stays green; present mode passes a new `RenderOpts` opt-out and the owner adds the frame instead. `LIVE_WINDOW` stays below Reveal's `viewDistance` minus one, or a neighbour section is not mounted to hold a frame. Only present mode renders live; the speaker window, grid, print, preview and PowerPoint stay stills, so one owner per show is enough.
+- KTD12. **The grid view is the existing sidebar laid over the canvas, plus pure geometry helpers in `slides/src/beta/lighttable.ts`.** Upstream v1.2.3 and later already carry `thumbSel`, shift and modifier selection, `dropSlides` and states following parents; the fork adds the grid layout, row-aware drop-gap geometry, a drop bar, double-click and Escape. Thumbnail width is derived from the left panel's width in two places in `editor.ts`, so the grid routes both through one `thumbBase()` getter; insert gaps are hidden in the grid; the toggle lives in memory for the session, like the drawer state, not in local storage. No second slide list.
+- KTD13. **The manifest is generated by `scripts/build-beta-library.mjs` from `beta/library/<scene>/` folders and published with the site; the skill lists it through `splice.mjs --library`, which uses the run's credential, so pairing happens before listing.** One source for the gallery, the skill and the splice tool's validation of values; no public path and no Access change.
 - KTD14. **Library stills stay under 64 KB and inline.** Larger assets travel as relay blobs and a live colleague sees a blank slide until they arrive; the first-page preview budget already asks for about 45 KB.
 
 ### High-Level Technical Design
@@ -213,6 +218,30 @@ flowchart TB
 - New UI strings go through all core catalogues after the merge; the fork's build is English-only but the coverage rig is not.
 - Any change to `kernel/src/sync/crdt.ts` is out of scope; settings are whole-object last-writer-wins, documented beside the table limitation.
 
+### System-Wide Impact
+
+- **Interfaces that change meaning.** `RenderOpts` gains a frame opt-out; `liveMedia` keeps its upstream meaning. The runtime show controller changes from one slide to a window; step navigation acts on the current slide only. `RuntimeSlide` gains `library` and `RuntimeProp` gains `format`, which ripples to `checkRuntime`, the `SLIDE_CHECKS` annotation, `modelkeys.generated.ts`, `schema/slides.json` and the fork's schema URL. `EmbedElement` is unchanged; settings ride in `url`.
+- **Call sites touched in upstream files.** `present.ts` section render, slide change, first slide and dispose; `render.ts` embed case, one condition; `panels.ts` runtime props plus one embed hook; `editor.ts` gallery button, grid toggle, thumbnail base width, Escape and drawer-close. Each is one marked line (KTD4). `kernel/src/save.ts` is untouched; the asset-reference hook lives in `slides/src/assets.ts` (R23).
+- **Callbacks and events relied on.** Store events `doc` and `slides`; Reveal `slidechanged`; `window` `message`, now filtered per current frame; `store.readOnly` no-op on commit.
+- **Entry points.** Editor: gallery dialog, grid toggle, settings form. Agent: `splice.mjs` (`--read` inventory lines for library slides, `library` insert, `values` edit, `--library` listing); `docs/agents.md` and `SKILL.md` library sections, both pinned by the skill rig, which also cross-checks the lifetime sentence and the `bento:*` message names.
+- **Agent parity surfaces.** Three validators of the same values (`checkRuntime`, the splice tool's value check, the settings module) must agree on format hints and ranges; the manifest is the one schema source (KTD13).
+- **Shared infrastructure.** Deck-store worker: three library routes and the public schema prefix; sync relay: redeployed from the merged tree before the shell release (R24), and inserts above 64 KB travel as blobs; CI: the `beta` job gains the upstream rigs KTD5 names and the new `test-beta-*` rigs; i18n: every new string through all core catalogues via the generator; Access: one Bypass destination for the schema prefix.
+- **Surfaces that must not change.** Thumbnails, print, first-page preview, PowerPoint and the speaker window keep rendering stills; the sandbox attribute set stays the shell's; `docId`, the splice contract and `kernel/src/sync/crdt.ts` are untouched.
+
+### Risks & Dependencies
+
+| Risk | Decision |
+|---|---|
+| Upstream's save-time asset pruning walks only the element types it knows, so the first save on the merged shell would delete every runtime slide's HTML and still | Mitigated: one marked hook adds `runtimeAssetKeys` to the walker, with a rig that saves a runtime deck and checks its assets survive, landed inside U1 before the merge PR |
+| The relay under `server/sync-worker` gained several hundred upstream lines; a new shell against an old relay is untested | Mitigated: Johan deploys the relay from the merged tree before the shell release (U5), after the sync rigs pass at a large seed count |
+| A downloaded copy on the pre-plan shell co-edits a deck carrying library fields; only paste, Replace from JSON and recovery restore run the old gate, and a restore re-propagates the loss | Mitigated: U9's keys ship in the Phase A release, ahead of any library deck, so the only old shell is pre-Phase A |
+| v1.2.7 asks the owner of every shared deck to run Reset access once after updating | Mitigated: a runbook line in U5; accepted that downloaded copies and stale tabs drop out |
+| A stale old-shell tab re-saves the old shell over the store copy on a connected retry | Accepted: self-healing through the idle reload, no data loss |
+| The update write skips prune and stamp until the next save | Accepted: the next save applies both; the pruning hook covers the hazard |
+| Stored decks nobody opens never get the new shell | Accepted: `splice --read` prints the deck's shell version; a library insert writes valid format data an old shell renders as a plain runtime slide |
+| Raising the grant lifetime grows the pool of long-lived holders against a create that is not shell-pinned | Accepted with reason in `docs/DECISIONS.md` (KTD7); revoked per person before offboarding (R25) |
+| `isTTY` is not read by the splice tool today, and Claude Code and Cowork shells may report it differently | Mitigated: U6 measures both before R5 and R6 rely on it, and refuses to write the grant file beside the deck when no home directory is available |
+
 ---
 
 ## Implementation Units
@@ -223,7 +252,7 @@ flowchart TB
 | U2 | One PowerPoint exporter | `slides/src/export/pptx.ts`, `scripts/export-pptx.mjs`, `convert/` | U1 |
 | U3 | Runtime schema and the fork's schema URL | `slides/src/untrusted.ts`, `slides/src/schema.ts` hook, `server/deck-store/src/worker.js` | U1 |
 | U4 | Marker rig, CI job, smoke checklist, sync runbook | `scripts/test-beta-markers.ts`, `.github/workflows/ci.yml`, `docs/beta-smoke.md`, `AGENTS.md` | U1 |
-| U5 | Release and shell delivery check | maintainer release; `scripts/check-store-live.mjs` | U1 to U4 |
+| U5 | Relay deploy, release and shell delivery check | maintainer release; `server/sync-worker`; `scripts/check-store-live.mjs` | U1 to U4, U9 |
 | U6 | Pairing is the path for people | `plugins/beta-slides/scripts/splice.mjs`, `plugins/beta-slides/skills/beta-slides/SKILL.md` | none |
 | U7 | Grant lifetime and label | `server/deck-store/src/grant.js`, `server/deck-store/src/pages.js`, `CONCEPTS.md`, `docs/DECISIONS.md` | none |
 | U8 | Library folders, build script, gated manifest route | `beta/library/`, `scripts/build-beta-library.mjs`, `server/deck-store/src/worker.js` | U1 |
@@ -239,8 +268,8 @@ flowchart TB
 
 ### U1. Merge upstream v1.2.7
 
-- **Goal:** `main` contains v1.2.7 by a merge commit with every rig green.
-- **Requirements:** R1, R2, R19. KTD1.
+- **Goal:** `main` contains v1.2.7 by a merge commit with every rig green, and a runtime deck survives a save.
+- **Requirements:** R1, R2, R19, R23. KTD1.
 - **Dependencies:** none.
 - **Files:** every conflicted file from the dry run; `scripts/build-modelkeys.mjs`, `scripts/build-i18n.mjs`, `scripts/build-schema.mjs` (arrives with the merge); `slides/src/i18n/*.ts`; `CHANGELOG.md` (keep both sections); `docs/DECISIONS.md` (keep both); `AGENTS.md` (upstream section re-synced verbatim, `CLAUDE.md` back to the wrapper).
 - **Approach:**
@@ -249,13 +278,15 @@ flowchart TB
   3. Take upstream's eight core catalogues, then re-add the Beta entries recovered from the fork's diff against the merge base, and let `build-i18n` repack.
   4. `slides/package.json` keeps Beta's dated version; record upstream's version in the CHANGELOG section.
   5. Run the kernel sync rigs with a large seed count since `online.ts` gained several hundred upstream lines.
-  6. Check divergence in both directions before opening the PR.
+  6. Add one marked hook in `slides/src/assets.ts` so the asset walker includes every key `runtimeAssetKeys` returns, with `scripts/test-beta-assets.ts` proving a runtime deck's assets survive a save (R23).
+  7. Check divergence in both directions before opening the PR.
 - **Execution note:** run every rig in the `beta` job locally before the PR; a red rig is a regression or a fork divergence to remove, never a rig to skip.
 - **Patterns to follow:** `AGENTS.md` "Beta fork" rule 4 for the predictable conflicts; the About-dialog fragment pattern in `docs/plans/2026-09-08-002-feat-beta-slides-v1-1-plan.md` KTD2 for keeping hooks small.
 - **Test scenarios:**
   - The `beta` CI job passes on the merged tree.
   - `node scripts/test-sync.ts` with `SEEDS=300` converges.
   - A deck saved by the pre-merge shell opens in the merged shell with every runtime slide intact.
+  - A runtime deck saved by the merged shell keeps its scene HTML and still assets; an unreferenced asset is still pruned.
   - A deck saved by the merged shell carries a `$schema` key as its first key, and `splice.mjs --read` of that deck lists its elements without a refusal.
   - A store tab that accepted the update saves the deck with the new shell; the grant replace path still answers `400 shell` only when a grant run swaps a shell, not after a person's update.
 - **Verification:** CI green on the PR; both-direction divergence shows only the merge; the three-file kernel footprint is unchanged.
@@ -279,7 +310,7 @@ flowchart TB
 - **Requirements:** R4. KTD3.
 - **Dependencies:** U1.
 - **Files:** `slides/src/untrusted.ts` (annotate the `runtime` check), `slides/src/schema.ts` or the fork's `SCHEMA_URL` hook (one marked line), `schema/slides.json`, `server/deck-store/src/worker.js` (`PUBLIC_PATHS` entry), `scripts/publish-site.mjs`, `scripts/check-store-live.mjs`, `scripts/test-beta-schema.ts`.
-- **Approach:** describe `runtime` with the same JSON Schema vocabulary upstream's `tag()` uses, built beside `checkRuntime` without importing `untrusted.ts`; point the stamp at the store origin; publish the file with the site. Access Bypass destination for the new path is a maintainer step recorded in the unit.
+- **Approach:** describe `runtime` with the same JSON Schema vocabulary upstream's `tag()` uses, built beside `checkRuntime` without importing `untrusted.ts`; point the stamp at `https://slides.betamobility.ai/schema/slides.json`; add `/schema/` to the worker's public prefixes and to the live check's route inventory; publish the file with the site. The Access Bypass destination `/schema/` with its trailing slash is a maintainer step recorded in the unit.
 - **Test scenarios:**
   - `build-schema --check` passes and the published schema has a `runtime` definition under `slide`.
   - A runtime deck validates against the published schema with a standard validator; a deck with an unknown slide key fails.
@@ -299,15 +330,15 @@ flowchart TB
   - `test-ci-registered.ts` and the new rig both pass on the merged tree.
 - **Verification:** CI green; `git grep -n "BETA FORK"` lists the whole footprint.
 
-### U5. Release and shell delivery check
+### U5. Relay deploy, release and shell delivery check
 
-- **Goal:** the merged shell reaches stored decks.
-- **Requirements:** R19.
-- **Dependencies:** U1 to U4.
-- **Files:** none in the tree; maintainer release per README "Releasing".
-- **Approach:** Johan cuts the release; open a stored deck in a store tab, accept the update chip, confirm the deck's shell is the new one on the next read and that an idle second tab reloads onto it.
-- **Test scenarios:** `Test expectation: none -- maintainer release; the check above is the verification.`
-- **Verification:** two stored decks on the new shell by the update path; `check-store-live.mjs` sweep green.
+- **Goal:** the merged shell and relay reach stored decks in the right order.
+- **Requirements:** R19, R24.
+- **Dependencies:** U1 to U4, U9 (the library keys ship in this release so no later deck meets an older gate).
+- **Files:** none in the tree; `server/sync-worker` deploy and the release per README "Releasing"; a runbook line in `docs/beta-smoke.md`.
+- **Approach:** Johan deploys the relay from the merged tree, then cuts the release; open a stored deck in a store tab, accept the update chip, confirm the deck's shell is the new one on the next read and that an idle second tab reloads onto it; the owner of each shared deck runs Reset access once, as v1.2.7 asks.
+- **Test scenarios:** `Test expectation: none -- maintainer deploy and release; the checks above are the verification.`
+- **Verification:** relay deployed before the shell; two stored decks on the new shell by the update path; `check-store-live.mjs` sweep green.
 
 ### Phase B: publishing without a secret
 
@@ -318,10 +349,11 @@ flowchart TB
 - **Dependencies:** none.
 - **Files:** `plugins/beta-slides/scripts/splice.mjs` (`config`, `link`, the three refusal messages, `LINK_LABEL`), `plugins/beta-slides/skills/beta-slides/SKILL.md`, `docs/agents.md` where it names the token, `scripts/test-beta-splice.ts`, `scripts/test-beta-skill.mjs`.
 - **Approach:**
-  1. With no credential and a TTY, `config()` starts a pairing, prints the link, polls and stores the grant, then continues the run.
-  2. With no credential and no TTY, refuse naming `--link`; never mention 1Password.
-  3. The label is read from `SLIDES_GRANT_LABEL` with the Cowork default; Claude Code sessions set it through the skill.
-  4. Rewrite the skill's publishing steps: pairing first, token under a "machines and CI" heading.
+  1. Measure what `process.stdin.isTTY` and `stdout.isTTY` report under Claude Code and under Cowork before relying on them; if Cowork reports no TTY, the Cowork path stays `--link` printed in chat.
+  2. With no credential and a TTY, `config()` starts a pairing, prints the link, polls and stores the grant, then continues the run; when no home directory is available the tool refuses rather than writing the grant beside the deck.
+  3. With no credential and no TTY, refuse naming `--link`; never mention 1Password.
+  4. The label is read from `SLIDES_GRANT_LABEL` with the Cowork default; Claude Code sessions set it through the skill.
+  5. Rewrite the skill's publishing steps: pairing first, token under a "machines and CI" heading.
 - **Test scenarios:**
   - No credential, TTY: the run prints an approval link and completes after approval against the Miniflare worker.
   - No credential, no TTY: exit with the refusal, no `/api/link/start` request made.
@@ -333,13 +365,14 @@ flowchart TB
 ### U7. Grant lifetime and label
 
 - **Goal:** a week of work asks once; the list says who holds what.
-- **Requirements:** R7, R8. KTD7.
-- **Dependencies:** none; the constant is Johan's decision (Outstanding Questions).
+- **Requirements:** R7, R8, R25. KTD7.
+- **Dependencies:** none; the constant is Johan's decision (Outstanding Questions). A choice of 14 days or more pulls the admin revoke-all from Scope Boundaries into this unit.
 - **Files:** `server/deck-store/src/grant.js` (`GRANT_TTL_S`), `server/deck-store/src/pages.js` (approval page and access list copy), `server/deck-store/README.md`, `server/deck-store/test/worker.test.mjs`, `CONCEPTS.md` (Grant), `docs/DECISIONS.md` (supersede the eight-hour figure), `plugins/beta-slides/scripts/splice.mjs` (local expiry), `scripts/test-beta-skill.mjs` (lifetime cross-check).
-- **Approach:** change the constant; the approval page reads it; the access list shows label, approved, ends; the DECISIONS entry records the lifetime, that revocation stays eventually consistent, and that offboarding is "remove from Access, then revoke listed grants".
+- **Approach:** change the constant; the approval page derives whole days from it; the access list shows label, approved, ends; the DECISIONS entry records the lifetime, that revocation stays eventually consistent, the accepted exposure of an unpinned create, and that offboarding is "revoke the person's listed grants, then remove them from Access", because revocation is per person from inside the login.
 - **Test scenarios:**
   - A grant's KV expiry and the approval page's stated lifetime equal the constant.
-  - A grant used on day 13 still writes; on day 15 the write is refused with "approval no longer valid" and the tool deletes its file.
+  - A grant used on day 6 still writes; on day 8 the write is refused with "approval no longer valid" and the tool deletes its file.
+  - The approval page says "7 days", never a count of hours.
   - Revoke from the list stops the next write within the documented lag.
   - The skill rig's cross-check of the lifetime sentence passes.
 - **Verification:** worker deployed by Johan; `check-store-live.mjs` green; AE4 holds on a real grant.
@@ -351,13 +384,14 @@ flowchart TB
 - **Goal:** the manifest exists, is generated, and is served to signed-in people.
 - **Requirements:** R9, R20, R21. KTD8, KTD13, KTD14.
 - **Dependencies:** U1.
-- **Files:** `beta/library/<scene>/index.html`, `still.svg`, `scene.json` (name, version, props with format hints, presets); `scripts/build-beta-library.mjs`; `server/deck-store/src/worker.js` (`GET /library/library.json` behind Access); `scripts/publish-site.mjs`; `scripts/test-beta-library.ts`; two seed scenes (Outstanding Questions).
-- **Approach:** the build script validates each folder (budget, still size, prop schema, framing check for web scenes), writes the manifest with inlined scene HTML and stills, and publishes it with the site; the worker serves it as a gated path like any deck route.
+- **Files:** `beta/library/<scene>/index.html`, `still.svg`, `scene.json` (name, version, props with format hints, presets); `scripts/build-beta-library.mjs`; `server/deck-store/src/worker.js` (`GET /library/library.json` behind Access, `GET /api/harness/library.json` for the token, `GET /api/publish/library.json` for a grant); `scripts/publish-site.mjs`; `server/deck-store/test/worker.test.mjs`; `scripts/test-beta-library.ts`; two seed scenes (Outstanding Questions).
+- **Approach:** the build script validates each folder (budget, still size, prop schema, framing check for web scenes), writes the manifest with inlined scene HTML and stills, and publishes it with the site; the worker serves the same bytes on the three routes KTD8 names, each guarded the way its prefix already is.
 - **Test scenarios:**
   - A folder whose still exceeds 64 KB fails the build naming the file.
   - A web scene whose URL cannot be framed fails the build.
   - The manifest lists both seed scenes with ids, versions and defaults.
   - An unauthenticated fetch of the manifest is redirected to login; a cookie fetch returns JSON.
+  - The token route answers the manifest to the service token and `401` to a grant; the grant route answers to a grant and `401` to nothing.
 - **Verification:** manifest fetched from a store tab's console; build script green in CI.
 
 ### U9. Library fields in the format
@@ -383,7 +417,8 @@ flowchart TB
 - **Test scenarios:**
   - Changing one value commits one undoable edit and leaves geometry untouched.
   - A preset sets every declared key and nothing else.
-  - For a web embed, path and origin of `url` are unchanged after a settings change.
+  - For a web embed, path and origin of `url` are unchanged after a settings change, and a remote change to `url` made between panel build and commit is kept.
+  - A settings change that would push `url` past 4000 characters is refused in the form, not dropped by the gate.
   - A value outside `min`/`max` is clamped and shown.
 - **Verification:** screenshot of the panel on a runtime scene and on a web scene; undo restores the previous value.
 
@@ -408,7 +443,7 @@ flowchart TB
 - **Requirements:** R17, R9. KTD9, KTD13.
 - **Dependencies:** U8, U9.
 - **Files:** `plugins/beta-slides/scripts/splice.mjs` (`checkOwnership`, a `library` insert in `edits.json`, a `values` edit), `plugins/beta-slides/skills/beta-slides/SKILL.md` (library section), `scripts/test-beta-splice.ts`.
-- **Approach:** the tool fetches the manifest with its credential; an insert by id writes the same slide the gallery writes; a `values` edit on a slide with `runtime.library` changes declared keys only; a replace from a folder is refused when the slide carries a library id the folder does not declare; otherwise the existing rule stands.
+- **Approach:** the tool fetches the manifest with its credential from the route that credential can reach, and `--library` prints the ids, names and settings for the skill; an insert by id writes the same slide the gallery writes; a `values` edit on a slide with `runtime.library` changes declared keys only; a replace from a folder is refused when the slide carries a library id the folder does not declare; otherwise the existing rule stands.
 - **Test scenarios:**
   - Covers AE6, both halves.
   - A `values` edit naming an undeclared key is refused naming the key.
@@ -421,12 +456,14 @@ flowchart TB
 - **Goal:** many scenes in one deck stay light.
 - **Requirements:** R15. KTD11.
 - **Dependencies:** U1.
-- **Files:** `slides/src/runtime-present.ts` (owner, `LIVE_WINDOW`), `slides/src/render.ts` (embed case stops appending a frame under `liveMedia`; one marked line), `slides/src/present.ts` (one call on slide change, already present for runtime slides), `scripts/test-beta-runtime.ts` (pure window maths), `scripts/test-beta-liveness.ts` (browser count).
-- **Approach:** on every slide change compute the window from the current index over the linear flow, mount missing frames for runtime slides and web embeds in the window, tear down frames outside it, keep the still underneath; the speaker view's next-slide box stays a still.
+- **Files:** `slides/src/runtime-present.ts` (owner, frame map, `LIVE_WINDOW`), `slides/src/render.ts` (`RenderOpts` opt-out read in the embed case; one marked line), `slides/src/present.ts` (pass the opt-out at section render; the slide-change and first-slide calls already exist for runtime slides), `scripts/test-beta-runtime.ts` (pure window maths), `scripts/test-beta-liveness.ts` (browser count).
+- **Approach:** on every slide change compute the window from the current index over the linear flow, mount missing frames for runtime slides and web embeds in the window, tear down frames outside it, keep the still underneath, deliver `bento:step` to a pre-mounted frame on entry, and accept `bento:navigate` only from the current frame; the speaker view's next-slide box stays a still; assert `LIVE_WINDOW` against Reveal's `viewDistance` at start.
 - **Test scenarios:**
   - Covers AE7.
   - Entering a slide whose frame was pre-mounted shows the scene at its first step without a flash of still (measure the time from `slidechanged` to `bento:ready` with and without the window; record the numbers in the unit's verification).
   - Leaving the window clears `src` and `srcdoc`.
+  - A `bento:navigate` from a neighbour's frame is ignored; the same message from the current frame changes slide.
+  - Upstream's embed rig still passes: a render with `liveMedia` and no opt-out carries the frame.
   - A web embed with a gated URL inside the window shows its view when the frame errors, never an error document.
 - **Verification:** devtools frame count over a six-scene deck; the measurement recorded in the PR.
 
@@ -436,7 +473,7 @@ flowchart TB
 - **Requirements:** R16. KTD12.
 - **Dependencies:** U1.
 - **Files:** `slides/src/beta/lighttable.ts` (row grouping, gap geometry, drop bar placement, reordering), `slides/src/editor/editor.ts` (grid toggle beside the slide-list toggle, drop bar, double-click, Escape; marked hooks), `slides/src/styles.css` (Beta block), `scripts/test-beta-lighttable.ts` (pure parts), browser rig beside upstream's multiselect rig.
-- **Approach:** a class on `.ed-sidebar` lays thumbnails in a wrapping grid; drag uses upstream's `text/bento-slide` payload and `dropSlides`; the gap is computed over all thumbnails by row so a drop between rows lands right; Escape leaves the grid at the first selected slide.
+- **Approach:** a class on `.ed-sidebar` lays the sidebar over the canvas as a wrapping grid; thumbnail width goes through one `thumbBase()` getter at both places that compute it today; insert gaps are hidden; drag uses upstream's `text/bento-slide` payload and `dropSlides`; the gap is computed over all thumbnails by row so a drop between rows lands right; Escape leaves the grid at the first selected slide; the toggle state lives in memory for the session.
 - **Test scenarios:**
   - Covers AE9.
   - A state slide follows its parent in a multi-drag and never lands between a parent and its states.
@@ -467,6 +504,8 @@ flowchart TB
 | Language coverage | `node scripts/test-i18n-coverage.mjs` | U1, U10, U11, U14 |
 | CRDT convergence | `node scripts/test-sync.ts` with `SEEDS=300` | U1 |
 | Shell conformance | `node scripts/shell-gate.mjs dist-single/Bento_Slides.bento.html` | U1, U5 |
+| Runtime assets survive a save | `node scripts/test-beta-assets.ts` | U1, U9 |
+| Relay protocol | `node scripts/test-relay-protocol.ts` after the relay deploy | U5 |
 | Worker rig | `node scripts/test-beta-store.ts` (Miniflare) | U3, U7, U8 |
 | Splice rig | `node scripts/test-beta-splice.ts` | U6, U12 |
 | Skill rig | `node scripts/test-beta-skill.mjs` | U6, U7, U12 |
