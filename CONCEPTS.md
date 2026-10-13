@@ -54,3 +54,11 @@ The exchange by which an agent that can hold no credential asks a signed-in pers
 The short-lived permission a pairing produces. It lets an agent create decks and read or change a deck whose link it has, acting as the person who approved it; it cannot list the store or delete, and the person can end it early.
 
 A write made with a grant is a service write.
+
+## Scene library
+
+### Library scene
+A reusable live scene Beta publishes from this repo: a runtime slide's HTML and still, or a web page shown as an embed, with a settings schema and presets. A person inserts one from the gallery; the deck then carries its own copy of the scene, its settings and a library id and version.
+
+### Live window
+The slides around the current one that hold a running frame in present mode. Every slide outside the window shows its still. One owner mounts and tears down frames for runtime slides and web embeds alike.
