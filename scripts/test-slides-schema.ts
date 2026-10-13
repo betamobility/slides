@@ -99,7 +99,7 @@ function validate(schema: J, value: unknown, root: J, path = '$'): string[] {
       const props = (schema.properties ?? {}) as Record<string, J>
       for (const k of (schema.required as string[] | undefined) ?? []) if (!(k in (value as J))) e(`missing ${k}`)
       for (const [k, v] of Object.entries(value as J)) {
-        if (k in props) errs.push(...validate(props[k], v, root, `${path}.${k}`))
+        if (Object.prototype.hasOwnProperty.call(props, k)) errs.push(...validate(props[k], v, root, `${path}.${k}`)) // BETA FORK: own keys only, or `constructor` reads as declared
         else if (schema.additionalProperties === false) e(`unknown key ${k}`)
         else if (schema.additionalProperties && typeof schema.additionalProperties === 'object') errs.push(...validate(schema.additionalProperties as J, v, root, `${path}.${k}`))
       }
@@ -238,6 +238,27 @@ console.log('\na runtime slide validates; a broken one does not\n')
   }
   const invalidOutputs = matrix.filter((record) => validate(rt, checkRuntime(record), file).length)
   ok(invalidOutputs.length === 0, `all ${matrix.length} generated repaired runtime records validate (${invalidOutputs.length} failures)`)
+  // BETA FORK, break round 3: independently vary fields that the gate drops.
+  {
+    const cases: Array<[string, unknown]> = [
+      ['src', 'asset:'], ['src', 'asset:bad;key'], ['src', 'asset:' + 'x'.repeat(201)],
+      ['still', 'https://example.com/still.png'], ['url', 'http://example.com/scene'],
+      ['assets', ['../private.json']], ['assets', ['scene/secret.json']],
+      ['props', [{ key: 'bad key', label: 'Bad', kind: 'text', default: '' }]],
+    ]
+    const failures = cases.filter(([key, value]) => {
+      const record = { steps: 0, props: [], [key]: value }
+      const saved = checkRuntime(record)
+      return validate(rt, record, file).length === 0 || validate(rt, saved, file).length !== 0
+    })
+    ok(failures.length === 0, `round 3: invalid runtime field matrix rejects inputs and accepts gate outputs (${JSON.stringify(failures)})`)
+  }
+  {
+    const d = JSON.parse(JSON.stringify(starter))
+    d.slides[0].runtime = { steps: 0, props: [], constructor: { unexpected: true } }
+    ok(check(d, file).some((m) => /unknown key constructor/.test(m)),
+      'round 3: inherited Object keys cannot bypass runtime additionalProperties false in the validator')
+  }
   const repairedDefault = { steps: 0, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 'banana' }] }
   ok(validate(rt, repairedDefault, file).length > 0 && ((checkRuntime(repairedDefault) as unknown as J).props as J[])[0].default === 0, 'a number prop with a text default: the schema refuses what the gate would repair to 0')
   ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'url(x)' }] }, file).length > 0, 'a colour default that smuggles url() is refused, as the gate refuses it')

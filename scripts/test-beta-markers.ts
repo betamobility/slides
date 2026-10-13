@@ -26,8 +26,11 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { createRequire } from 'node:module'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+// the compiler the build installs (slides/node_modules); this rig runs after `npm ci` there
+const ts = createRequire(join(root, 'slides/package.json'))('typescript') as typeof import('typescript')
 const TOKEN = 'BETA FORK'
 const NEAR = 3
 const UPSTREAM = 'https://github.com/nyblnet/bento.git'
@@ -57,49 +60,87 @@ const PARAMS: Array<[string, string]> = [
 const deparam = (line: string) => PARAMS.reduce((l, [from, to]) => l.split(from).join(to), line)
 
 /**
- * The comment on a line of `file`, or '' when it has none. A marker is a
- * COMMENT: text in a string that happens to say `// BETA FORK` is data. Walks
- * the line once, skipping string and template literals, to the first comment
- * opener the file's language has. (One line at a time: a line that sits wholly
- * inside a multi-line template literal is not seen as one, which errs toward
- * "marked" for text nobody executes.)
+ * The 1-based lines of `text` on which a COMMENT carries the token. A marker
+ * is a comment: a string, a template literal or a regex that happens to say
+ * `// BETA FORK` is data.
+ *
+ * JavaScript cannot be lexed a line at a time (a regex literal, a template
+ * literal and a block comment all change what `/*` and a quote mean), and two
+ * rounds of an independent tester showed every line-level rule has a one-line
+ * counterexample. So for script files this asks the TypeScript compiler, which
+ * the build already installs, for the file's real comment ranges. The other
+ * languages here have no such ambiguity, and a small scanner reads each
+ * comment only as far as its closing delimiter.
  */
-export function commentOf(file: string, line: string): string {
+export function markerLines(file: string, text: string): Set<number> {
+  const out = new Set<number>()
+  const mark = (from: number, to: number) => {
+    const body = text.slice(from, to)
+    let at = body.indexOf(TOKEN)
+    while (at >= 0) {
+      out.add(text.slice(0, from + at).split('\n').length)
+      at = body.indexOf(TOKEN, at + 1)
+    }
+  }
   const ext = file.slice(file.lastIndexOf('.') + 1)
-  const openers = ext === 'html' ? ['<!--', '/*'] : ext === 'css' ? ['/*'] : ['toml', 'yml', 'yaml', 'sh'].includes(ext) ? ['#'] : ['//', '/*']
-  if (openers.includes('/*') && /^\s*\*(?!\/)/.test(line)) return line // a block comment's continuation line
-  const quotes = ext === 'html' || ext === 'css' ? ['"', "'"] : ['toml', 'yml', 'yaml', 'sh'].includes(ext) ? ['"', "'"] : ['"', "'", '`']
-  for (let i = 0; i < line.length; i++) {
-    const q = quotes.find((c) => line[i] === c)
-    if (q) {
-      for (i++; i < line.length && line[i] !== q; i++) if (line[i] === '\\') i++
+  if (['ts', 'tsx', 'mts', 'js', 'mjs', 'cjs'].includes(ext)) {
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, ext.startsWith('ts') || ext === 'mts' ? ts.ScriptKind.TS : ts.ScriptKind.JS)
+    const seen = new Set<number>()
+    const take = (ranges: readonly { pos: number; end: number }[] | undefined) => {
+      for (const r of ranges ?? []) if (!seen.has(r.pos)) { seen.add(r.pos); mark(r.pos, r.end) }
+    }
+    const walk = (node: import('typescript').Node) => {
+      // every token's leading and trailing trivia, which is where comments live
+      take(ts.getLeadingCommentRanges(text, node.getFullStart()))
+      take(ts.getTrailingCommentRanges(text, node.getEnd()))
+      // getChildren, not forEachChild: punctuation is a token too, and a
+      // comment after a comma or an opening brace trails THAT token
+      for (const child of node.getChildren(sf)) walk(child)
+    }
+    walk(sf)
+    take(ts.getLeadingCommentRanges(text, sf.endOfFileToken.getFullStart()))
+    return out
+  }
+  const hash = ['toml', 'yml', 'yaml', 'sh'].includes(ext)
+  const pairs: Array<[string, string]> = ext === 'html' ? [['<!--', '-->'], ['/*', '*/']] : ext === 'css' ? [['/*', '*/']] : hash ? [['#', '\n']] : []
+  for (let i = 0; i < text.length; i++) {
+    // a quoted string on one line is skipped; html text and css have no escapes worth modelling here
+    if (hash && (text[i] === '"' || text[i] === "'")) {
+      const q = text[i]
+      for (i++; i < text.length && text[i] !== q && text[i] !== '\n'; i++) if (text[i] === '\\') i++
       continue
     }
-    if (openers.some((o) => line.startsWith(o, i))) return line.slice(i)
+    const pair = pairs.find(([open]) => text.startsWith(open, i))
+    if (!pair) continue
+    const close = text.indexOf(pair[1], i + pair[0].length)
+    const end = close < 0 ? text.length : close
+    mark(i, end)
+    i = end
   }
-  return ''
+  return out
 }
-const isMarker = (file: string, line: string) => commentOf(file, line).includes(TOKEN)
 
 export interface Hook { file: string; line: number; text: string; marked: boolean }
 
 /** Every added hunk of a unified -U0 diff of ONE file, with whether it is marked. `after` is the fork's file. */
 export function hooksOf(file: string, diff: string, after: string[]): Hook[] {
   const out: Hook[] = []
+  const markers = markerLines(file, after.join('\n'))
   const re = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@.*\n((?:[-+\\].*\n?)*)/gm
   for (let m; (m = re.exec(diff)); ) {
     const added = m[3].split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1))
     const removed = m[3].split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1))
     if (!added.length) continue
     const line = Number(m[1])
-    const above = after.slice(Math.max(0, line - 1 - NEAR), line - 1)
     // One contiguous run of added lines is ONE hook (it is one region at the
     // next merge), and its marker heads it: on one of its first lines or just
     // above. A marker further down does not reach back, and one in a string
     // is not a marker.
     const parameterised = added.length === removed.length && added.some((l) => PARAMS.some(([from]) => l.includes(from)))
       && added.every((l, i) => deparam(l) === removed[i])
-    const marked = added.slice(0, NEAR + 1).some((l) => isMarker(file, l)) || above.some((l) => isMarker(file, l)) || parameterised
+    // lines line-NEAR .. line+NEAR of the fork's file: just above the hook, or its head
+    let marked = parameterised
+    for (let n = Math.max(1, line - NEAR); n <= line + Math.min(NEAR, added.length - 1) && !marked; n++) marked = markers.has(n)
     out.push({ file, line, text: added[0].trim().slice(0, 100), marked })
   }
   return out
@@ -154,6 +195,22 @@ console.log('the rule itself (no git needed)')
   const line = "    fail('<b>This is a ${failName}.</b><br>Opening it needs a browser released in 2023 or later '); enableNewFeature()"
   ok(!hooksOf('scripts/postbuild-compress.mjs', '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0].marked,
     'code appended to an exempt template line is not exempt')
+}
+
+// From break round 3: lexical boundaries a line-level rule gets wrong.
+{
+  const file = 'slides/src/editor/editor.ts'
+  const cases = [
+    ['a closed ordinary comment cannot lend comment status to a later string', '/* ordinary note */ const caption = "BETA FORK"; enableNewFeature()'],
+    ['a regex character class is not a block comment', 'const pattern = /[/*]BETA FORK/; enableNewFeature()'],
+  ]
+  for (const [name, line] of cases) {
+    const hook = hooksOf(file, '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0]
+    ok(!hook.marked && hook.file === file && hook.line === 1, `${name}; the unmarked hook names ${file}:1`)
+  }
+  const line = '/* ordinary note */ enableNewFeature() // BETA FORK: deliberate hook'
+  ok(hooksOf(file, '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0].marked,
+    'a real marker after a closed ordinary comment still counts')
 }
 
 console.log('\nthe upstream this fork tracks')

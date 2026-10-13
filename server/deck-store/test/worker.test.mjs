@@ -344,6 +344,16 @@ export async function run(Miniflare) {
       eq(proxied.length, before, `normalized schema traversal never proxies ${path}`)
       await response.text()
     }
+    // Break round 3: nested and encoded paths do not broaden the read-only bypass.
+    for (const path of ['/schema/', '/schema/a%2Fb.json', '/schema/%252e%252e/api/decks', '/schema//api/decks']) {
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        eq(response.status, 401, `round 3 schema method boundary: ${method} ${path}`)
+        eq(proxied.length, before, `round 3 schema method boundary never proxies: ${method} ${path}`)
+        eq(await response.text(), '', `round 3 schema method boundary has no private bytes: ${method} ${path}`)
+      }
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')
