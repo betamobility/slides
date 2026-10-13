@@ -50,6 +50,10 @@ const worker = read('server/deck-store/src/worker.js')
 ok(/const PUBLIC_PREFIXES = \[[^\]]*'\/schema\/'[^\]]*\]/.test(worker), 'the deck-store worker serves /schema/ without a login (PUBLIC_PREFIXES)')
 ok(new URL(URL_).pathname.startsWith('/schema/'), 'and the stamped URL is under that prefix')
 
+// The live --routes pass probes the Access bypass (KTD3).
+ok(/path:\s*['"]\/schema\/slides\.json['"]/.test(read('scripts/check-store-live.mjs')),
+  'check-store-live.mjs --routes asks for the schema anonymously, so a missing Access bypass is caught')
+
 console.log('\nwhat the built shell tells an agent')
 const shellPath = join(root, 'slides/dist-single/Bento_Slides.bento.html')
 if (!existsSync(shellPath)) {

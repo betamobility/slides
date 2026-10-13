@@ -40,12 +40,19 @@ const EXEMPT: Array<[RegExp, string]> = [
   [/\.json$/, 'JSON has no comment to carry a marker'],
   [/^kernel\/src\/charts\.ts$/, 'horizontal bars and bar corners (#39) predate the marker rule; marking them is itself a kernel-zone edit, see AGENTS.md "Rules for the fork"'],
 ]
-/** Added lines that cannot carry a comment where they stand; the marker is on the definition they use. */
+/**
+ * Added lines that cannot carry a comment where they stand: each is TEXT inside
+ * a template literal, and the marker is on the definition it interpolates.
+ * Matched whole, start to end, so no other line that happens to use the same
+ * variable rides through.
+ */
 const UNMARKABLE: Array<[string, RegExp, string]> = [
-  ['scripts/postbuild-compress.mjs', /\$\{agentsUrl\}/, 'inside the tooling comment template; marked at `const agentsUrl`'],
-  ['scripts/postbuild-compress.mjs', /\$\{failName\}/, 'inside the loader template; marked at `const failName`'],
-  ['scripts/postbuild-compress.mjs', /\$\{schemaUrl\}/, 'inside the tooling comment template; marked at `const schemaUrl`'],
+  ['scripts/postbuild-compress.mjs', /^  Full authoring guide \(schema \+ copy-paste snippets\): \$\{agentsUrl\}$/, 'the tooling comment; marked at `const agentsUrl`'],
+  ['scripts/postbuild-compress.mjs', /^  · Schema: \$\{schemaUrl\} \(= window\.bento\.schema\(\)\)\$\{llmsUrl === 'none' \? '' : `; agent index: \$\{llmsUrl\}`\}$/, 'the tooling comment; marked at `const schemaUrl`'],
+  ['scripts/postbuild-compress.mjs', /^    fail\('<b>This is a \$\{failName\}\.<\/b><br>Opening it needs a browser released in 2023 or later /, 'the loader\'s old-browser message; marked at `const failName`'],
 ]
+/** The marker as a COMMENT: after `//`, inside a block or JSDoc comment, after `#`, or in an html comment. A string that says it is not one. */
+const MARKER = /(?:\/\/|\/\*|^\s*\*|#|<!--)[^\n]*BETA FORK/
 
 export interface Hook { file: string; line: number; text: string; marked: boolean }
 
@@ -58,7 +65,11 @@ export function hooksOf(file: string, diff: string, after: string[]): Hook[] {
     if (!added.length) continue
     const line = Number(m[1])
     const above = after.slice(Math.max(0, line - 1 - NEAR), line - 1)
-    const marked = added.some((l) => l.includes(TOKEN)) || above.some((l) => l.includes(TOKEN))
+    // One contiguous run of added lines is ONE hook (it is one region at the
+    // next merge), and its marker heads it: on one of its first lines or just
+    // above. A marker further down does not reach back, and one in a string
+    // is not a marker.
+    const marked = added.slice(0, NEAR + 1).some((l) => MARKER.test(l)) || above.some((l) => MARKER.test(l))
       || added.every((l) => UNMARKABLE.some(([f, r]) => f === file && r.test(l)))
     out.push({ file, line, text: added[0].trim().slice(0, 100), marked })
   }
@@ -85,6 +96,21 @@ console.log('the rule itself (no git needed)')
   ok(hooks[2].marked === false, `and a marker more than ${NEAR} lines above does not reach`)
   ok(hooksOf('x.ts', '@@ -1 +1 @@\n-old\n+new // BETA FORK\n', ['new // BETA FORK'])[0].marked, 'a marker on the changed line itself counts')
   ok(hooksOf('x.ts', '@@ -1,2 +0,0 @@\n-gone\n-gone\n', []).length === 0, 'a pure deletion is not a hook to mark')
+}
+
+// From the independent break round (U4): these must fail closed, not merely find a token.
+{
+  const file = 'slides/src/editor/editor.ts'
+  const stringLine = 'const caption = "BETA FORK"; enableNewFeature()'
+  const stringHook = hooksOf(file, '@@ -0,0 +1 @@\n+' + stringLine + '\n', [stringLine])[0]
+  ok(!stringHook.marked && stringHook.file === file && stringHook.line === 1, 'a string that says BETA FORK does not mark a hook: the marker is a comment')
+  // a contiguous run of added lines is one hook, and its marker heads it
+  const late = ['firstFeature()', '', '', '', '', '// BETA FORK: too late', 'second()']
+  ok(!hooksOf(file, '@@ -0,0 +1,7 @@\n' + late.map((l) => '+' + l).join('\n') + '\n', late)[0].marked, `a marker more than ${NEAR} lines into a hook does not reach back to its head`)
+  const headed = ['// BETA FORK: one feature', 'a()', '', '', '', 'b()']
+  ok(hooksOf(file, '@@ -0,0 +1,6 @@\n' + headed.map((l) => '+' + l).join('\n') + '\n', headed)[0].marked, 'a hook headed by its marker is marked as a whole, however long')
+  const escaped = 'sendSecret(`${schemaUrl}`)'
+  ok(!hooksOf('scripts/postbuild-compress.mjs', '@@ -0,0 +1 @@\n+' + escaped + '\n', [escaped])[0].marked, 'code that merely uses schemaUrl is not the tooling-comment line and is not exempt')
 }
 
 console.log('\nthe upstream this fork tracks')

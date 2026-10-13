@@ -311,6 +311,31 @@ export async function run(Miniflare) {
       eq(proxied.length - before, 1, `GET ${p} made exactly one subrequest`)
       eq(new URL(proxied[proxied.length - 1].url).host, PAGES_ORIGIN, `GET ${p} fetched PAGES_ORIGIN, not its own host`)
     }
+    // Independent U3 refusal tests: prefix lookalikes, normalized traversal and writes.
+    for (const path of ['/schema', '/schemaX/slides.json', '/schema%2Fslides.json',
+      '/schema/../api/decks', '/schema/%2e%2e/api/decks', '/schema/..%5capi/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      // Encoded backslashes stay inside the static origin; they must never dispatch an R2 route.
+      const staticPath = path.includes('%5c')
+      eq(response.status, staticPath ? 200 : 401, `schema boundary ${path}`)
+      eq(proxied.length - before, staticPath ? 1 : 0, `schema boundary proxy count ${path}`)
+      await response.text()
+    }
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      const before = proxied.length
+      const response = await call(method, '/schema/slides.json')
+      eq(response.status, 401, `schema write ${method} refuses anonymously`)
+      eq(proxied.length, before, `schema write ${method} never reaches Pages`)
+      await response.text()
+    }
+    for (const path of ['/schema/', '/schema/slides.json', '/schema/a%2Fb.json']) {
+      const before = proxied.length
+      const response = await call('HEAD', path)
+      eq(response.status, 200, `schema HEAD ${path} is public`)
+      eq(await response.text(), '', `schema HEAD ${path} has no body`)
+      eq(proxied.length - before, 1, `schema HEAD ${path} only reaches static Pages`)
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

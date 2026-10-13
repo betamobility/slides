@@ -1968,8 +1968,8 @@
             "url": {
               "type": "string",
               "maxLength": 4000,
-              "pattern": "^https://",
-              "description": "a hosted page to frame, in place of src"
+              "pattern": "^[hH][tT][tT][pP][sS]://",
+              "description": "a hosted page to frame, in place of src (https only)"
             },
             "still": {
               "type": "string",
@@ -1988,42 +1988,89 @@
               "maxItems": 64,
               "description": "the settings the scene declares",
               "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "key",
-                  "label",
-                  "kind",
-                  "default"
-                ],
-                "properties": {
-                  "key": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
-                  },
-                  "label": {
-                    "type": "string",
-                    "maxLength": 200
-                  },
-                  "kind": {
-                    "enum": [
-                      "text",
-                      "number",
-                      "color"
-                    ]
-                  },
-                  "default": {
-                    "anyOf": [
-                      {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "label",
+                      "kind",
+                      "default"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "kind": {
+                        "const": "text"
+                      },
+                      "default": {
                         "type": "string",
                         "maxLength": 4000
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "label",
+                      "kind",
+                      "default"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
                       },
-                      {
+                      "label": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "kind": {
+                        "const": "number"
+                      },
+                      "default": {
                         "type": "number"
                       }
-                    ]
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "label",
+                      "kind",
+                      "default"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "kind": {
+                        "const": "color"
+                      },
+                      "default": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "pattern": "^(?![\\s\\S]*(?:[uU][rR][lL]\\s*\\(|[eE][xX][pP][rR][eE][sS][sS][iI][oO][nN]))(?=[\\s\\S]*\\S)[#a-zA-Z0-9(),.%\\s/-]+$"
+                      }
+                    }
                   }
-                }
+                ]
               }
             },
             "values": {
@@ -2040,7 +2087,7 @@
                   }
                 ]
               },
-              "description": "what a presenter set, by declared key"
+              "description": "what a presenter set, by declared key. Checked against each key's declared kind by the app, which a schema cannot express: a value for an undeclared key, or of the wrong kind, is dropped on load."
             },
             "assets": {
               "type": "array",

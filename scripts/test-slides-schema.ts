@@ -27,6 +27,7 @@ import { starterDoc } from '../slides/src/starterdeck.ts'
 import { parseDoc, FORMAT } from '../slides/src/model.ts'
 import { MODEL_KEYS } from '../slides/src/modelkeys.generated.ts'
 import { CHECKED_KEYS } from '../slides/src/untrusted.ts'
+import { checkRuntime } from '../slides/src/runtime.ts' // BETA FORK
 
 let failures = 0
 let checks = 0
@@ -211,6 +212,23 @@ ok(read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages schema/
 console.log('\na runtime slide validates; a broken one does not\n')
 {
   const rt = (defs.slide.properties as Record<string, J>).runtime
+  // BETA FORK, from the independent break round: what the gate hands back validates.
+  const savedCases: Array<[string, J, boolean]> = [
+    ['an uppercase HTTPS url', { url: 'HTTPS://example.com/scene', steps: 0, props: [] }, true],
+    // the gate trims a colour, so the padded input is repaired, not kept
+    ['a colour default padded with spaces', { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: ' '.repeat(4001) + '#fff' }] }, false],
+  ]
+  for (const [name, record, unchanged] of savedCases) {
+    const saved = checkRuntime(record) as unknown as J
+    const d = JSON.parse(JSON.stringify(starter)); d.slides[0].runtime = saved
+    const errors = check(stampSchema(d), file)
+    ok((JSON.stringify(saved) === JSON.stringify(record)) === unchanged && errors.length === 0, `${name}: what the gate keeps validates${unchanged ? ', unchanged' : ', repaired'} (${errors.join('; ')})`)
+  }
+  const repairedDefault = { steps: 0, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 'banana' }] }
+  ok(validate(rt, repairedDefault, file).length > 0 && ((checkRuntime(repairedDefault) as unknown as J).props as J[])[0].default === 0, 'a number prop with a text default: the schema refuses what the gate would repair to 0')
+  ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'url(x)' }] }, file).length > 0, 'a colour default that smuggles url() is refused, as the gate refuses it')
+  ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'rgb(10, 20, 30)' }] }, file).length === 0, 'an ordinary colour default validates')
+
   ok(!!rt && rt.type === 'object' && rt.additionalProperties === false, 'slide.runtime is described, and closed to unknown keys')
   ok(Object.keys(rt.properties as J).sort().join() === 'assets,props,src,steps,still,url,values', `with the keys the gate accepts (${Object.keys(rt.properties as J).sort().join()})`)
   const deck = JSON.parse(JSON.stringify(starter))
@@ -227,7 +245,7 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ok(JSON.stringify((kept?.runtime as J)) === JSON.stringify(deck.slides.at(-1).runtime), 'and the gate keeps that record byte for byte')
   ok(check({ ...deck, slides: [{ ...deck.slides.at(-1), runtime: { steps: 0, props: [] } }] }, file).length === 0, 'a placeholder record (no scene yet) validates')
   const bad = (mutate: (r: J) => void) => { const d = JSON.parse(JSON.stringify(deck)); mutate(d.slides.at(-1).runtime); return check(d, file) }
-  ok(bad((r) => { (r.props as J[])[0].kind = 'select' }).some((m) => /kind/.test(m)), 'a prop of an unknown kind fails, naming kind')
+  ok(bad((r) => { (r.props as J[])[0].kind = 'select' }).some((m) => /props\[0\]/.test(m)), 'a prop of an unknown kind fails, naming the prop')
   ok(bad((r) => { r.sandbox = 'allow-same-origin' }).some((m) => /unknown key sandbox/.test(m)), 'a key the record does not have (a sandbox, say) fails with the key named')
   ok(bad((r) => { r.url = 'http://example.com/' }).some((m) => /url/.test(m)), 'a url that is not https fails')
   ok(bad((r) => { r.src = 'data:text/html,<p>x</p>' }).some((m) => /src/.test(m)), 'a src that is not an asset ref fails')
