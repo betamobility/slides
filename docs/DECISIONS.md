@@ -6804,26 +6804,19 @@ grant file lives in the home directory or at `SLIDES_GRANT_FILE`, never beside
 the deck, because a week-long grant in a project folder travels with the
 folder.
 
-**A pairing in flight is remembered, beside the grant and as private.** The
-tool waits up to ten minutes for the click, and an agent's shell kills a
-command long before that, taking the only handle that can collect the grant
-with it. The click that followed minted a grant nobody could collect, and the
-next run asked for a second one. The pending pairing (`<grant file>.pending`,
-mode 0600) lets the next run show the same link and collect. The handle is a
-bearer until collected, so it is never printed, in an error message either.
-Two rules came out of three rounds of an independent tester breaking the first
-versions, and neither should be relaxed:
-
-1. **Nothing read back from the pending file is printed except its
-   ten-character code.** The link on a resume is rebuilt from the store the run
-   already talks to. A stored URL, however validated, is a field that can carry
-   the handle into the output.
-2. **One run at a time collects a pairing.** The collector holds a lock
-   (`<grant file>.pairing`) from before its first poll until the grant is on
-   disk; any other run waits for the saved grant and never polls. Two runs
-   polling one handle is a race no grace period settles: the store hands the
-   grant to whichever asks first, and the other sees "collected" before the
-   grant is saved and asks the person to click again.
+**The pairing lives in the process that started it; it is not remembered on
+disk.** The tool waits up to ten minutes for the click, and an agent's shell
+kills a foreground command long before that, taking the only handle that can
+collect the grant with it. The answer is an instruction, in the skill: run the
+pairing in the background and read the link from its output. Remembering the
+pairing in a file beside the grant, so the next run could resume it, was built
+and removed in the same pull request. An independent tester broke it in three
+consecutive rounds, each time in one of two ways: something read back from the
+file reached the output (the handle is a bearer until collected), or two runs
+sharing one pairing raced for the grant and asked the person to click twice. A
+lock between runs fixed the race and brought races of its own. Evidence that
+would reopen it: people losing clicks in practice despite the instruction, and
+a store-side way to collect an approved pairing without a client-held secret.
 
 **Accepted, with reason:**
 

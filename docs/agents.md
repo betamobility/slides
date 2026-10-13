@@ -803,7 +803,8 @@ clicks **Approve** once, and the tool collects a grant that acts as them for
 7 days, kept in `~/.bento/slides-grant.json` and never beside the deck.
 Run that command in the background, or with a long command timeout, so the
 link can be read while it waits (up to ten minutes); a command killed while
-waiting is run again and shows the same link. The click is the user's: an
+waiting takes the pairing with it, and the next run prints a new link. The
+click is the user's: an
 agent never opens or approves the link itself.
 `node splice.mjs --link` does the pairing alone. Every later command publishes
 as them, against `/api/publish/`, with no second approval. Set

@@ -635,9 +635,11 @@ SLIDES_GRANT_LABEL="Claude Code" node splice.mjs --create <projectDir>
 4. The command continues, saying who approved and until when. Every later
    `splice.mjs` command publishes as them, with no second approval.
 
-If your shell killed the command while it waited, run the same command again:
-it picks the pairing up and shows the same link, so the user never clicks
-twice. `node splice.mjs --link` does the pairing alone, for when you want the
+**A command your shell kills while it waits takes the pairing with it**: a
+click made afterwards approves nothing you can use, and the next run prints a
+new link. That is why the pairing runs in the background. If it happened
+anyway, tell the user the first link is dead and ask for one click on the new
+one. `node splice.mjs --link` does the pairing alone, for when you want the
 approval in place before the work starts.
 
 `--create --dry-run` needs no approval. A dry run of a change to a stored

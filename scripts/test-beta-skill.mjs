@@ -199,7 +199,7 @@ function sectionOf(text, heading) {
   // What an agent needs to get the ONE click: the tool waits up to ten minutes
   // and an agent's shell shows output only when a command returns.
   ok(/background/.test(people) && /ten\s+minutes/.test(people), 'the skill says to run the pairing where its link can be read while it waits')
-  ok(/same\s+link/.test(people), 'and that a command killed while waiting is simply run again, with the same link')
+  ok(/kills[^.]*takes\s+the\s+pairing\s+with\s+it/.test(people) && /new\s+link/.test(people), 'and that a command killed while waiting loses the pairing, so the next link is a new one')
   ok(/Never\s+open[^.]*yourself/.test(people), 'and that the click is the person\'s, never the agent\'s')
   ok(!/`curl`\s+recipe/.test(elsewhere), 'no part of the skill outside the machines section sends an agent to a curl recipe')
 }
