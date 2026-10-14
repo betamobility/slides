@@ -1370,7 +1370,7 @@ export function startPresentation(
     if (from) pauseMediaIn(from)
     if (from) runtimeShow.leave(fromIdx)
     startMediaIn(to)
-    runtimeShow.enter(toIdx, forward)
+    runtimeShow.enter(toIdx, forward, followed) // BETA FORK: a step the presenter named is the one the scene opens on
     if (followed !== null) runtimeShow.follow(toIdx, followed) // BETA FORK: the presenter named the scene's step
     // Capture where this slide's formula symbols sit WHILE it is on screen —
     // once it becomes the outgoing slide there is no layout left to measure.
