@@ -26,7 +26,7 @@ export type Hint =
   | { kind: 'bool' }
   | { kind: 'latlon' }
   | { kind: 'select'; options: string[] }
-  | { kind: 'range'; min: number; max: number; step: number }
+  | { kind: 'range'; min: number; max: number; step: number; decimals: number }
 
 /**
  * The longest page address a web embed keeps: the shell's own `isWebUrl`
@@ -48,7 +48,9 @@ export function parseHint(format: unknown, kind: RuntimeProp['kind']): Hint | nu
   const r = /^range:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(format)
   if (r && kind === 'number') {
     const [min, max, step] = [Number(r[1]), Number(r[2]), Number(r[3])]
-    if (min < max && step > 0) return { kind: 'range', min, max, step }
+    // the precision the range is written in: a step lands on min + k*step to that many decimals
+    const decimals = Math.max(...[r[1], r[3]].map((x) => (x.split('.')[1] ?? '').length))
+    if ([min, max, step].every(Number.isFinite) && min < max && step > 0 && decimals <= 20) return { kind: 'range', min, max, step, decimals }
   }
   return null
 }
@@ -87,9 +89,10 @@ export function coerce(prop: RuntimeProp, input: unknown): { value?: Value; note
     if (!Number.isFinite(n)) return { note: { says: 'Not a number' } }
     if (hint?.kind === 'range') {
       // At or past an end, that end (it is allowed even when the steps do not
-      // land on it); between them, the nearest step, to 12 significant digits
-      // so step arithmetic neither drifts nor erases a tiny step.
-      const snapped = Number((hint.min + Math.round((n - hint.min) / hint.step) * hint.step).toPrecision(12))
+      // land on it); between them, the nearest step, rounded to the decimals
+      // the range is written in: exact for whole numbers however large, and a
+      // tiny step is kept rather than rounded away.
+      const snapped = Number((hint.min + Math.round((n - hint.min) / hint.step) * hint.step).toFixed(hint.decimals))
       const held = n >= hint.max ? hint.max : n <= hint.min ? hint.min : Math.min(hint.max, Math.max(hint.min, snapped))
       if (held !== n) return { value: held, note: { says: 'Held at {value}: the scene allows {min} to {max}', value: held, min: hint.min, max: hint.max } }
       return { value: held }
@@ -168,15 +171,21 @@ export const presetsFor = (library: { id: string } | undefined): Preset[] | null
 
 // ---- a web scene: settings in the page address ------------------------------
 
-/** The settings a web scene's address carries, by declared key; a missing or unusable one is its default. */
+/**
+ * The settings a web scene's address carries, by declared key, AS THEY ARE:
+ * a value outside today's range or choices (an older copy, a hand edit) is
+ * shown, not replaced by the default, so the form and the active preset say
+ * what the page really gets. Only a missing value, or one the gate would not
+ * keep as that kind, reads as the default.
+ */
 export function readQuery(url: string | undefined, props: RuntimeProp[]): Record<string, Value> {
   const out: Record<string, Value> = {}
   let q: URLSearchParams | null = null
   try { q = url ? new URL(url).searchParams : null } catch { q = null }
   for (const p of props) {
     const raw = q?.get(p.key)
-    const v = raw == null ? undefined : coerce(p, raw).value
-    out[p.key] = v ?? p.default
+    const typed = raw == null ? undefined : p.kind === 'number' ? (raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined) : raw
+    out[p.key] = (typed !== undefined ? checkRuntimeValue(p.kind, typed) : undefined) ?? p.default
   }
   return out
 }

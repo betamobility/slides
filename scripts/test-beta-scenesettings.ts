@@ -46,7 +46,7 @@ console.log('\nthe hint grammar')
   ok(same(ss.parseHint('bool', 'number'), { kind: 'bool' }) && same(ss.parseHint('latlon', 'text'), { kind: 'latlon' }), 'bool on a number, latlon on text')
   ok(same(ss.parseHint('select:a|b|c', 'text'), { kind: 'select', options: ['a', 'b', 'c'] }), 'select lists its options')
   ok(same(ss.parseHint('select:a||b|a', 'text'), { kind: 'select', options: ['a', 'b'] }), 'empty and repeated options are left out')
-  ok(same(ss.parseHint('range:0.5:10:0.5', 'number'), { kind: 'range', min: 0.5, max: 10, step: 0.5 }) && same(ss.parseHint('range:-5:5:1', 'number'), { kind: 'range', min: -5, max: 5, step: 1 }), 'range reads min, max and step')
+  ok(same(ss.parseHint('range:0.5:10:0.5', 'number'), { kind: 'range', min: 0.5, max: 10, step: 0.5, decimals: 1 }) && same(ss.parseHint('range:-5:5:1', 'number'), { kind: 'range', min: -5, max: 5, step: 1, decimals: 0 }), 'range reads min, max, step and the decimals it is written in')
   for (const [f, k, why] of [['bool', 'text', 'bool on text'], ['latlon', 'number', 'latlon on a number'], ['select:a', 'number', 'select on a number'], ['range:0:1:1', 'text', 'range on text'],
     ['range:5:1:1', 'number', 'a range whose min is not below its max'], ['range:0:1:0', 'number', 'a zero step'], ['range:a:b:c', 'number', 'a range that is not numbers'], ['select:', 'text', 'a select with no options'],
     ['colour', 'text', 'a hint this build does not read'], [undefined, 'text', 'no hint'], [7, 'number', 'a hint that is not text']] as [unknown, RuntimeProp['kind'], string][]) {
@@ -91,7 +91,8 @@ console.log('\na web scene: settings in the page address')
 {
   const base = 'https://slides.betamobility.ai/scenes/map/?zoom=4&theme=dark#top'
   ok(same(ss.readQuery(base, props), { place: 'Oslo', position: '59.9139, 10.7522', mode: 'wide', zoom: 4, grid: 1, accent: '#C2410C' }), 'the address\'s values, defaults for the rest; a parameter the scene does not declare is not a setting')
-  ok(ss.readQuery('https://x.test/?zoom=99', props).zoom === 9 && ss.readQuery('https://x.test/?mode=far', props).mode === 'wide', 'a value in the address is held to its range, or is the default when it is not a choice')
+  // (changed after Codex round 2: the form shows what the page really gets)
+  ok(ss.readQuery('https://x.test/?zoom=99', props).zoom === 99 && ss.readQuery('https://x.test/?mode=far', props).mode === 'far' && ss.readQuery('https://x.test/?zoom=abc', props).zoom === 5, 'a value in the address is shown as it is, even outside today\'s range or choices; one that is not of its kind is the default')
   ok(ss.readQuery('not a url', props).zoom === 5 && ss.readQuery(undefined, props).place === 'Oslo', 'no address, or not one: the defaults')
   const w = ss.writeQuery(base, 'place', 'Bergen & Co') as { url: string }
   const u = new URL(w.url), b = new URL(base)
@@ -151,6 +152,48 @@ console.log('\nU10 independent adversarial regressions')
   const applied = ss.applyPreset(inheritedNames, { name: 'Own keys', values: JSON.parse('{"constructor":"a","toString":"b","hasOwnProperty":"c","extra":"no"}') })
   ok(same(applied, { constructor: 'a', toString: 'b', hasOwnProperty: 'c' }),
     'U10 independent: preset writes every legal prototype-named key and no undeclared key')
+}
+
+console.log('\nU10 round 2 adversarial regressions')
+{
+  // Millisecond timestamps are finite, exactly representable integers. The
+  // twelve-significant-digit repair must not erase a declared one-unit step.
+  const timestamp: RuntimeProp = { key: 'time', label: 'Time', kind: 'number', default: 1700000000000,
+    format: 'range:1700000000000:1700000000100:1' }
+  const result = ss.applyPreset([timestamp], { name: 'One millisecond', values: { time: 1700000000001, extra: 3 } })
+  ok(result.time === 1700000000001 && Object.keys(result).join() === 'time',
+    `U10 round 2: preset preserves an exactly representable large-offset step (got ${JSON.stringify(result)})`)
+
+  // The same older value is visible in a runtime select (controlFor even
+  // inserts an option for it). Web settings must not silently claim the
+  // default while the actual scene still receives mode=legacy in its URL.
+  const mode: RuntimeProp = { key: 'mode', label: 'Mode', kind: 'text', default: 'wide', format: 'select:wide|near' }
+  const old = ss.readQuery('https://slides.betamobility.ai/scenes/map/?mode=legacy', [mode])
+  ok(old.mode === 'legacy' && ss.activePreset([mode], old, [{ name: 'Wide', values: { mode: 'wide' } }]) === null,
+    `U10 round 2: web settings show a stored legacy choice instead of falsely activating a preset (got ${JSON.stringify(old)})`)
+
+  // Unlike runtime.format, embed.doc is retained as plain JSON. The web
+  // scene reader accepts this declaration; an overflowing numeric hint must
+  // fall back or refuse, never manufacture NaN from a finite user input.
+  const scene = ss.webSceneOf({ library: { id: 'huge-step', version: 1 }, props: [
+    { key: 'n', label: 'N', kind: 'number', default: 0, format: `range:0:10:${'9'.repeat(309)}` },
+  ] })!
+  const held = ss.coerce(scene.props[0], 2)
+  ok(held.value === undefined || (typeof held.value === 'number' && Number.isFinite(held.value)),
+    `U10 round 2: overflowing range step refuses or yields a finite value (got ${String(held.value)})`)
+
+  const remote = 'http://user:pass@slides.betamobility.ai:8080/other%2Fpath?place=Remote&zoom=8#section'
+  const changed = ss.writeQuery(remote, 'place', 'Local')
+  const u = 'url' in changed ? new URL(changed.url) : null
+  const before = new URL(remote)
+  ok(!!u && u.origin === before.origin && u.pathname === before.pathname && u.hash === before.hash
+    && u.searchParams.get('zoom') === '8' && u.searchParams.get('place') === 'Local',
+    'U10 round 2: a same-key local edit preserves the latest remote address and sibling setting')
+
+  // Encoding, not the number of typed characters, determines the gate limit.
+  const encoded = ss.writeQuery('https://slides.betamobility.ai/scenes/map/', 'place', '東京'.repeat(120))
+  ok('error' in encoded && encoded.error === 'This makes the page address too long',
+    'U10 round 2: URL limit counts percent-encoded Unicode bytes')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
