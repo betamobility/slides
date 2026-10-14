@@ -1,0 +1,41 @@
+<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Oslo, 59.91°N 10.75°E" xmlns="http://www.w3.org/2000/svg" width="1600" height="900">
+<rect width="1600" height="900" fill="#F5F3EE">
+</rect>
+<g stroke="#1A1A1A" stroke-opacity="0.14" stroke-width="1.5" fill="none">
+<line x1="75.5" y1="0" x2="75.5" y2="900">
+</line>
+<line x1="342.1" y1="0" x2="342.1" y2="900">
+</line>
+<line x1="608.8" y1="0" x2="608.8" y2="900">
+</line>
+<line x1="875.5" y1="0" x2="875.5" y2="900">
+</line>
+<line x1="1142.1" y1="0" x2="1142.1" y2="900">
+</line>
+<line x1="1408.8" y1="0" x2="1408.8" y2="900">
+</line>
+<line x1="0" y1="715.1" x2="1600" y2="715.1">
+</line>
+<line x1="0" y1="448.4" x2="1600" y2="448.4">
+</line>
+<line x1="0" y1="181.8" x2="1600" y2="181.8">
+</line>
+</g>
+<g fill="#1A1A1A" fill-opacity="0.5" font-size="20">
+<text x="83.5" y="886">30°W</text>
+<text x="350.1" y="886">15°W</text>
+<text x="616.8" y="886">0°</text>
+<text x="883.5" y="886">15°E</text>
+<text x="1150.1" y="886">30°E</text>
+<text x="1416.8" y="886">45°E</text>
+<text x="14" y="707.1">45°N</text>
+<text x="14" y="440.4">60°N</text>
+<text x="14" y="173.8">75°N</text>
+</g>
+<circle cx="800" cy="450" r="34" fill="#C2410C" fill-opacity="0.18">
+</circle>
+<circle cx="800" cy="450" r="13" fill="#C2410C" stroke="#FFFFFF" stroke-width="4">
+</circle>
+<text x="830" y="428" font-size="54" font-weight="600" fill="#1A1A1A">Oslo</text>
+<text x="830" y="468" font-size="24" fill="#1A1A1A" fill-opacity="0.6">59.91°N  10.75°E</text>
+</svg>

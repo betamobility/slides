@@ -102,3 +102,7 @@ home/android/*/build/
 # The splice tool's fallback location for a pairing grant, when no home
 # directory resolves. It holds a live bearer; never commit one.
 .bento-grant.json
+# BETA FORK: the scene library's manifest is GENERATED from beta/library/<scene>/
+# by scripts/build-beta-library.mjs and uploaded to the store; it carries every
+# scene's HTML and is never committed.
+beta/library/.out/

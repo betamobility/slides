@@ -316,6 +316,17 @@ jobs:
         # gap under the pointer, the drop bar, the arrows, the keyboard move.
         run: node scripts/test-beta-lighttable.ts
 
+      - name: Beta scene library validates
+        # beta/library/<scene>/ folders build into one manifest. --check writes
+        # nothing and uploads nothing; the upload is the maintainer's, with the
+        # store's service token.
+        run: node scripts/build-beta-library.mjs --check
+
+      - name: Beta scene library rig
+        # What the build refuses and names (a still over 64 KB, a web scene off
+        # Beta's hosts), the two seed scenes, and what the upload sends.
+        run: node scripts/test-beta-library.ts
+
       - name: Beta light table rig (browser)
         # The same in the packaged editor with a real mouse: slides 2 and 5
         # dragged between 7 and 8, undo, double-click, Escape, a file drop.

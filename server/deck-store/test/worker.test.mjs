@@ -30,6 +30,7 @@ import { mintDocIntoBlock, indexPage } from '../src/pages.js'
 // verify, list and revoke are worker-side functions with no route of their
 // own, and the routes that use them arrive in U2 and U3.
 import { mintGrant, verifyGrant, listGrants, revokeGrant } from '../src/grant.js'
+import { buildManifest, manifestShape, serialize } from '../../../scripts/lib/beta-library.mjs'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -1868,6 +1869,119 @@ export async function run(Miniflare) {
     // binding fail, and the alternatives were a stub that proves nothing or an
     // assertion that cannot fail. The absent-binding case above covers the same
     // two-line branch (503 with the flag on, pass-through with it off).
+
+    // ------------------------------------------------ the scene library (U8)
+    console.log('\nthe scene library: one writer, three gated readers (2026-10-13-2236 plan, U8)')
+    {
+      const lib = serialize(buildManifest(join(dirname(fileURLToPath(import.meta.url)), '../../../beta/library')))
+      const J = { 'content-type': 'application/json' }
+      // nothing uploaded yet: every reader gets 404, and still needs its own credential
+      r = await call('GET', '/library/library.json', { as: 'alice' })
+      eq(r.status, 404, 'before any upload a signed-in person gets 404')
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 404, 'and so does the service token')
+      r = await call('GET', '/api/publish/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 404, 'and so does a grant')
+
+      // the one writer
+      r = await call('PUT', '/api/harness/library.json', { headers: J, body: lib })
+      eq(r.status, 401, 'an upload with no credential is 401')
+      r = await call('PUT', '/api/harness/library.json', { headers: { ...J, ...asGrant(aliceTok) }, body: lib })
+      eq(r.status, 401, 'a grant cannot upload: it is not an identity on a harness path')
+      r = await call('PUT', '/api/harness/library.json', { as: 'alice', headers: J, body: lib })
+      eq(r.status, 403, 'a signed-in person cannot upload either (403, as for the asset upload)')
+      r = await call('PUT', '/api/publish/library.json', { headers: { ...J, ...asGrant(aliceTok) }, body: lib })
+      eq(r.status, 401, 'there is no upload under the grant prefix')
+      r = await call('PUT', '/library/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 403, 'nor under the people path, where a service token stops')
+      r = await call('GET', '/library/library.json', { as: 'alice' })
+      eq(r.status, 404, 'none of the refused uploads stored anything')
+
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: { 'content-type': 'text/html' }, body: lib })
+      eq(r.status, 415, 'the service token with the wrong content type is 415')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: '{not json' })
+      eq(r.status, 400, 'bytes that do not parse are 400')
+      for (const [bad, why] of [
+        ['[1,2,3]', 'a list'], ['{"format":"bento/slides","v":1,"scenes":[]}', 'another format'],
+        ['{"format":"beta/library","v":2,"scenes":[]}', 'another version'], ['{"format":"beta/library","v":1}', 'no scenes list'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"../x","version":1,"kind":"runtime"}]}', 'a scene id that is not one'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"script"}]}', 'a scene kind that is not one'],
+      ]) {
+        r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: bad })
+        eq(r.status, 400, `a manifest that is ${why} is 400`)
+        eq(manifestShape(JSON.parse(bad)), false, `and the build script's own check refuses ${why} too`)
+      }
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: '{"format":"beta/library","v":1,"scenes":[],"pad":"' + 'x'.repeat(8 * 1024 * 1024) + '"}' })
+      eq(r.status, 413, 'more than 8 MB is 413')
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 404, 'no refused body was stored')
+
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 200, 'the service token uploads the manifest built from beta/library/')
+      const etag = r.headers.get('etag')
+      ok(!!etag && r.headers.get('x-bento-etag') === etag, 'and gets its ETag back')
+
+      // three readers, the same bytes
+      const readers = [
+        ['a signed-in person at /library/library.json', '/library/library.json', { as: 'alice' }],
+        ['the service token at /api/harness/library.json', '/api/harness/library.json', { as: 'service' }],
+        ['a grant at /api/publish/library.json', '/api/publish/library.json', { headers: asGrant(aliceTok) }],
+      ]
+      for (const [who, path, opts] of readers) {
+        r = await call('GET', path, opts)
+        eq(r.status, 200, `${who} reads it`)
+        eq(await r.text(), lib, 'byte for byte what was uploaded')
+        eq(r.headers.get('content-type'), 'application/json; charset=utf-8', 'as JSON')
+        eq(r.headers.get('cache-control'), 'private, no-cache', 'never cached without revalidation, never by a shared cache')
+        eq(r.headers.get('x-content-type-options'), 'nosniff', 'never sniffed into a document')
+        eq(r.headers.get('etag'), etag, 'under the upload\'s ETag')
+        r = await call('GET', path, { ...opts, headers: { ...(opts.headers || {}), 'if-none-match': etag } })
+        eq(r.status, 304, 'and a revalidation costs a 304')
+      }
+      const parsed = JSON.parse(lib)
+      eq(parsed.scenes.map((s) => `${s.id}@${s.version}`).join(','), 'counter@1,map@1', 'the manifest lists both seed scenes with ids and versions')
+      ok(parsed.scenes.every((s) => s.props.every((p) => 'default' in p) && s.presets.length > 0), 'each with defaults and at least one preset')
+
+      // each reader's path answers only its own credential
+      r = await call('GET', '/library/library.json')
+      eq(r.status, 401, 'no credential at the people path is 401 (in production Access redirects to login before the worker runs)')
+      r = await call('GET', '/library/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 401, 'a grant at the people path is 401')
+      r = await call('GET', '/library/library.json', { as: 'service' })
+      eq(r.status, 403, 'the service token at the people path is 403: it has its own')
+      r = await call('GET', '/api/harness/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 401, 'a grant at the token path is 401')
+      r = await call('GET', '/api/harness/library.json')
+      eq(r.status, 401, 'no credential at the token path is 401')
+      r = await call('GET', '/api/publish/library.json')
+      eq(r.status, 401, 'no credential at the grant path is 401')
+      r = await call('GET', '/api/publish/library.json', { as: 'alice' })
+      eq(r.status, 401, 'a person\'s assertion at the grant path is 401: only a grant counts there')
+      r = await call('GET', '/api/publish/library.json', { as: 'service' })
+      eq(r.status, 401, 'and so is the service token\'s')
+      r = await call('GET', '/api/publish/library.json', { headers: asGrant('x'.repeat(43)) })
+      eq(r.status, 401, 'a bearer that is not a grant is 401')
+
+      // the manifest is not a deck, and nothing public serves it
+      r = await call('GET', '/api/decks', { as: 'alice' })
+      ok(!(await r.text()).includes('library'), 'the manifest does not show up in the deck list')
+      for (const path of ['/library.json', '/library/', '/library', '/library/library.json/', '/library/other.json', '/api/harness/library', '/api/publish/library.json/x']) {
+        r = await call('GET', path)
+        ok(r.status === 401, `nothing answers ${path} without a credential (${r.status})`)
+      }
+      r = await call('DELETE', '/api/harness/library.json', { as: 'service' })
+      ok(r.status === 403 || r.status === 404, `there is no delete (${r.status})`)
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 200, 'and the manifest is still there')
+
+      // a second upload replaces the first
+      const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })
+      eq(r.status, 200, 'a second upload is accepted')
+      r = await call('GET', '/library/library.json', { as: 'alice', headers: { 'if-none-match': etag } })
+      eq(r.status, 200, 'the old ETag no longer matches')
+      eq(await r.text(), next, 'and the person reads the new manifest')
+    }
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })

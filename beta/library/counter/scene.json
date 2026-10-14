@@ -1,0 +1,23 @@
+{
+  "name": "Counter",
+  "version": 1,
+  "description": "One number that counts up, with a label under it.",
+  "kind": "runtime",
+  "steps": 0,
+  "props": [
+    { "key": "label", "label": "Label", "kind": "text", "default": "trips this year" },
+    { "key": "from", "label": "Count from", "kind": "number", "default": 0 },
+    { "key": "to", "label": "Count to", "kind": "number", "default": 1250000 },
+    { "key": "unit", "label": "Unit after the number", "kind": "text", "default": "" },
+    { "key": "decimals", "label": "Decimals", "kind": "number", "default": 0, "format": "range:0:3:1" },
+    { "key": "seconds", "label": "Seconds to count", "kind": "number", "default": 2, "format": "range:0.5:10:0.5" },
+    { "key": "grouped", "label": "Group thousands", "kind": "number", "default": 1, "format": "bool" },
+    { "key": "accent", "label": "Number colour", "kind": "color", "default": "#1A1A1A" },
+    { "key": "background", "label": "Background", "kind": "color", "default": "#FFFFFF" }
+  ],
+  "presets": [
+    { "name": "Whole number", "values": {} },
+    { "name": "Percentage", "values": { "to": 87.5, "unit": "%", "decimals": 1, "label": "on time" } },
+    { "name": "Short count", "values": { "to": 42, "seconds": 1, "label": "pilots running" } }
+  ]
+}

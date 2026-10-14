@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Counter</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh;
+    font-family: Geist, Inter, system-ui, sans-serif; background: #fff; color: #1a1a1a; overflow: hidden; }
+  #n { font-size: 22vh; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+  #l { font-size: 4.2vh; color: #5c5c5c; }
+</style>
+</head>
+<body>
+<div id="n"></div>
+<div id="l"></div>
+<script>
+  // Defaults match scene.json, so the file previews on its own in a browser.
+  const state = { ready: false, reduce: false,
+    props: { label: 'trips this year', from: 0, to: 1250000, unit: '', decimals: 0, seconds: 2, grouped: 1, accent: '#1A1A1A', background: '#FFFFFF' } }
+  const n = document.getElementById('n'), l = document.getElementById('l')
+  let raf = 0
+
+  function show(value) {
+    const p = state.props
+    const d = Math.max(0, Math.min(3, Math.round(Number(p.decimals) || 0)))
+    const fixed = (Number.isFinite(value) ? value : 0).toFixed(d)
+    const [whole, frac] = fixed.split('.')
+    const grouped = p.grouped ? whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : whole
+    n.textContent = grouped + (frac ? ',' + frac : '') + (p.unit ? (p.unit === '%' ? ' ' : ' ') + p.unit : '')
+  }
+
+  function paint() {
+    const p = state.props
+    document.body.style.background = p.background
+    n.style.color = p.accent
+    l.textContent = p.label
+  }
+
+  // The count runs once the shell has said where the show is. Before that the
+  // scene shows the number it starts from: it may have been mounted ahead of
+  // the slide it is on, and nobody is looking yet.
+  function run() {
+    cancelAnimationFrame(raf)
+    paint()
+    const p = state.props
+    const from = Number(p.from) || 0, to = Number(p.to) || 0
+    const ms = Math.max(0, Number(p.seconds) || 0) * 1000
+    if (!state.ready) return show(from)
+    if (state.reduce || ms === 0) return show(to)
+    const t0 = performance.now()
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / ms)
+      show(from + (to - from) * (1 - Math.pow(1 - k, 3)))
+      if (k < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      Object.assign(state.props, m.props)
+      state.reduce = !!m.reduceMotion
+      state.ready = true
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+    } else if (m.type === 'bento:motion') {
+      state.reduce = !!m.reduce
+    } else if (m.type !== 'bento:step') {
+      return
+    }
+    run()
+  })
+
+  // Keys pressed inside the frame never reach the shell: forward them.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  run()
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>
