@@ -39,7 +39,7 @@ const main = JSON.parse(read('schema/slides.json'))
 ok(main.$id === URL_, `schema/slides.json carries that URL as its $id (${main.$id})`)
 ok(main['x-bento-version'] === version && existsSync(join(root, `schema/slides-${version}.json`)), `it is stamped ${version} and has its version-pinned twin`)
 const rt = main.$defs?.slide?.properties?.runtime
-ok(rt && rt.type === 'object' && Object.keys(rt.properties ?? {}).length === 7, 'slide.runtime is a described object, not the empty schema the generator prints for an untagged check')
+ok(rt && rt.type === 'object' && Object.keys(rt.properties ?? {}).length === 8 && !!rt.properties.library, 'slide.runtime is a described object, not the empty schema the generator prints for an untagged check')
 ok(/runtime: tag\(\(v\) => checkRuntime\(v\), RUNTIME_SCHEMA\)/.test(read('slides/src/untrusted.ts')), 'because the runtime check carries its schema (untrusted.ts SLIDE_CHECKS)')
 ok(!/from '\.\/untrusted/.test(read('slides/src/runtime.ts')), 'which is built beside checkRuntime without importing untrusted.ts (that file imports this one)')
 

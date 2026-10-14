@@ -1291,5 +1291,324 @@ console.log('\npresent: the frame owner')
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
 }
 
+// ------------------------------------------------ 11. library fields (U9)
+// A runtime slide inserted from the library carries `library = {id, version}`
+// and its settings may carry a `format` hint (2026-10-13-2236 plan, U9, KTD9,
+// R12, R18). Both are additive: the gate keeps them, a paste and a save keep
+// them, and an OLDER shell, whose gate does not know them, drops the two keys
+// and keeps everything else, so a hinted setting stays an ordinary text or
+// number setting there and saving on it strips nothing a deck needs.
+console.log('\nlibrary fields: library and format')
+{
+  const rt = await import('../slides/src/runtime.ts')
+  const record = {
+    src: 'asset:scene-map', still: 'asset:still-map', steps: 2,
+    props: [
+      { key: 'place', label: 'Place', kind: 'text', default: 'Oslo' },
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'wide', format: 'select:wide|near' },
+      { key: 'grid', label: 'Grid', kind: 'number', default: 1, format: 'bool' },
+      { key: 'zoom', label: 'Zoom', kind: 'number', default: 5, format: 'range:2:9:1' },
+    ],
+    values: { mode: 'near' },
+    library: { id: 'map', version: 3 },
+  }
+  const kept = rt.checkRuntime(record)
+  ok(JSON.stringify(kept) === JSON.stringify(record), `the gate keeps library and format exactly (${JSON.stringify(kept?.library)}, ${kept?.props.map((p) => p.format ?? '-').join(' ')})`)
+  // the gate drops a malformed marker or hint, never the slide or the setting
+  for (const [lib, why] of [[{ id: 'Map', version: 1 }, 'an upper-case id'], [{ id: 'map', version: 0 }, 'version 0'], [{ id: 'map', version: '3' }, 'a string version'], [{ id: 'map' }, 'no version'], ['map', 'a string'], [{ id: 'map', version: 1, extra: 'x' }, 'an extra key']] as [unknown, string][]) {
+    const out = rt.checkRuntime({ ...record, library: lib })
+    ok(out?.library === undefined && out?.props.length === 4, `a library marker with ${why} is dropped, the slide kept`)
+  }
+  for (const [format, why] of [['', 'empty'], ['x'.repeat(201), 'too long'], ['a\nb', 'two lines'], [7, 'a number']] as [unknown, string][]) {
+    const out = rt.checkRuntime({ ...record, props: [{ key: 'm', label: 'M', kind: 'text', default: 'a', format }] })
+    ok(out?.props.length === 1 && !('format' in out.props[0]), `a format hint that is ${why} is dropped and the setting kept`)
+  }
+
+  // a paste and a save
+  const doc = runtimeDeck()
+  doc.slides[0].runtime = structuredClone(record) as unknown as typeof doc.slides[0]['runtime']
+  const clip = parseClip(serializeSlides([doc.slides[0]], doc))
+  const target = newDoc()
+  const pasted = insertSlides(clip!, target, 1).find((s) => s.runtime)?.runtime
+  ok(JSON.stringify(pasted?.library) === '{"id":"map","version":3}' && pasted?.props.map((p) => p.format ?? '-').join(' ') === '- select:wide|near bool range:2:9:1', 'a copy-paste keeps library and every format hint')
+  const sane = sanitizeSlide(JSON.parse(JSON.stringify(doc.slides[0])))
+  ok(JSON.stringify(sane?.runtime?.library) === '{"id":"map","version":3}' && sane?.runtime?.props[1].format === 'select:wide|near', 'so does the untrusted gate a pasted or loaded slide goes through')
+  const reopened = model.parseDoc(JSON.stringify(doc))
+  ok(JSON.stringify(reopened?.slides[0].runtime) === JSON.stringify(record), 'and a save and reopen keeps the record byte for byte')
+  ok(validateDoc(doc, { measure: false }).findings.filter((f) => f.slide === doc.slides[0].id && f.severity !== 'info').length === 0, 'the validator has nothing to say about either')
+
+  // an older shell: the gate as it was before U9 (scripts/fixtures/beta-runtime-pre-u9.ts.txt)
+  const { createRequire } = await import('node:module')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const { readFileSync } = await import('node:fs')
+  const { existsSync } = await import('node:fs')
+  let repo = dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 8 && !existsSync(join(repo, 'slides/package.json')); i++) repo = join(repo, '..')
+  if (!existsSync(join(repo, 'slides/package.json'))) repo = process.cwd()
+  const req = createRequire(join(repo, 'slides/package.json'))
+  const esbuild = req('esbuild')
+  const old = esbuild.buildSync({
+    stdin: { contents: readFileSync(join(repo, 'scripts/fixtures/beta-runtime-pre-u9.ts.txt'), 'utf8'), resolveDir: join(repo, 'slides/src'), loader: 'ts', sourcefile: 'runtime-pre-u9.ts' },
+    bundle: true, write: false, platform: 'node', format: 'cjs', logLevel: 'error',
+  })
+  const mod = { exports: {} as { checkRuntime: typeof rt.checkRuntime } }
+  new Function('module', 'exports', 'require', old.outputFiles[0].text)(mod, mod.exports, req)
+  // Independent U9 test: a setting whose name is also an Object prototype
+  // key, and a non-default Unicode value, must survive OLD -> NEW -> OLD.
+  // Negative control removes the setting: the same oracle must reject it.
+  const compatRecord = { ...record, props: [
+    { key: 'constructor', label: 'Mode', kind: 'text', default: 'Oslo', format: 'select:Oslo|東京' },
+  ], values: { constructor: '東京' } }
+  const compatible = (r: ReturnType<typeof rt.checkRuntime>) =>
+    r?.props.length === 1 && r.props[0].key === 'constructor' && r.props[0].kind === 'text' &&
+    r.props[0].default === 'Oslo' && r.values?.constructor === '東京'
+  ok(!compatible({ steps: 2, props: [], values: {} }), 'U9 independent compatibility: oracle rejects a lost setting')
+  const oldSaved = mod.exports.checkRuntime(JSON.parse(JSON.stringify(compatRecord)))
+  const newOpened = rt.checkRuntime(JSON.parse(JSON.stringify(oldSaved)))
+  const oldReopened = mod.exports.checkRuntime(JSON.parse(JSON.stringify(newOpened)))
+  ok(compatible(oldSaved) && compatible(newOpened) && compatible(oldReopened),
+    'U9 independent compatibility: prototype-named select and chosen Unicode value survive OLD -> NEW -> OLD')
+  // U9 independent round 2: the character-count fix must not widen the
+  // saved text domain beyond what the frozen pre-U9 gate can preserve.
+  // Use a short, valid select hint; values are intentionally free strings
+  // until U10, and a downloaded deck must retain them on an old-shell save.
+  {
+    const cases = [2000, 2001, 4000].map(n => {
+      const text = '🚲'.repeat(n)
+      const input = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text',
+        default: text, format: 'select:a|b' }], values: { mode: text }, library: { id: 'map', version: 1 } }
+      const current = rt.checkRuntime(JSON.parse(JSON.stringify(input)))!
+      const oldSave = mod.exports.checkRuntime(JSON.parse(JSON.stringify(current)))!
+      const reopened = rt.checkRuntime(JSON.parse(JSON.stringify(oldSave)))!
+      return { n, admitted: current.props[0].default === text && current.values?.mode === text,
+        kept: reopened.props[0].default === text && reopened.values?.mode === text,
+        oldDefaultLength: [...String(oldSave.props[0].default)].length, oldValuePresent: !!oldSave.values }
+    })
+    // (corrected after the round: the property is admitted => kept; 2 001 emoji are
+    // past every shipped shell's limit, so this shell must refuse them, not keep them)
+    ok(cases.every(c => !c.admitted || c.kept) && cases[0].admitted && !cases[1].admitted,
+      `U9 R2 old-shell Unicode save: admitted select defaults and chosen values survive NEW -> OLD -> NEW; ${JSON.stringify(cases)}`)
+  }
+  // U9 independent round 3: fill every prop slot, including Object names;
+  // old shells must retain labels/defaults/values, not merely the first prop.
+  {
+    const keys = ['constructor', 'toString', 'hasOwnProperty', ...Array.from({ length: 61 }, (_, i) => `mode_${i}`)]
+    const props = keys.map((key, i) => ({ key, label: '🚲'.repeat(100), kind: 'text' as const,
+      default: i % 2 ? 'x'.repeat(4000) : '🚲'.repeat(2000), format: 'select:a|b' }))
+    const values = Object.fromEntries(keys.map((key, i) => [key, i % 2 ? '🚲'.repeat(2000) : 'b']))
+    const input = { steps: 0, props, values, library: { id: 'map', version: 1 } }
+    const current = rt.checkRuntime(input)!
+    const legacyInput = structuredClone(current)
+    // Test-only fault injection: reproduce an unsupported-kind regression.
+    if (process.env.U9_R3_MUTANT === 'compat') (legacyInput.props[63] as any).kind = 'select'
+    const legacy = mod.exports.checkRuntime(JSON.parse(JSON.stringify(legacyInput)))!
+    const reopened = rt.checkRuntime(JSON.parse(JSON.stringify(legacy)))!
+    const expected = { steps: 0, props: props.map(({ format, ...p }) => p), values }
+    ok(current.props.length === 64 && legacy.props.every(p => !('format' in p)) &&
+      JSON.stringify(legacy) === JSON.stringify(expected) && JSON.stringify(reopened) === JSON.stringify(expected),
+      'U9 R3 old-shell capacity: 64 select props preserve boundary labels, defaults and own prototype-named values')
+  }
+  // U9 independent round 4: an old shell edits a selected value, then its
+  // saved JSON is pasted into this shell and imported over an existing deck.
+  // Delimiters are data: neither gate owns the future format grammar.
+  {
+    const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+    const selected = '東京 | "quoted" \\u003c </script> 🚲'
+    const input = { steps: 1, props: [
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'initial', format: 'select:initial|東京' },
+      { key: 'other', label: 'Other', kind: 'text', default: 'kept', format: 'bad\nline' },
+    ], values: { mode: 'initial', other: 'also kept' }, library: { id: 'map', version: 2 } }
+    const legacy = mod.exports.checkRuntime(rt.checkRuntime(input))!
+    legacy.values!.mode = selected
+    if (process.env.U9_R4_MUTANT === 'compat') legacy.props[0].kind = 'select' as any
+    const doc = runtimeDeck()
+    doc.slides[0].runtime = JSON.parse(JSON.stringify(legacy))
+    const target = newDoc()
+    const clip = parseClip(serializeSlides(doc.slides, doc))!
+    const pasted = insertSlides(clip, target, 1)[0]
+    const live = newDoc()
+    const loaded = parseDocInputReport(JSON.stringify(target), { fit: false, live })!.doc
+    const out = loaded.slides.find(s => s.id === pasted.id)!.runtime!
+    ok(out.props.length === 2 && out.props[0].kind === 'text' && out.props[0].default === 'initial' &&
+      out.props.every(p => !('format' in p)) && out.library === undefined &&
+      out.values?.mode === selected && out.values?.other === 'also kept' && loaded.docId === live.docId,
+      'U9 R4 legacy edit transport: selected text and malformed-hint sibling survive old save, paste and live JSON import')
+  }
+  const older = mod.exports.checkRuntime(record)
+  ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
+  ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
+    'and keeps every setting, its kind, its default and the chosen value: a select is plain text there, a bool and a range plain numbers')
+  // A hint counts characters (older shells drop it anyway); a label and a text
+  // value count UTF-16 units, as every shipped shell does, so nothing this
+  // shell keeps is reset by an older one (R18, Codex round 2 on U9).
+  const bikes = (n: number) => '\u{1F6B2}'.repeat(n)
+  const fits = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(100), kind: 'text', default: bikes(2000), format: 'select:' + bikes(193) }], values: { k: bikes(2000) } })
+  ok(fits?.props[0].label === bikes(100) && fits?.props[0].default === bikes(2000) && fits?.props[0].format === 'select:' + bikes(193) && fits?.values?.k === bikes(2000), 'emoji up to the UTF-16 limit are kept in a label and a value, up to 200 characters in a hint')
+  const past = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(101), kind: 'text', default: bikes(2001), format: 'select:' + bikes(194) }], values: { k: bikes(2001) } })
+  ok(past?.props[0].label === 'k' && past?.props[0].default === '' && !('format' in past!.props[0]) && past?.values === undefined, 'one emoji past each limit is refused, exactly where an older shell refuses it')
+  const oldKeeps = mod.exports.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(100), kind: 'text', default: bikes(2000) }], values: { k: bikes(2000) } })
+  ok(oldKeeps?.props[0].default === bikes(2000) && oldKeeps?.values?.k === bikes(2000), 'and what this shell keeps, the older one keeps too')
+  ok(JSON.stringify(rt.checkRuntime(older)) === JSON.stringify(older), 'what the older shell saved opens on this one unchanged (the hints are gone; nothing else is)')
+}
+
+// Independent U9 transport test. Exercise the actual save facade, not just
+// JSON.stringify; the shell stand-in supplies DOM serialization only.
+{
+  const { compactDoc } = await import('../slides/src/compact.ts')
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const { capturePristine, serializeFile } = await import('../slides/src/save.ts')
+  const { configureApp } = await import('../kernel/src/app.ts')
+  const doc = runtimeDeck()
+  doc.slides[0].runtime!.library = { id: 'map', version: 1000000 }
+  doc.slides[0].runtime!.props[0].format = 'select:Oslo|Bergen|</script>'
+  const matches = (r: typeof doc.slides[0]['runtime']) =>
+    r?.library?.id === 'map' && r.library.version === 1000000 &&
+    r.props[0].format === 'select:Oslo|Bergen|</script>' && r.values?.title === 'Bergen'
+  const broken = structuredClone(doc.slides[0].runtime)
+  delete broken!.library
+  ok(!matches(broken), 'U9 independent transport: oracle rejects a lost library marker')
+  const expanded = parseDocInputReport(JSON.stringify(compactDoc(doc)), { fit: false })
+  const target = newDoc()
+  target.assets = { 'scene-map': 'data:text/html;base64,T1RIRVI=', 'still-map': 'data:image/png;base64,T1RIRVI=' }
+  const clip = parseClip(serializeSlides(expanded!.doc.slides, expanded!.doc))!
+  const [pasted] = insertSlides(clip, target, 1)
+  class LibraryTestShell {
+    block = { textContent: '' }; title = { textContent: '' }
+    cloneNode() { return new LibraryTestShell() }
+    querySelectorAll(s: string) { return s === 'script' ? [this.block] : [] }
+    getElementById(id: string) { return id === 'bento-doc' ? this.block : null }
+    querySelector(s: string) { return s === 'title' ? this.title : null }
+    get documentElement() { return { outerHTML: `<html><title>${this.title.textContent}</title><script id="bento-doc">${this.block.textContent}</script></html>` } }
+  }
+  const priorDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  configureApp({ appId: 'beta-slides', appName: 'bento/slides', manifestUrl: 'https://invalid.example/manifest' })
+  let saved = ''
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, writable: true, value: new LibraryTestShell() })
+    capturePristine()
+    saved = serializeFile(target)
+  } finally {
+    if (priorDocument) Object.defineProperty(globalThis, 'document', priorDocument)
+    else delete (globalThis as any).document
+  }
+  const body = saved.match(/id="bento-doc">([\s\S]*?)<\/script>/)![1]
+  const reopened = parseDocInputReport(body, { fit: false })!.doc
+  const r = reopened.slides.find(s => s.id === pasted.id)!.runtime!
+  ok(matches(expanded?.doc.slides[0].runtime) && matches(pasted.runtime) && matches(r) &&
+    r.src !== 'asset:scene-map' && r.still !== 'asset:still-map' &&
+    reopened.assets?.[r.src!.slice(6)] === sceneAsset && reopened.assets?.[r.still!.slice(6)] === STILL_PNG &&
+    !body.includes('</script>') && reopened.docId === target.docId,
+    'U9 independent transport: compact load -> colliding clipboard -> actual save -> replace-from-JSON preserves fields, assets and identity')
+}
+
+// Independent malformed-hint test: Unicode line/paragraph separators and
+// C1 next-line are not a printable single line, even though none is ASCII LF.
+{
+  const offenders = ['\u0085', '\u2028', '\u2029'].filter(separator => {
+    const clean = sanitizeSlide({ id: 'unicode', elements: [], runtime: {
+      steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: `select:a${separator}|b` }],
+      values: { mode: 'b' }, library: { id: 'map', version: 1 },
+    } })?.runtime
+    return clean?.props.length !== 1 || clean.props[0].format !== undefined || clean.values?.mode !== 'b' || clean.library?.id !== 'map'
+  })
+  ok(!offenders.length, `U9 independent single-line gate: drop Unicode multiline hints, keep setting and value; accepted=${JSON.stringify(offenders)}`)
+}
+
+// U9 independent round 2: a schema-malformed marker must be dropped
+// atomically, including at clipboard and Replace-from-JSON intakes, not promoted to
+// a valid ownership marker by silently deleting the offending key.
+{
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const failuresByKey: string[] = []
+  for (const extra of ['extra', '__proto__', 'constructor']) {
+    const doc = runtimeDeck()
+    doc.slides[0].runtime!.props[0].format = 'select:Oslo|Bergen'
+    doc.slides[0].runtime!.library = JSON.parse(`{"id":"map","version":1,"${extra}":true}`)
+    const clean = sanitizeSlide(JSON.parse(JSON.stringify(doc.slides[0])))?.runtime
+    const clip = parseClip(serializeSlides(doc.slides, doc))!
+    const pasted = insertSlides(clip, newDoc(), 1)[0]?.runtime
+    const reopened = parseDocInputReport(JSON.stringify(doc), { fit: false })?.doc.slides[0].runtime
+    for (const [path, out] of [['sanitizeSlide', clean], ['clipboard', pasted], ['replace-from-JSON', reopened]] as const) {
+      if (!out || out.library !== undefined || out.props[0].format !== 'select:Oslo|Bergen' || out.values?.title !== 'Bergen')
+        failuresByKey.push(`${extra}/${path}: ${JSON.stringify(out?.library)}`)
+    }
+  }
+  ok(!failuresByKey.length,
+    `U9 R2 atomic library transport: malformed markers dropped, setting kept; repaired=${failuresByKey.join('; ')}`)
+}
+
+// U9 independent round 3: exercise the wire's insert and set operations,
+// then the clipboard gate and save/reopen after a remote settings change.
+{
+  const { SyncState } = await import('../slides/src/sync/crdt.ts')
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const base = newDoc()
+  const sender = structuredClone(base), receiver = structuredClone(base)
+  const a = new SyncState('u9-r3-a'), b = new SyncState('u9-r3-b')
+  a.adopt(sender); b.adopt(receiver)
+  const slide = runtimeDeck().slides[0]
+  // Deliberately reverse field order: the result must be semantically intact
+  // and its canonical gate serialization must become byte-stable.
+  slide.runtime = { library: { version: 1000000, id: 'a' + '-'.repeat(39) },
+    props: [{ format: 'select:' + '🚲'.repeat(193), default: 'Oslo', kind: 'text', label: 'Mode', key: 'mode' }],
+    values: { mode: 'Bergen' }, steps: 3 }
+  const before = structuredClone(sender)
+  sender.slides.push(slide)
+  b.apply(receiver, JSON.parse(JSON.stringify(a.diff(before, sender, { text: true }))))
+  const remoteBefore = structuredClone(receiver)
+  receiver.slides[1].runtime!.values!.mode = '東京'
+  a.apply(sender, JSON.parse(JSON.stringify(b.diff(remoteBefore, receiver, { text: true }))))
+  const target = newDoc()
+  const clip = parseClip(serializeSlides([sender.slides[1]], sender))!
+  const pasted = insertSlides(clip, target, 1)[0]
+  const reopened = parseDocInputReport(JSON.stringify(target), { fit: false })!.doc
+  const actual = reopened.slides.find(s => s.id === pasted.id)!.runtime!
+  if (process.env.U9_R3_MUTANT === 'transport') delete actual.library
+  const canonical = rt.checkRuntime!(actual)!
+  ok(actual.library?.id === 'a' + '-'.repeat(39) && actual.library.version === 1000000 &&
+    actual.props[0].format === 'select:' + '🚲'.repeat(193) && actual.values?.mode === '東京' &&
+    receiver.slides[1].runtime?.values?.mode === '東京' &&
+    JSON.stringify(canonical) === JSON.stringify(rt.checkRuntime!(JSON.parse(JSON.stringify(canonical)))) &&
+    reopened.docId === target.docId,
+    'U9 R3 sync transport: insert, remote setting edit, clipboard, save/reopen and canonical byte stability')
+}
+
+// U9 independent round 4: run the splice tool's actual read/derive/write
+// pipeline for a title edit, with opaque hints that tempt a grammar parser or
+// an HTML/replace-string decoder. No network or scene replacement is needed.
+{
+  const { pathToFileURL } = await import('node:url')
+  const { join } = await import('node:path')
+  const { derive } = await import(pathToFileURL(join(process.cwd(), 'plugins/beta-slides/scripts/splice.mjs')).href)
+  const { readBlock, writeBlock } = await import(pathToFileURL(join(process.cwd(), 'plugins/beta-slides/scripts/lib/bento-doc.mjs')).href)
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const doc = runtimeDeck()
+  const hint = 'future: $& $` $\' \\u003c </script> "quoted" | 🚲'
+  doc.slides[0].runtime!.library = { id: 'a' + '-'.repeat(39), version: 1000000 }
+  doc.slides[0].runtime!.props[0].format = hint
+  const expected = JSON.stringify(doc.slides[0].runtime)
+  const shell = '<html><script id="bento-doc" type="application/bento+json">{}</script><p>shell stays</p></html>'
+  let html = writeBlock(shell, doc)
+  const errors: string[] = []
+  for (let pass = 0; pass < 3; pass++) {
+    const read = readBlock(html)
+    const edited = derive(read, { scenes: [] }, [], { title: `renamed ${pass}` }).doc
+    if (process.env.U9_R4_MUTANT === 'transport') delete edited.slides[0].runtime.props[0].format
+    html = writeBlock(html, edited)
+    const loaded = parseDocInputReport(JSON.stringify(readBlock(html)), { fit: false })!.doc
+    if (JSON.stringify(loaded.slides[0].runtime) !== expected || loaded.docId !== doc.docId ||
+      loaded.title !== `renamed ${pass}` || JSON.stringify(read.slides[0].runtime) !== expected ||
+      html.split('</script>').length !== 2 || !html.endsWith('<p>shell stays</p></html>')) errors.push(String(pass))
+    // A paste must own its marker/prop objects; editing the copy must not
+    // rewrite the source document that the next splice read will use.
+    const [copy] = insertSlides(parseClip(serializeSlides(loaded.slides, loaded))!, newDoc(), 1)
+    copy.runtime!.library!.version = 7
+    copy.runtime!.props[0].format = 'changed'
+    if (JSON.stringify(loaded.slides[0].runtime) !== expected) errors.push(`alias-${pass}`)
+  }
+  ok(!errors.length, `U9 R4 splice transport: opaque hints and library survive three renames, HTML saves and detached pastes; failures=${errors}`)
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

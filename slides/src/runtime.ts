@@ -107,6 +107,14 @@ const MAX_PROPS = 64
 const MAX_TEXT = 4_000
 const MAX_URL = 4_000
 const MAX_STEPS = 10_000
+/** U9: a format hint's length, and the library marker's shape (the library's own folder-id rule, scripts/lib/beta-library.mjs). */
+const MAX_FORMAT = 200
+/** Characters that break a line, or are invisible controls: a hint is one line. */
+const FORMAT_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+/** A hint the gate keeps: a non-empty string of at most MAX_FORMAT characters (code points, as the schema counts them) on one line. */
+const formatHint = (v: unknown): boolean => typeof v === 'string' && v.length > 0 && [...v].length <= MAX_FORMAT && !FORMAT_BREAKS.test(v)
+export const LIBRARY_ID = /^[a-z][a-z0-9-]{0,39}$/
+const MAX_LIBRARY_VERSION = 1_000_000
 const MAX_ASSETS = 64
 /** The deck store's own asset-name rule (server/deck-store/src/worker.js ASSET_NAME_RE). */
 export const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
@@ -128,6 +136,11 @@ const finite = (v: unknown): number | undefined => {
 function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | undefined {
   if (kind === 'number') return finite(v)
   if (kind === 'color') return safeColor(v) ? v.trim() : undefined // trimmed: what safeColor measured is what is kept
+  // UTF-16 units, as every shell already shipped counts them. Counting
+  // characters here would let this shell keep a value an older one then
+  // resets on save (R18). The schema's maxLength counts characters, so for
+  // text made of astral characters (an emoji is two units) it allows up to
+  // twice what the gate keeps; a schema cannot say "UTF-16 units".
   return typeof v === 'string' && v.length <= MAX_TEXT ? v : undefined
 }
 
@@ -146,10 +159,12 @@ const textSchema = { type: 'string', maxLength: MAX_TEXT }
 // space, and neither url( nor expression (the class already bars @ and \).
 const colorSchema = { type: 'string', maxLength: 64, pattern: '^(?![\\s\\S]*(?:[uU][rR][lL]\\s*\\(|[eE][xX][pP][rR][eE][sS][sS][iI][oO][nN]))(?=[\\s\\S]*\\S)[#a-zA-Z0-9(),.%\\s/-]+$' }
 const valueSchema = { anyOf: [textSchema, { type: 'number' }] }
+// U9: a format hint is one printable line; the gate drops anything else
+const formatSchema = { type: 'string', minLength: 1, maxLength: MAX_FORMAT, pattern: '^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$', description: 'a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step' }
 const propSchema = (kind: RuntimeProp['kind'], dflt: Record<string, unknown>) => ({
   type: 'object', additionalProperties: false, required: ['key', 'label', 'kind', 'default'],
   // the gate drops a prop keyed __proto__, so the schema refuses it
-  properties: { key: { type: 'string', pattern: PROP_KEY.source.replace('^', `^(?!${PROTO}$)`) }, label: { type: 'string', maxLength: 200 }, kind: { const: kind }, default: dflt },
+  properties: { key: { type: 'string', pattern: PROP_KEY.source.replace('^', `^(?!${PROTO}$)`) }, label: { type: 'string', maxLength: 200 }, kind: { const: kind }, default: dflt, format: formatSchema },
 })
 const assetRefSchema = (description: string) => ({ type: 'string', maxLength: 206, pattern: '^asset:[^"\'<>{};]+$', description })
 export const RUNTIME_SCHEMA: Record<string, unknown> = {
@@ -169,6 +184,11 @@ export const RUNTIME_SCHEMA: Record<string, unknown> = {
     },
     values: { type: 'object', maxProperties: MAX_PROPS, additionalProperties: valueSchema, description: 'what a presenter set, by declared key. Checked against each key\'s declared kind by the app, which a schema cannot express: a value for an undeclared key, or of the wrong kind, is dropped on load.' },
     assets: { type: 'array', maxItems: MAX_ASSETS, items: { type: 'string', pattern: ASSET_NAME.source }, description: 'store-origin files the scene is handed when presented from the store' },
+    library: {
+      type: 'object', additionalProperties: false, required: ['id', 'version'],
+      description: 'the library scene this slide was inserted from, and which version of it',
+      properties: { id: { type: 'string', pattern: LIBRARY_ID.source }, version: { type: 'integer', minimum: 1, maximum: MAX_LIBRARY_VERSION } },
+    },
   },
 }
 
@@ -206,8 +226,11 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
       if (!isPlainObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || p.key === PROTO) continue
       if (p.kind !== 'text' && p.kind !== 'number' && p.kind !== 'color') continue
       if (out.props.some((q) => q.key === p.key)) continue
-      const label = typeof p.label === 'string' && p.label.length <= 200 ? p.label : p.key
-      out.props.push({ key: p.key, label, kind: p.kind, default: checkValue(p.kind, p.default) ?? KIND_DEFAULT[p.kind] })
+      const label = typeof p.label === 'string' && p.label.length <= 200 ? p.label : p.key // UTF-16 units, as in checkValue
+      const prop: RuntimeProp = { key: p.key, label, kind: p.kind, default: checkValue(p.kind, p.default) ?? KIND_DEFAULT[p.kind] }
+      // U9: a hint is kept when it is one printable line, and dropped (not the setting) otherwise
+      if (formatHint(p.format)) prop.format = p.format as string
+      out.props.push(prop)
     }
   }
 
@@ -224,6 +247,12 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
   if (Array.isArray(value.assets)) {
     const names = [...new Set(value.assets.filter((n): n is string => typeof n === 'string' && ASSET_NAME.test(n)))].slice(0, MAX_ASSETS)
     if (names.length) out.assets = names
+  }
+  // U9: the library marker, or nothing; a malformed one is dropped, never repaired
+  const lib = value.library
+  // exactly its two keys, as the schema says: a marker with anything else on it is not repaired into one
+  if (isPlainObject(lib) && Object.getOwnPropertyNames(lib).sort().join() === 'id,version' && typeof lib.id === 'string' && LIBRARY_ID.test(lib.id) && Number.isInteger(lib.version) && (lib.version as number) >= 1 && (lib.version as number) <= MAX_LIBRARY_VERSION) {
+    out.library = { id: lib.id, version: lib.version as number }
   }
   return out
 }

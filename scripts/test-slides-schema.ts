@@ -81,7 +81,9 @@ function validate(schema: J, value: unknown, root: J, path = '$'): string[] {
   } else if (t === 'string') {
     if (typeof value !== 'string') e('not a string')
     else {
-      if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) e('too long')
+      // BETA FORK (U9 break round 1): JSON Schema counts characters (code points), not UTF-16 units
+      if (typeof schema.maxLength === 'number' && [...value].length > schema.maxLength) e('too long')
+      if (typeof schema.minLength === 'number' && [...value].length < schema.minLength) e('too short') // BETA FORK
       if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern).test(value)) e(`fails /${schema.pattern}/`)
     }
   } else if (t === 'boolean') {
@@ -259,6 +261,153 @@ console.log('\na runtime slide validates; a broken one does not\n')
     ok(check(d, file).some((m) => /unknown key constructor/.test(m)),
       'round 3: inherited Object keys cannot bypass runtime additionalProperties false in the validator')
   }
+  // BETA FORK (U9): the library marker and a setting's format hint
+  {
+    const prop = { key: 'mode', label: 'Mode', kind: 'text', default: 'a' }
+    const valid: J[] = [
+      { steps: 0, props: [{ ...prop, format: 'select:a|b|c' }], library: { id: 'map', version: 1 } },
+      { steps: 2, props: [{ key: 'on', label: 'On', kind: 'number', default: 1, format: 'bool' }, { key: 'p', label: 'P', kind: 'text', default: '59.9, 10.7', format: 'latlon' }], library: { id: 'a-b-' + 'c'.repeat(36), version: 1000000 } },
+      { steps: 0, props: [{ ...prop, format: 'x'.repeat(200) }] },
+    ]
+    const invalid: J[] = [
+      { steps: 0, props: [{ ...prop, format: '' }] }, { steps: 0, props: [{ ...prop, format: 'x'.repeat(201) }] },
+      { steps: 0, props: [{ ...prop, format: 'a\nb' }] }, { steps: 0, props: [{ ...prop, format: 7 }] },
+      { steps: 0, props: [], library: { id: 'Map', version: 1 } }, { steps: 0, props: [], library: { id: 'map', version: 0 } },
+      { steps: 0, props: [], library: { id: 'map', version: 1.5 } }, { steps: 0, props: [], library: { id: 'map' } },
+      { steps: 0, props: [], library: { id: 'map', version: 1, extra: true } }, { steps: 0, props: [], library: 'map' },
+      { steps: 0, props: [], library: { id: 'x'.repeat(41), version: 1 } }, { steps: 0, props: [], library: { id: 'map', version: 1000001 } },
+    ]
+    const badValid = valid.filter((r) => validate(rt, r, file).length || JSON.stringify(checkRuntime(r)) !== JSON.stringify(r))
+    const missed = invalid.filter((r) => validate(rt, r, file).length === 0)
+    const badSaved = [...valid, ...invalid].filter((r) => validate(rt, checkRuntime(r), file).length)
+    ok(!badValid.length && !missed.length && !badSaved.length,
+      `U9 library and format: ${valid.length} kept unchanged, ${invalid.length} refused by the schema, every gate output valid; mismatches=${JSON.stringify({ badValid, missed, badSaved })}`)
+  }
+  // BETA FORK: independent U9 schema/gate differential. JSON Schema counts
+  // Unicode code points, not UTF-16 code units. Keep this oracle separate
+  // from validate(), whose string length implementation is also under test.
+  {
+    const propsSchema = (rt.properties as J).props as J
+    const branch = ((propsSchema.items as J).anyOf as J[])[0]
+    const hintSchema = (branch.properties as J).format as J
+    const acceptsHint = (s: string) => [...s].length >= Number(hintSchema.minLength) &&
+      [...s].length <= Number(hintSchema.maxLength) && new RegExp(String(hintSchema.pattern), 'u').test(s)
+    ok(!acceptsHint('x'.repeat(201)) && !acceptsHint(''),
+      'U9 independent schema: negative controls reject empty and 201-character hints')
+    const hints = [100, 101, 193].map(n => 'select:' + '🚲'.repeat(n))
+    const records = hints.map(format => ({ steps: 0, props: [
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'a', format },
+    ], library: { id: 'map', version: 1 } }))
+    const lost = records.filter(r => acceptsHint(r.props[0].format) &&
+      checkRuntime(r)?.props[0].format !== r.props[0].format)
+    ok(!lost.length,
+      `U9 independent schema: schema-valid astral hints survive gate; lost code-point lengths=${lost.map(r => [...r.props[0].format].length)}`)
+    const falseRejections = records.filter(r => acceptsHint(r.props[0].format) && validate(rt, r, file).length)
+    ok(!falseRejections.length,
+      `U9 independent schema: rig validator agrees with code-point maxLength; falsely rejected=${falseRejections.map(r => [...r.props[0].format].length)}`)
+    const finalTerminators = ['\n', '\r', '\r\n'].filter(suffix => {
+      const record = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'select:a|b' + suffix }] }
+      return validate(rt, record, file).length === 0 && checkRuntime(record)?.props[0].format === undefined
+    })
+    ok(!finalTerminators.length,
+      `U9 independent schema: schema rejects trailing ASCII newlines that the gate drops; incorrectly accepted=${JSON.stringify(finalTerminators)}`)
+    const multiline = ['\u0085', '\u2028', '\u2029'].filter(c => acceptsHint(`select:a${c}|b`))
+    ok(!multiline.length,
+      `U9 independent schema: published single-line pattern refuses Unicode line separators; accepted=${JSON.stringify(multiline)}`)
+  }
+  // BETA FORK (U9 independent round 2): derive malformed markers from the
+  // published closed schema, then require the gate's promised atomic drop.
+  {
+    const malformed = ['extra', '__proto__', 'constructor'].map(key =>
+      JSON.parse(`{"steps":0,"props":[],"library":{"id":"map","version":1,"${key}":true}}`))
+    const rejected = malformed.every(r => validate(rt, r, file).some(e => e.includes('unknown key')))
+    const repaired = malformed.filter(r => checkRuntime(r)?.library !== undefined)
+    ok(rejected && repaired.length === 0,
+      `U9 R2 schema-malformed library is dropped, never repaired; schema rejected all=${rejected}, gate retained=${repaired.length}`)
+  }
+  // BETA FORK (U9 independent round 2): generated boundary cross-product,
+  // with independent expectations and bad inputs to prove rejection works.
+  {
+    const mismatches: string[] = []
+    for (const id of ['a', 'a' + '-'.repeat(39), 'A', 'a'.repeat(41)]) {
+      for (const version of [1, 1000000, 0, 1.5, 1000001]) {
+        for (const format of ['bool', '🚲'.repeat(200), '', '🚲'.repeat(201), 'bool\u0085']) {
+          const record = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format }], library: { id, version } }
+          const validLibrary = (id === 'a' || id === 'a' + '-'.repeat(39)) && (version === 1 || version === 1000000)
+          const validHint = format === 'bool' || format === '🚲'.repeat(200)
+          const gated = checkRuntime(record)!
+          if ((validate(rt, record, file).length === 0) !== (validLibrary && validHint) ||
+              (gated.library !== undefined) !== validLibrary || (gated.props[0].format !== undefined) !== validHint ||
+              validate(rt, gated, file).length !== 0)
+            mismatches.push(`${id}/${version}/${[...format].length}`)
+        }
+      }
+    }
+    ok(!mismatches.length, `U9 R2 generated schema boundaries: 100 records agree in both directions; mismatches=${mismatches.join(',')}`)
+  }
+  // BETA FORK (U9 independent round 3): generate controls at every position
+  // and all supported kinds. Oracle uses numeric code points, not the gate's
+  // regex or the published schema. Test-only mutation proves false acceptance
+  // is detected even when the gate still strips the bad hint.
+  {
+    const failures: string[] = []
+    const schema = structuredClone(rt)
+    if (process.env.U9_R3_MUTANT === 'schema') {
+      const branches = ((((schema.properties as J).props as J).items as J).anyOf as J[])
+      for (const branch of branches) delete ((branch.properties as J).format as J).pattern
+    }
+    const chars = [...Array.from({ length: 161 }, (_, n) => n), 0x2028, 0x2029, 0x1f6b2]
+    for (const kind of ['text', 'number', 'color']) for (const cp of chars) for (const position of [0, 1, 2]) {
+      const pieces = ['a', 'b']; pieces.splice(position, 0, String.fromCodePoint(cp))
+      const format = pieces.join('')
+      const printable = cp >= 32 && !(cp >= 127 && cp <= 159) && cp !== 0x2028 && cp !== 0x2029
+      const prop = { key: 'mode', label: 'Mode', kind, default: kind === 'number' ? 1 : kind === 'color' ? '#123456' : 'a', format }
+      const record = { steps: 0, props: [prop], library: { version: 1, id: 'map' } }
+      const gated = checkRuntime(record)!
+      if ((validate(schema, record, file).length === 0) !== printable ||
+          (gated.props[0].format === format) !== printable || gated.props.length !== 1 ||
+          gated.props[0].default !== prop.default || gated.library?.id !== 'map' ||
+          validate(schema, gated, file).length !== 0) failures.push(`${kind}/U+${cp.toString(16)}/${position}`)
+    }
+    ok(!failures.length, `U9 R3 schema differential: 1476 generated hint/kind/position records; mismatches=${failures.slice(0, 12).join(',')}`)
+  }
+  // BETA FORK (U9 independent round 4): typed JSON boundaries beyond the
+  // earlier integer/range matrix; hints remain opaque even when their grammar
+  // is unknown. The expectation table is independent of both regex sources.
+  {
+    const markers: Array<[unknown, boolean]> = [
+      [{ id: 'a0-9', version: 1e6 }, true], [{ id: 'a', version: 1.0000000000000002 }, false],
+      [{ id: 'a', version: true }, false], [{ id: 'a', version: null }, false],
+      [{ id: 'a', version: [] }, false], [{ id: 'a', version: {} }, false],
+      [{ id: 'a', version: -0 }, false], [{ id: 'a', version: Number.MAX_SAFE_INTEGER }, false],
+      [{ id: ['a'], version: 1 }, false], [{ id: null, version: 1 }, false],
+      [{ id: 'a\n', version: 1 }, false], [{ id: 'a\u2028', version: 1 }, false],
+      [{ id: 'a/b', version: 1 }, false], [{ id: 'a', version: 1, toString: null }, false],
+      [[], false], [null, false],
+    ]
+    const hints: Array<[unknown, boolean]> = [
+      ['range:not-yet-parsed', true], ['select:', true], [' ', true],
+      ['future: $& \\u003c </script> "quoted" | 🚲', true],
+      [true, false], [null, false], [[], false], [{ toString: 'bool' }, false],
+    ]
+    const schema = structuredClone(rt)
+    if (process.env.U9_R4_MUTANT === 'schema') {
+      const lib = ((schema.properties as J).library as J).properties as J
+      ;(lib.version as J).type = 'number'
+    }
+    const errors: string[] = []
+    for (const [i, [library, goodMarker]] of markers.entries()) for (const [j, [format, goodHint]] of hints.entries()) {
+      const input = JSON.parse(JSON.stringify({ steps: 0, props: [
+        { key: 'mode', label: 'Mode', kind: 'text', default: 'a', format },
+      ], values: { mode: 'b' }, library }))
+      const out = checkRuntime(input)!
+      if ((validate(schema, input, file).length === 0) !== (goodMarker && goodHint) ||
+        (out.library !== undefined) !== goodMarker || (out.props[0].format !== undefined) !== goodHint ||
+        (goodHint && out.props[0].format !== format) || out.props[0].default !== 'a' || out.values?.mode !== 'b' ||
+        validate(schema, out, file).length !== 0) errors.push(`${i}/${j}`)
+    }
+    ok(!errors.length, `U9 R4 schema typed boundaries: 128 records reject coercions and preserve opaque hints; mismatches=${errors}`)
+  }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a
   // schema-valid saved record. Kind/value joins remain the documented gap.
@@ -294,7 +443,7 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'rgb(10, 20, 30)' }] }, file).length === 0, 'an ordinary colour default validates')
 
   ok(!!rt && rt.type === 'object' && rt.additionalProperties === false, 'slide.runtime is described, and closed to unknown keys')
-  ok(Object.keys(rt.properties as J).sort().join() === 'assets,props,src,steps,still,url,values', `with the keys the gate accepts (${Object.keys(rt.properties as J).sort().join()})`)
+  ok(Object.keys(rt.properties as J).sort().join() === 'assets,library,props,src,steps,still,url,values', `with the keys the gate accepts (library since U9) (${Object.keys(rt.properties as J).sort().join()})`)
   const deck = JSON.parse(JSON.stringify(starter))
   deck.assets = { ...(deck.assets ?? {}), 'scene-src': 'data:text/html;base64,PHA+aGk8L3A+', 'scene-still': 'data:image/svg+xml;base64,PHN2Zy8+' }
   deck.slides.push({
