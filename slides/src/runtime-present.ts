@@ -252,6 +252,9 @@ interface Held {
   slideId: string
   frame: HTMLIFrameElement
   timer: number
+  /** The node the frame was put on. A reorder under the show moves a slide to
+   *  another section; a frame on its old section's node is in the wrong place. */
+  host: HTMLElement | null
   /** Give up on this frame: remove it and remember that it failed. */
   fail: () => void
   /** What the frame was built from. A remote edit that changes it makes the frame stale. */
@@ -352,6 +355,7 @@ export function createRuntimeShow(
     h.frame.style.visibility = 'hidden'
     h.frame.addEventListener('load', () => uncover(h), { once: true })
     h.frame.addEventListener('error', fail, { once: true })
+    h.host = host
     frames.set(h.key, h)
     host.appendChild(h.frame)
   }
@@ -380,13 +384,13 @@ export function createRuntimeShow(
     })
     const made = allowed ? JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null]) : ''
     const old = frames.get(key)
-    if (old && old.made !== made) { drop(old); failed.delete(key) }
+    if (old && (old.made !== made || old.host !== surface)) { drop(old); failed.delete(key) }
     if (frames.has(key) || failed.has(key)) return
     if (!allowed || !source) return
     const frame = blank(slide.name || slide.id)
     const steps = rt.steps
     const h: Omit<Held, 'fail'> = {
-      key, slideId: key, frame, timer: 0, made,
+      key, slideId: key, frame, timer: 0, made, host: null,
       scene: {
         steps, rt, inline: sceneGetsAssets(source), fetched: false,
         // Not entered: a scene mounted ahead of the show hears nothing. Init
@@ -422,16 +426,15 @@ export function createRuntimeShow(
       const key = slideKey + SEP + el.id
       const allowed = liveFrameAllowed(el as EmbedElement)
       const made = allowed ? (el as EmbedElement).url!.trim() : ''
-      const old = frames.get(key)
-      if (old && old.made !== made) { drop(old); failed.delete(key) }
-      if (frames.has(key) || failed.has(key)) continue
-      if (!allowed) continue
       // scoped to this section: the grid and the speaker view repeat the ids
       const host = surface.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
-      if (!host) continue
+      const old = frames.get(key)
+      if (old && (old.made !== made || old.host !== host)) { drop(old); failed.delete(key) }
+      if (frames.has(key) || failed.has(key)) continue
+      if (!allowed || !host) continue
       const frame = blank((el as EmbedElement).url ?? '')
       frame.src = made
-      hold({ key, slideId: slideKey, frame, timer: 0, made, scene: null }, host)
+      hold({ key, slideId: slideKey, frame, timer: 0, made, host: null, scene: null }, host)
     }
   }
 
@@ -543,7 +546,17 @@ export function createRuntimeShow(
     rebuilt: (at) => {
       if (pendingRefresh) return
       pendingRefresh = true
-      queueMicrotask(() => { pendingRefresh = false; if (!disposed) enter(at(), true) })
+      queueMicrotask(() => {
+        pendingRefresh = false
+        if (disposed) return
+        // A remote edit landed. Only the section showing was rebuilt, so any
+        // frame waiting on a neighbour may stand on a slide that changed, moved
+        // or went: every frame is mounted again from the document as it is
+        // now. (What had failed stays failed; sync() also checks each frame
+        // against its slide on every slide change.)
+        for (const h of [...frames.values()]) drop(h)
+        enter(at(), true)
+      })
     },
     next: () => move('next', true),
     prev: () => move('prev', true),

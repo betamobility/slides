@@ -896,6 +896,97 @@ console.log('\npresent: the frame owner')
         'U13 round2: rebuild after current-scene error stays failed until re-entry')
       t.show.dispose()
     }
+    // Round 3: expectations written before running these probes. No product
+    // fixes here. Mirror main.ts's same-length audience edit: replace ONLY
+    // the current section, then let rebuilt() reconcile the live window.
+    {
+      const t = build([sceneSlide('reorder-a'), sceneSlide('reorder-b'), sceneSlide('reorder-c')])
+      t.show.enter(1, true)
+      const oldA = t.framesOn(0)[0]
+      t.say(oldA, { type: 'bento:ready' })
+      ;[t.doc.slides[0], t.doc.slides[1]] = [t.doc.slides[1], t.doc.slides[0]]
+      t.rebuild(1); t.show.rebuilt(() => 1)
+      await new Promise<void>((r) => queueMicrotask(r))
+      const counts = t.live().join(',')
+      // A frame still connected to the old section is not the scene showing.
+      t.say(oldA, { type: 'bento:navigate', dir: 'exit' })
+      const active = t.framesOn(1)[0]
+      if (active) t.say(active, { type: 'bento:ready' })
+      ok(counts === '1,1,1' && !!active && active.parent === t.slidesEl.children[1].surface
+        && t.moved.length === 0 && t.types(oldA).length === 0,
+        `U13 round3: reordered scene belongs to its rebuilt section (frames=${counts}, old-neighbour messages=${t.types(oldA)}, navigation=${t.moved})`)
+      t.show.dispose()
+    }
+    {
+      const t = build([embedSlide('reorder-page-a', 'page'), embedSlide('reorder-page-b', 'page'), sceneSlide('reorder-tail')])
+      t.show.enter(1, true)
+      const oldA = t.framesOn(0)[0]
+      oldA.fire('load')
+      ;[t.doc.slides[0], t.doc.slides[1]] = [t.doc.slides[1], t.doc.slides[0]]
+      t.rebuild(1); t.show.rebuilt(() => 1)
+      await new Promise<void>((r) => queueMicrotask(r))
+      ok(t.live().join(',') === '1,1,1' && t.framesOn(1)[0]?.parent === t.slidesEl.children[1].surface.hosts.page,
+        `U13 round3: reordered embed belongs to its rebuilt element (frames=${t.live()})`)
+      t.show.dispose()
+    }
+    // Failure path: timeout. Hiding a neighbour removes it from the window;
+    // restoring it must clear the failed tombstone and grant a fresh deadline.
+    {
+      const t = build([sceneSlide('timeout-anchor'), embedSlide('timeout-hidden', 'page')])
+      t.show.enter(0, true)
+      t.framesOn(0)[0].fire('load')
+      const old = t.framesOn(1)[0]
+      tick(10_001)
+      t.doc.slides[1].hidden = true; t.show.refresh(0)
+      t.doc.slides[1].hidden = false; t.show.refresh(0)
+      const fresh = t.framesOn(1)[0]
+      old.fire('load'); old.fire('error')
+      tick(9_999)
+      const survived = fresh?.isConnected && fresh !== old && fresh.style.visibility === 'hidden'
+      tick(2)
+      ok(!!survived && !fresh?.isConnected && t.framesOn(1).length === 0,
+        'U13 round3: timeout retry after hidden-window departure has an independent deadline')
+      t.show.dispose()
+    }
+    // Failure path: error. A second show must not inherit failed keys, queued
+    // refreshes, timers, or messages from the disposed first show.
+    {
+      const first = build([sceneSlide('second-show')])
+      first.show.enter(0, true)
+      const old = first.framesOn(0)[0]
+      old.fire('error'); first.show.rebuilt(() => 0); first.show.dispose()
+      const second = build([sceneSlide('second-show')])
+      second.show.enter(0, false)
+      const fresh = second.framesOn(0)[0]
+      await new Promise<void>((r) => queueMicrotask(r))
+      second.say(old, { type: 'bento:ready' }); second.say(old, { type: 'bento:navigate', dir: 'exit' })
+      old.fire('error'); old.fire('load')
+      second.say(fresh, { type: 'bento:ready' })
+      tick(10_001)
+      ok(fresh.isConnected && second.moved.length === 0 && second.show.step() === 2
+        && second.types(fresh).join() === 'bento:init' && timers.length === 0,
+        'U13 round3: errored first show cannot interfere with the second show')
+      second.show.dispose()
+    }
+    // Failure path: refused source. A missing asset may arrive in a remote
+    // edit while the audience is still on that slide, including a followed step.
+    {
+      const t = build([sceneSlide('late-source')])
+      delete t.doc.assets.sc
+      t.show.enter(0, false)
+      const refused = t.show.step() === null && !t.show.follow(0, 1) && !t.show.canPrev()
+      t.doc.assets.sc = '<p>arrived later</p>'
+      t.rebuild(0); t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      const f = t.framesOn(0)[0]
+      const accepted = t.show.follow(0, 1)
+      t.say(f, { type: 'bento:ready' })
+      const init = f.contentWindow.posted[0] as { step: number }
+      ok(refused && accepted && init.step === 1 && t.types(f).join() === 'bento:init'
+        && f.srcdoc === '<p>arrived later</p>',
+        'U13 round3: refused source recovers on rebuild and opens at the followed step')
+      t.show.dispose()
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
