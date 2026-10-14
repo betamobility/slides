@@ -250,6 +250,8 @@ export interface RuntimeShow {
 interface Held {
   key: string
   slideId: string
+  /** The embed element this frame stands on; null for a scene. */
+  elId: string | null
   frame: HTMLIFrameElement
   /** The node the frame was put on. A reorder under the show moves a slide to
    *  another section; a frame on its old section's node is in the wrong place. */
@@ -259,8 +261,6 @@ interface Held {
   scene: { channel: SceneChannel; steps: number; rt: RuntimeSlide; inline: boolean; fetched: boolean } | null
 }
 
-const SEP = '\u001f'
-const DUP = '\u001e'
 
 export function createRuntimeShow(
   doc: BentoDoc,
@@ -275,7 +275,7 @@ export function createRuntimeShow(
   const frames = new Map<string, Held>()
   /** Frames that reported nothing in time. Not mounted again until their slide
    *  leaves the window or the show enters it; else every slide change would retry. */
-  const failed = new Map<string, string>()
+  const failed = new Map<string, { slide: string; def: string }>()
   let current = -1
   /** The id of the slide at `current`. A remote edit can move a slide to another
    *  index under the show; it is still the same slide, on the same step. */
@@ -298,7 +298,8 @@ export function createRuntimeShow(
     if (!slide) return null
     let n = 0
     for (let k = 0; k < i; k++) if (doc.slides[k].id === slide.id) n++
-    return n ? slide.id + DUP + n : slide.id
+    // (JSON, not a separator: any character may appear in an id a deck was written with)
+    return JSON.stringify([slide.id, n])
   }
 
   /**
@@ -326,7 +327,7 @@ export function createRuntimeShow(
   }
   /** Give up on a frame, and on its definition: the same thing is not tried again
    *  until its slide leaves the window or the show enters it. A changed one is. */
-  const fail = (h: Held) => { drop(h); failed.set(h.key, h.made) }
+  const fail = (h: Held) => { drop(h); failed.set(h.key, { slide: h.slideId, def: h.made }) }
 
   const drop = (h: Held) => {
     if (frames.get(h.key) === h) stopClock(h.key)
@@ -411,13 +412,13 @@ export function createRuntimeShow(
     const made = allowed ? def : ''
     const old = frames.get(key)
     if (old && (old.made !== made || old.host !== surface)) drop(old)
-    if (failed.has(key) && failed.get(key) !== def) failed.delete(key) // it changed: one more try
+    if (failed.has(key) && failed.get(key)!.def !== def) failed.delete(key) // it changed: one more try
     if (frames.has(key) || failed.has(key)) return
     if (!allowed || !source) return
     const frame = blank(slide.name || slide.id)
     const steps = rt.steps
     const h: Held = {
-      key, slideId: key, frame, made, host: null,
+      key, slideId: key, elId: null, frame, made, host: null,
       scene: {
         steps, rt, inline: sceneGetsAssets(source), fetched: false,
         // Not entered: a scene mounted ahead of the show hears nothing. Init
@@ -450,7 +451,7 @@ export function createRuntimeShow(
   const mountEmbeds = (slide: Slide, slideKey: string, surface: HTMLElement) => {
     for (const el of slide.elements ?? []) {
       if (el.type !== 'embed') continue
-      const key = slideKey + SEP + el.id
+      const key = JSON.stringify([slideKey, el.id])
       const allowed = liveFrameAllowed(el as EmbedElement)
       const def = typeof (el as EmbedElement).url === 'string' ? (el as EmbedElement).url!.trim() : ''
       const made = allowed ? def : ''
@@ -458,12 +459,12 @@ export function createRuntimeShow(
       const host = surface.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
       const old = frames.get(key)
       if (old && (old.made !== made || old.host !== host)) drop(old)
-      if (failed.has(key) && failed.get(key) !== def) failed.delete(key) // it changed: one more try
+      if (failed.has(key) && failed.get(key)!.def !== def) failed.delete(key) // it changed: one more try
       if (frames.has(key) || failed.has(key)) continue
       if (!allowed || !host) continue
       const frame = blank((el as EmbedElement).url ?? '')
       frame.src = made
-      hold({ key, slideId: slideKey, frame, made, host: null, scene: null }, host)
+      hold({ key, slideId: slideKey, elId: el.id, frame, made, host: null, scene: null }, host)
     }
   }
 
@@ -477,7 +478,7 @@ export function createRuntimeShow(
     const win = liveWindow(doc.slides.map(inLinearFlow), current, vd)
     const ids = new Set(win.map((i) => sid(i)!))
     for (const h of [...frames.values()]) if (!ids.has(h.slideId) || !h.frame.isConnected) drop(h)
-    for (const key of [...failed.keys()]) if (!ids.has(key.split(SEP)[0])) failed.delete(key)
+    for (const [key, f] of [...failed]) if (!ids.has(f.slide)) failed.delete(key)
     for (const i of win) {
       const slide = doc.slides[i]
       const key = sid(i)!
@@ -487,7 +488,7 @@ export function createRuntimeShow(
       // a frame of the other kind, or for an element that is gone, has nothing to stand on
       for (const h of [...frames.values()]) {
         if (h.slideId !== key) continue
-        const elId = h.scene ? null : h.key.slice(key.length + SEP.length)
+        const elId = h.elId
         if (scene ? !h.scene : !!h.scene || !(slide.elements ?? []).some((el) => el.type === 'embed' && el.id === elId)) drop(h)
       }
       if (scene) mountScene(slide, key, surface)
@@ -546,7 +547,7 @@ export function createRuntimeShow(
         if (f.slideId === key && f.frame.style.visibility === 'hidden') startClock(f)
       }
       // walking onto a slide is one more try for a frame that gave up
-      if (key !== null) for (const k of [...failed.keys()]) if (k.split(SEP)[0] === key) failed.delete(k)
+      if (key !== null) for (const [k, f] of [...failed]) if (f.slide === key) failed.delete(k)
     }
     sync()
     arrive()

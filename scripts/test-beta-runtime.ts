@@ -1100,6 +1100,107 @@ console.log('\npresent: the frame owner')
       ok(t.live().join('') === '11', 'with its own ten seconds')
       t.show.dispose()
     }
+
+    // Round 5: definition replacement, late signals and owner-key isolation.
+    // Expectations are written before execution; product code stays untouched.
+    // Timeout failure: a changed scene gets a new clock, but late signals from
+    // the old frame must not uncover it or cancel that new clock.
+    {
+      const t = build([sceneSlide('r5-timeout-anchor'), sceneSlide('r5-timeout-neighbour')])
+      t.show.enter(0, true)
+      t.framesOn(0)[0].fire('load')
+      const old = t.framesOn(1)[0]
+      tick(10_001)
+      t.doc.assets.replacement = '<p>replacement that also hangs</p>'
+      t.doc.slides[1].runtime!.src = 'asset:replacement'
+      t.show.refresh(0)
+      const fresh = t.framesOn(1)[0]
+      tick(6_000)
+      old.fire('load'); old.fire('error'); t.say(old, { type: 'bento:ready' })
+      const protectedUntilDeadline = fresh?.isConnected && fresh.style.visibility === 'hidden'
+      t.show.refresh(0)
+      tick(4_001)
+      t.show.refresh(0)
+      ok(!!protectedUntilDeadline && fresh !== old && !fresh?.isConnected
+        && t.framesOn(1).length === 0 && t.moved.length === 0,
+        'U13 round5: timed-out scene replacement owns its deadline despite stale signals')
+      t.show.dispose()
+    }
+    // Error failure: replacing only the failed embed definition must neither
+    // replace a healthy sibling nor give another hung sibling a fresh clock.
+    {
+      const t = build([embedSlide('r5-error', 'bad', 'healthy', 'hung')])
+      t.show.enter(0, true)
+      const [bad, healthy, hung] = t.framesOn(0)
+      healthy.fire('load'); bad.fire('error')
+      tick(6_000)
+      ;(t.doc.slides[0].elements[0] as unknown as { url: string }).url = 'https://example.com/fixed'
+      t.show.refresh(0)
+      const replacement = t.framesOn(0).find((f) => f.src === 'https://example.com/fixed')
+      bad.fire('load'); bad.fire('error'); t.say(bad, { type: 'bento:navigate', dir: 'exit' })
+      tick(4_001)
+      const siblings = healthy.isConnected && !hung.isConnected && replacement?.isConnected
+      replacement?.fire('load')
+      tick(10_001)
+      ok(!!siblings && !!replacement?.isConnected && replacement.style.visibility === ''
+        && t.types(replacement).length === 0 && t.moved.length === 0,
+        'U13 round5: errored embed replacement preserves sibling identity and deadlines')
+      t.show.dispose()
+    }
+    // Refused source: removing the referenced asset while a ready neighbour
+    // waits must drop it; restoring the bytes gives a silent, fresh scene.
+    {
+      const t = build([sceneSlide('r5-source-anchor'), sceneSlide('r5-source-neighbour')])
+      t.doc.assets.neighbour = '<p>neighbour</p>'
+      t.doc.slides[1].runtime!.src = 'asset:neighbour'
+      t.show.enter(0, true)
+      const old = t.framesOn(1)[0]
+      t.say(old, { type: 'bento:ready' })
+      delete t.doc.assets.neighbour
+      t.show.refresh(0)
+      const refused = !old.isConnected && !old.srcdoc && t.framesOn(1).length === 0
+      t.doc.assets.neighbour = '<p>restored</p>'
+      t.show.refresh(0)
+      const fresh = t.framesOn(1)[0]
+      if (fresh) { t.say(fresh, { type: 'bento:ready' }); t.say(fresh, { type: 'bento:ready' }) }
+      const silent = fresh && t.types(fresh).length === 0
+      t.say(old, { type: 'bento:navigate', dir: 'exit' })
+      t.show.leave(0); t.show.enter(1, false, 1)
+      t.say(old, { type: 'bento:ready' })
+      ok(!!refused && !!silent && fresh !== old && t.moved.length === 0
+        && t.types(fresh).join() === 'bento:init'
+        && (fresh.contentWindow.posted[0] as { step: number }).step === 1,
+        'U13 round5: removed asset refuses a ready neighbour until a silent replacement can enter')
+      t.show.dispose()
+    }
+    // IDs are untrusted CSS-safe strings, not restricted to an identifier
+    // alphabet. Check the intake too so this is a reachable document shape.
+    {
+      const slide = sanitizeSlide(sceneSlide('r5\u001fvalid-id'))!
+      const t = build([slide])
+      t.show.enter(0, true)
+      tick(10_001)
+      const failedOnce = t.framesOn(0).length === 0
+      t.show.refresh(0)
+      ok(slide?.id === 'r5\u001fvalid-id' && failedOnce && t.framesOn(0).length === 0,
+        `U13 round5: accepted separator in slide id cannot erase a timeout failure (frames after refresh=${t.framesOn(0).length})`)
+      t.show.dispose()
+    }
+    {
+      // The generated duplicate key for the second "same" equals the literal
+      // id of the third slide. All three pass the real untrusted intake.
+      const slides = [sceneSlide('r5-same'), sceneSlide('r5-same'), sceneSlide('r5-same\u001e1')]
+        .map((s) => sanitizeSlide(s)!)
+      const t = build(slides)
+      t.show.enter(1, true)
+      for (let i = 0; i < 3; i++) for (const f of t.framesOn(i)) t.say(f, { type: 'bento:ready' })
+      const neighbour = t.framesOn(2)[0]
+      if (neighbour) t.say(neighbour, { type: 'bento:navigate', dir: 'exit' })
+      ok(t.live().join() === '1,1,1' && t.moved.length === 0
+        && !!neighbour && t.types(neighbour).length === 0,
+        `U13 round5: literal and generated slide keys cannot alias the current scene (frames=${t.live()}, navigation=${t.moved}, neighbour messages=${neighbour ? t.types(neighbour) : 'none'})`)
+      t.show.dispose()
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
