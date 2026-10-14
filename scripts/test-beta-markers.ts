@@ -277,6 +277,21 @@ console.log('the rule itself (no git needed)')
   } finally { rmSync(fixture, { recursive: true, force: true }) }
 }
 
+// break round 6: comments inside an executable template interpolation are real;
+// literal text in the same template is not. Start with the forgotten marker.
+{
+  const file = 'slides/src/editor/editor.ts'
+  const cases = [
+    ['const result = `BETA FORK ${enableFeature()}`', false],
+    ['const result = `${ /* BETA FORK: expression hook */ enableFeature() }`', true],
+  ] as const
+  for (const [line, marked] of cases) {
+    const h = hooksOf(file, '@@ -0,0 +1 @@\n+' + line + '\n', [line])[0]
+    ok(h.file === file && h.line === 1 && h.marked === marked,
+      `template interpolation: ${marked ? 'real comment passes' : 'forgotten marker names file and line'}`)
+  }
+}
+
 console.log('\nthe upstream this fork tracks')
 const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8')
 const tag = /Upstream base: `(v\d+\.\d+\.\d+)`/.exec(agents)?.[1]

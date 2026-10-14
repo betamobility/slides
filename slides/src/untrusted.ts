@@ -394,7 +394,8 @@ const chartOption: Check = tag((v) => {
 // where it is a value and never re-parsed as markup (the mediaRef argument).
 const webUrl: Check = tag((v) =>
   typeof v === 'string' && v.length <= LIMITS.prose && isWebUrl(v) ? v : DROP,
-  { type: 'string', maxLength: LIMITS.prose, pattern: '^https?://' })
+  // BETA FORK: any case of the scheme, as isWebUrl (the gate) accepts it; upstream's pattern was lowercase only
+  { type: 'string', maxLength: LIMITS.prose, pattern: '^[hH][tT][tT][pP][sS]?://' })
 // An embedded document is another deck's JSON, and a deck's envelope carries
 // its collaboration secrets: `collab` (room, read key, private halves, and the
 // saved sync state) and `docId`. Neither is content. Left in place they would

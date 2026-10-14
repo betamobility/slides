@@ -407,6 +407,19 @@ export async function run(Miniflare) {
         && proxied.at(-1).url === `https://${PAGES_ORIGIN}/schema/slides.json${query}`,
         'schema query never selects a private route or another origin')
     }
+    // break round 6: fragments and encoded separators never select a private deck route.
+    // Refusal controls first; encoded paths that stay under /schema/ only hit Pages.
+    for (const path of ['/schema%3f/api/decks', '/schema%23/api/decks',
+      '/schema/%2e%2e%2fapi/decks', '/schema/%252e%252e%252fapi/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      const isStatic = path.startsWith('/schema/')
+      ok(response.status === (isStatic ? 200 : 401)
+        && proxied.length === before + (isStatic ? 1 : 0)
+        && (!isStatic || proxied.at(-1).url === `https://${PAGES_ORIGIN}${path}`),
+        `schema encoded delimiter stays within routing boundary: ${path}`)
+      await response.text()
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

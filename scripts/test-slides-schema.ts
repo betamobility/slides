@@ -362,5 +362,74 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ;(globalThis as any).document = priorDocument
 }
 
+// BETA FORK: tests exercise the plugin writers, not copied output shapes.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  // Keep this import external to the bundle: the CLI guard belongs to splice.mjs.
+  const { pathToFileURL } = await import('node:url')
+  const { create, derive, readProject } = await import(pathToFileURL(join(root, 'plugins/beta-slides/scripts/splice.mjs')).href)
+  const { readBlock } = await import(pathToFileURL(join(root, 'plugins/beta-slides/scripts/lib/bento-doc.mjs')).href)
+  const fixture = mkdtempSync(join(tmpdir(), 'beta-schema-round6-'))
+  const priorFetch = globalThis.fetch
+  try {
+    const sceneDir = join(fixture, 'scenes/live-scene')
+    mkdirSync(sceneDir, { recursive: true })
+    writeFileSync(join(fixture, 'deck.json'), JSON.stringify({ title: 'Schema splice probe', slides: [] }))
+    writeFileSync(join(sceneDir, 'index.html'), '<main>Scene</main>')
+    writeFileSync(join(sceneDir, 'still.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>')
+    writeFileSync(join(sceneDir, 'scene.json'), JSON.stringify({ steps: 2, url: 'https://example.test/scene', props: [
+      { key: 'caption', kind: 'text', default: 'Oslo' },
+      { key: 'amount', kind: 'number', default: 3 },
+      { key: 'color', kind: 'color', default: '#123456' },
+    ] }))
+    const template = read('beta/templates/blank.bento.html')
+    let posted = ''
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url) === 'https://schema-test.invalid/templates/blank.bento.html') return new Response(template)
+      if (String(url) === 'https://schema-test.invalid/api/harness/decks' && init?.method === 'POST') {
+        posted = init.body
+        return Response.json({ id: 'round6', url: 'https://schema-test.invalid/d/round6' }, { status: 201 })
+      }
+      throw new Error('unexpected test request: ' + url)
+    }) as typeof fetch
+    await create(fixture, { skipUrlCheck: true, env: { SLIDES_STORE_URL: 'https://schema-test.invalid', CF_ACCESS_CLIENT_ID: 'test-id', CF_ACCESS_CLIENT_SECRET: 'test-secret' }, log() {} })
+    const created = readBlock(posted)
+    // Failing-first control: this exact writer output with a misspelled slide key fails.
+    const broken = structuredClone(created)
+    broken.slides[0].runtim = broken.slides[0].runtime
+    ok(check(broken, file).some(e => e.includes('unknown key runtim')), 'create: unknown slide key is rejected')
+    ok(check(created, file).length === 0, 'create: actual POST document validates: ' + JSON.stringify(check(created, file)))
+    const project = readProject(fixture)
+    const replaced = derive(created, project).doc
+    const invalid = structuredClone(replaced)
+    invalid.slides[0].runtime.url = 'javascript:alert(1)'
+    ok(check(invalid, file).length > 0 && check(replaced, file).length === 0,
+      'applyScene: replacement validates and invalid runtime URL fails')
+  } finally { globalThis.fetch = priorFetch; rmSync(fixture, { recursive: true, force: true }) }
+}
+
+// BETA FORK: round 6, Beta web embeds must retain every accepted URL on save.
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  for (const url of ['https://example.test/live', 'HTTPS://example.test/live']) {
+    const embed = { id: 'web-probe', type: 'embed', x: 0, y: 0, w: 1280, h: 720,
+      rotation: 0, opacity: 1, app: 'web', url, live: true, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+    const bad = { ...embed, accidentalKey: true }
+    ok(validate((file.$defs as J).embed as J, bad, file).length > 0,
+      'web embed: unknown key fails (' + url + ')')
+    const gated = sanitizeElement(embed)
+    const d = starterDoc()
+    d.slides[0].elements = [gated!]
+    // The save rig above captured a minimal shell; use the real serializer.
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(d))!)
+    const errs = check(saved, file)
+    ok(!!gated && (gated as any).url === url && saved.$schema === file.$id
+      && saved.slides[0].elements[0].url === url && errs.length === 0,
+      'web embed: gate-kept URL validates (' + url + '): ' + JSON.stringify(errs))
+  }
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)
