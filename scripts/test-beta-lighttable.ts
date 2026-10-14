@@ -369,6 +369,189 @@ console.log('\nround 2: keyboard, state identity, and undo (no browser required)
     ok(intercepted === 0 && ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8',
       'R2 file-only drag passes through both grid capture handlers untouched')
   }
+
+  console.log('\nround 3: identity during a drag and state relationships (expected behaviour first)')
+  {
+    // Execute upstream's real dragstart producer and the grid's real drop
+    // consumer. Geometry is supplied in CSS pixels; no browser is simulated.
+    const wire = cls.members.find((n: any) => n.name?.getText(ast) === 'wireThumbDrag')
+    const wireThumbDrag = new Function(
+      ts.transpile('function wireThumbDrag(item, index) ' + wire.body.getText(ast),
+        { target: ts.ScriptTarget.ES2022 }) + '; return wireThumbDrag')()
+    const h = harness(plain(8), [1, 4], 1)
+    const listeners = new Map<string, (ev: any) => void>()
+    const transfer = new Map<string, string>()
+    wireThumbDrag.call({ thumbTargets: () => h.editor.thumbSel }, {
+      addEventListener: (name: string, fn: (ev: any) => void) => listeners.set(name, fn),
+      classList: { add() {} },
+    }, 1)
+    listeners.get('dragstart')!({ dataTransfer: {
+      setData: (type: string, value: string) => transfer.set(type, value),
+    } })
+    // A remote insertion uses the Store's external-mutation/emit path, not a
+    // local undoable edit. A slides event invalidates sidebar index selection.
+    h.store.doc.slides.unshift({ id: 'X', elements: [] })
+    h.store.emit('slides')
+    const remoteOrder = ids(h.store.doc.slides)
+    const boxes = grid(9, 3)
+    h.table.boxes = () => boxes
+    h.table.point = () => ({ x: boxes[8].left - 5, y: boxes[8].top + 20 })
+    h.table.clearBar = () => {}
+    h.table.dropped({ dataTransfer: { types: [...transfer.keys()],
+      getData: (type: string) => transfer.get(type) }, preventDefault() {}, stopPropagation() {} })
+    const got = ids(h.store.doc.slides)
+    h.store.undo()
+    // Either preserve the dragged identities or explicitly cancel stale drags;
+    // never silently move different slides because their indices now match.
+    ok((got === 'X,1,3,4,6,7,2,5,8' || got === remoteOrder) &&
+      ids(h.store.doc.slides) === remoteOrder,
+      `R3 AE9 remote insertion during drag never substitutes slide identities: got ${got}`)
+  }
+
+  {
+    // Round 2 proves permutation only. Here C is B's state, even though B
+    // is itself A's state. The new Alt+arrow path can move B by clicking C.
+    const s: S[] = [{ id: 'A' }, { id: 'B', stateOf: 'A' },
+      { id: 'C', stateOf: 'B' }, { id: 'D' }]
+    const h = harness(s, [], 2)
+    h.key('ArrowRight', true)
+    const got = ids(h.store.doc.slides)
+    h.store.undo()
+    // Holding a nested unit in place is also safe. Separating B from C is not.
+    ok((got === 'D,A,B,C' || got === 'A,D,B,C' || got === 'A,B,C,D') &&
+      ids(h.store.doc.slides) === 'A,B,C,D',
+      `R3 nested-state keyboard move keeps the child behind its parent and undoes: got ${got}`)
+  }
+
+  {
+    // RTL earlier is Alt+Right, not Alt+Left. Two selected parents carry a
+    // hidden state, and hidden identities must survive undo AND redo.
+    const s = [{ id: 'A' }, { id: 'B', hidden: true },
+      { id: 'B1', stateOf: 'B', hidden: true }, { id: 'C' }, { id: 'D' }]
+    const h = harness(s, [1, 4], 4)
+    h.table.host.rtl = () => true
+    h.key('ArrowRight', true)
+    const moved = ids(h.store.doc.slides)
+    const hidden = () => h.store.doc.slides.filter((s: any) => s.hidden).map((s: S) => s.id).join(',')
+    const afterHidden = hidden()
+    h.store.undo()
+    const undone = ids(h.store.doc.slides)
+    h.store.redo()
+    ok(moved === 'B,B1,D,A,C' && undone === 'A,B,B1,C,D' &&
+      ids(h.store.doc.slides) === moved && afterHidden === 'B,B1' && hidden() === 'B,B1',
+      'R3 RTL two-parent keyboard move carries hidden state through undo and redo')
+  }
+
+  {
+    // Escape immediately after undo: the slides event cleared thumbSel.
+    // It must keep the Store's restored current slide rather than use indices
+    // from the just-undone movement. Repeat with a new explicit selection.
+    const h = harness(plain(8), [1, 4], 4)
+    h.key('ArrowRight', true)
+    h.store.undo()
+    const restored = h.store.doc.slides[h.store.currentIndex].id
+    h.key('Escape')
+    const noSelection = !h.table.on && !h.editor.thumbSel.length &&
+      h.store.doc.slides[h.store.currentIndex].id === restored
+    h.table.on = true
+    h.editor.thumbSel = [6, 2]
+    h.key('Escape')
+    ok(noSelection && !h.table.on && h.store.currentIndex === 2,
+      'R3 Escape after keyboard undo handles empty and renewed selections')
+  }
+
+  {
+    const h = harness(plain(8))
+    let touched = 0
+    const event = { dataTransfer: { types: ['Files', 'text/plain', 'text/html'],
+      getData() { touched++; return '' } }, preventDefault() { touched++ },
+      stopPropagation() { touched++ } }
+    // Files often advertise other MIME types. Grid capture must still leave
+    // them to the deck loader. Off-grid slide drags belong to upstream too.
+    h.table.dragOver(event)
+    h.table.dropped(event)
+    h.table.on = false
+    event.dataTransfer.types = ['text/bento-slide']
+    h.table.dragOver(event)
+    h.table.dropped(event)
+    ok(touched === 0 && !h.table.holdsScroll(0),
+      'R3 mixed-MIME file drops and off-grid slide drops bypass grid interception')
+  }
+}
+
+// Exercise the constructor/enter/leave state machine with an inert DOM port.
+// This tests lifecycle state only, not CSS, layout or native event dispatch.
+{
+  class NodePort extends EventTarget {
+    classes = new Set<string>()
+    attrs = new Map<string, string>()
+    classList = {
+      contains: (s: string) => this.classes.has(s),
+      add: (...ss: string[]) => { ss.forEach((s) => this.classes.add(s)) },
+      remove: (...ss: string[]) => { ss.forEach((s) => this.classes.delete(s)) },
+      toggle: (s: string, force = !this.classes.has(s)) => {
+        if (force) this.classes.add(s); else this.classes.delete(s)
+        return force
+      },
+    }
+    setAttribute(k: string, v: string) { this.attrs.set(k, v) }
+    querySelectorAll() { return [] }
+  }
+  const globals = globalThis as any
+  const oldDocument = Object.getOwnPropertyDescriptor(globals, 'document')
+  const oldWindow = Object.getOwnPropertyDescriptor(globals, 'window')
+  Object.defineProperty(globals, 'document', { configurable: true, value: { createElement: () => new NodePort() } })
+  Object.defineProperty(globals, 'window', { configurable: true, value: new EventTarget() })
+  try {
+    const sidebar = new NodePort()
+    sidebar.classList.add('ed-collapsed')
+    const host: any = { sidebar, slides: () => plain(3), current: () => 1,
+      selection: () => [], goTo() {}, drop() {}, rebuild() {}, deselect() {},
+      allowed: () => true, rtl: () => false, label: 'Slide grid' }
+    const scope = new AbortController()
+    let table = new lt.LightTable(host, false, scope.signal)
+    table.enter()
+    table.leave()
+    if (!sidebar.classList.contains('ed-collapsed')) throw new Error('Direct collapse restoration regressed')
+    table.enter()
+    // editor.ts build() discards the old sidebar, aborts its scope, and gives
+    // the replacement LightTable only the previous instance's on boolean.
+    scope.abort()
+    const fresh = new NodePort()
+    table = new lt.LightTable({ ...host, sidebar: fresh }, table.on)
+    table.key({ key: 'Escape' } as KeyboardEvent)
+    ok(!table.on && fresh.classList.contains('ed-collapsed'),
+      'R3 Escape after workspace reconstruction restores the pre-grid collapsed list')
+  } finally {
+    if (oldDocument) Object.defineProperty(globals, 'document', oldDocument); else delete globals.document
+    if (oldWindow) Object.defineProperty(globals, 'window', oldWindow); else delete globals.window
+  }
+}
+
+console.log('\na drag whose deck changed under it')
+{
+  const s = plain(8)
+  const same = (a: number[] | null, b: number[] | null) => JSON.stringify(a) === JSON.stringify(b)
+  ok(same(lt.resolveDrag(s, '[1,4]', ['2', '5'], [1, 4]), [1, 4]), 'nothing changed: the slides the drag picked up are where they were')
+  const shifted = [{ id: 'X' }, ...s]
+  ok(same(lt.resolveDrag(shifted, '[1,4]', ['2', '5'], []), [2, 5]), 'a slide inserted before them: they are found where they are now')
+  ok(same(lt.resolveDrag(shifted, '1', ['2'], []), [2]), 'the same for a single slide and an older, bare-number payload')
+  ok(lt.resolveDrag(s.filter((x) => x.id !== '5'), '[1,4]', ['2', '5'], []) === null, 'one of them deleted meanwhile: the drag is cancelled')
+  // a drag this grid did not see begin has only its numbers
+  ok(same(lt.resolveDrag(s, '[1,4]', null, [1, 4]), [1, 4]), 'no ids, payload agrees with the selection: taken')
+  ok(lt.resolveDrag(shifted, '[1,4]', null, []) === null, 'no ids, selection cleared by a remote change: a block drag is cancelled, not applied to other slides')
+  ok(lt.resolveDrag(s, '[1,4]', null, [1, 5]) === null, 'no ids, payload and selection disagree: cancelled')
+  ok(same(lt.resolveDrag(s, '[3]', null, []), [3]) && lt.resolveDrag(s, '[9]', null, []) === null, 'no ids, one slide: taken while it exists')
+  ok(lt.resolveDrag(s, 'junk', ['2'], [1]) === null && lt.resolveDrag(s, '[]', null, []) === null && lt.resolveDrag(s, '[-1]', null, []) === null, 'a payload with nothing usable in it moves nothing')
+  ok(same(lt.payloadIndices('[1,"2",3.5,-1]'), [1, 2]) && same(lt.payloadIndices('4'), [4]), 'payload numbers are read as upstream reads them')
+}
+
+console.log('\na state of a state is held')
+{
+  const s: S[] = [{ id: 'A' }, { id: 'B', stateOf: 'A' }, { id: 'C', stateOf: 'B' }, { id: 'D' }]
+  ok(lt.keyMove(s, [2], 1) === null && lt.keyMove(s, [1], 1) === null, 'selecting the nested state, or its parent, moves nothing by keyboard')
+  ok(lt.keyMove(s, [3], -1) !== null, 'a plain slide beside them still moves')
+  ok(lt.splitsUnit(s, [0]) && lt.splitsUnit(s, [2]) && !lt.splitsUnit(s, [3]) && !lt.splitsUnit(plain(4), [1, 2]), 'and a drag of them is held the same way; ordinary units never are')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

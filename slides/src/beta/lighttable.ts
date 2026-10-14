@@ -140,6 +140,24 @@ export function neighbour(rects: Box[], from: number, key: ArrowKey, rtl = false
 }
 
 /**
+ * Whether moving this selection would part a state from its parent. It never
+ * does for the units slidesel.ts knows (a parent with its states). It does
+ * for a state of a state: the parent would move and leave it behind, or it
+ * would leave without its parent. Such a move is held, by key and by drag.
+ */
+export function splitsUnit(slides: SlideLike[], selected: Iterable<number>): boolean {
+  const moving = new Set(expand(slides, selected))
+  for (const i of moving) {
+    if (heads(slides, i)) continue
+    const p = parentOf(slides, i)
+    if (!moving.has(p) || !heads(slides, p)) return true
+  }
+  // the other way round: a slide that stays, whose parent would leave
+  for (let j = 0; j < slides.length; j++) if (!moving.has(j) && !heads(slides, j) && moving.has(parentOf(slides, j))) return true
+  return false
+}
+
+/**
  * The drop index that moves the selection one gap later (`dir` 1) or earlier
  * (-1) as a block: past the next unit that is not selected, or before the
  * previous one. A split selection gathers on the way. Null when the move
@@ -149,6 +167,7 @@ export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1
   const sel = [...selected]
   const moving = new Set(expand(slides, sel))
   if (!moving.size) return null
+  if (splitsUnit(slides, sel)) return null
   const free = parents(slides, slides.map((_, i) => i)).filter((p) => !moving.has(p))
   let drop: number
   if (dir > 0) {
@@ -172,10 +191,46 @@ export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1
   return moveBlock(slides, sel, drop) === slides ? null : drop
 }
 
+/** A drag payload as upstream writes it: parent indices, or one index from an older payload. */
+export function payloadIndices(payload: string): number[] {
+  let from: number[]
+  try { const v = JSON.parse(payload); from = Array.isArray(v) ? v.map(Number) : [Number(v)] } catch { from = [parseInt(payload)] }
+  return from.filter((n) => Number.isInteger(n) && n >= 0)
+}
+
+/**
+ * The indices to move when a drag is dropped, or null to cancel it. The
+ * payload holds INDICES as they were when the drag began, and the deck can
+ * change under a drag (a collaborator inserts a slide): the same numbers then
+ * name other slides. `ids` are the slides the drag picked up, when the drag
+ * began in this grid; they are found again where they are now. Without them
+ * (a drag this grid did not see begin) a payload is taken only while it still
+ * agrees with the selection: a remote change clears the selection, so a block
+ * drag that outlived one is cancelled rather than applied to other slides.
+ */
+export function resolveDrag(slides: SlideLike[], payload: string, ids: string[] | null, selection: number[]): number[] | null {
+  const from = payloadIndices(payload)
+  if (!from.length) return null
+  if (ids) {
+    const now = ids.map((id) => slides.findIndex((s) => s.id === id))
+    return now.length && now.every((i) => i >= 0) ? now : null
+  }
+  if (from.some((i) => i >= slides.length)) return null
+  if (from.length > 1) {
+    const sel = new Set(selection)
+    return from.length === sel.size && from.every((i) => sel.has(i)) ? from : null
+  }
+  return from
+}
+
 // ---- the DOM half (editor.ts) ------------------------------------------------
 
 const ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1.5"/><rect x="14" y="4" width="7" height="6" rx="1.5"/><rect x="3" y="14" width="7" height="6" rx="1.5"/><rect x="14" y="14" width="7" height="6" rx="1.5"/></svg>'
 const PAYLOAD = 'text/bento-slide'
+/** Whether the list was collapsed when the grid was turned on; put back on
+ *  leaving. Outside the instance: the workspace is rebuilt (and this object
+ *  with it) while the grid stays on, and the answer must outlive that. */
+let listWasCollapsed = false
 
 /** What the editor hands over. Everything the grid does goes through these. */
 export interface LightTableHost {
@@ -204,8 +259,8 @@ export class LightTable {
   readonly button: HTMLButtonElement
   private readonly host: LightTableHost
   private bar: HTMLElement | null = null
-  /** Whether the list was collapsed when the grid was turned on; put back on leaving. */
-  private wasCollapsed = false
+  /** The slides a drag that began in this grid picked up, by id. */
+  private dragged: string[] | null = null
   /** The last two presses on the grid: which slide, and whether on a thumbnail's own tools. */
   private presses: { id: string | null; tool: boolean }[] = []
   /** The active thumbnail the list last scrolled to. */
@@ -236,7 +291,9 @@ export class LightTable {
     sb.addEventListener('dragover', (ev) => this.dragOver(ev), { capture: true, signal })
     sb.addEventListener('drop', (ev) => this.dropped(ev), { capture: true, signal })
     sb.addEventListener('dragleave', (ev) => { if (!sb.contains(ev.relatedTarget as Node | null)) this.clearBar() }, { signal })
-    sb.addEventListener('dragend', () => this.clearBar(), { signal })
+    // after upstream's own dragstart on the thumbnail has written the payload
+    sb.addEventListener('dragstart', (ev) => this.picked(ev), { signal })
+    sb.addEventListener('dragend', () => { this.dragged = null; this.clearBar() }, { signal })
     sb.addEventListener('mousedown', (ev) => this.pressed(ev), { capture: true, signal })
     sb.addEventListener('dblclick', (ev) => this.opened(ev), { signal })
     // a window made narrow enough for the list to become a drawer leaves the grid
@@ -261,7 +318,7 @@ export class LightTable {
     this.shown = -1
     this.presses = []
     // the list may be collapsed; the grid is the list, so it has to show
-    this.wasCollapsed = this.host.sidebar.classList.contains('ed-collapsed')
+    listWasCollapsed = this.host.sidebar.classList.contains('ed-collapsed')
     this.host.sidebar.classList.remove('ed-collapsed')
     this.host.deselect()
     this.paint()
@@ -273,8 +330,8 @@ export class LightTable {
     if (!this.on) return
     this.on = false
     this.clearBar()
-    this.host.sidebar.classList.toggle('ed-collapsed', this.wasCollapsed)
-    this.wasCollapsed = false
+    this.host.sidebar.classList.toggle('ed-collapsed', listWasCollapsed)
+    listWasCollapsed = false
     this.paint()
     this.host.rebuild()
     if (at != null && at >= 0) this.host.goTo(at)
@@ -304,6 +361,12 @@ export class LightTable {
     return this.on && !!ev.dataTransfer && [...ev.dataTransfer.types].includes(PAYLOAD)
   }
 
+  private picked(ev: DragEvent): void {
+    const slides = this.host.slides()
+    const from = payloadIndices(ev.dataTransfer?.getData(PAYLOAD) ?? '')
+    this.dragged = from.length && from.every((i) => slides[i]) ? from.map((i) => slides[i].id) : null
+  }
+
   private dragOver(ev: DragEvent): void {
     if (!this.isSlideDrag(ev)) return
     ev.preventDefault()
@@ -331,7 +394,10 @@ export class LightTable {
     const p = this.point(ev)
     const gap = gapAt(this.boxes(), this.host.slides(), p.x, p.y, this.host.rtl())
     this.clearBar()
-    this.host.drop(ev.dataTransfer!.getData(PAYLOAD), gap)
+    const ids = this.dragged ?? null
+    this.dragged = null
+    const from = resolveDrag(this.host.slides(), ev.dataTransfer!.getData(PAYLOAD), ids, this.host.selection())
+    if (from && !splitsUnit(this.host.slides(), from)) this.host.drop(JSON.stringify(from), gap)
   }
 
   private clearBar(): void {
