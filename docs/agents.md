@@ -5,6 +5,26 @@ guide matches the bento/slides shell of the same version. A deck's `#bento-doc`
 JSON is always the source of truth — if it was written by a newer shell it may
 carry features beyond this guide; unknown keys are ignored, never fatal.
 
+<!-- BETA FORK: the start block for the Beta build; upstream's install lines below are for bento.page. -->
+> **Beta build: start here.** This copy is served from
+> `https://slides.betamobility.ai/agents.md`. Where this guide names
+> `bento.page`, `nyblnet/bento` or the `bento-slides` skill, a Beta deck uses
+> the Beta build instead: the shell from
+> `https://slides.betamobility.ai/releases/slides/Bento_Slides.bento.html`,
+> the templates under `https://slides.betamobility.ai/templates/`, and the
+> **beta-slides** skill in Claude Code:
+>
+> ```
+> /plugin marketplace add betamobility/slides
+> /plugin install beta-slides@beta-slides
+> ```
+>
+> (claude.ai and Claude Desktop: upload
+> `https://slides.betamobility.ai/skills/beta-slides.zip` under Settings →
+> Skills.) Then read "Beta build" at the end of this guide: the design system,
+> live scenes (runtime slides), the scene library and publishing to the
+> store all live there.
+
 > **Bento is a suite.** Slides is the first app; **Spaces**
 > (`bento/spaces`, notes and wiki) ships alongside it. **Dash** (`bento/dash`,
 > data and sheets) is in development, and a word processor is planned. Each ships
@@ -826,3 +846,111 @@ credentials (`/agents.md`, `/templates/` and `/releases/` are public): build
 the deck, hand the `.bento.html` over, and tell the user to open it and pick
 **Share → Save to Beta**, which stores it under their own identity and returns
 the deck's link.
+
+### The scene library: insert a reviewed scene, change its settings
+
+Beta keeps reviewed, reusable scenes (a counter, a map, …) in a library on
+the store. Prefer one over writing a scene from nothing when it fits: it is
+already reviewed, it has a still, and the person can change its settings in
+the editor's panel without you.
+
+```bash
+node splice.mjs --library      # what there is: ids, settings (kind, format, default) and presets
+```
+
+Insert one as a new runtime slide with a `library` edit in `edits.json`:
+
+```json
+[{ "library": "map", "id": "cph", "insertAfter": "s3", "preset": "Copenhagen", "values": { "zoom": 7 } }]
+```
+
+- `id` names the new slide (no slide in the deck may use it); `insertAfter`
+  is the id of a slide in the deck, or `"end"`. The slide goes after that
+  slide and its states.
+- `preset` is a preset's name from `--library` (the first preset when you
+  leave it out); `values` go over the preset's. Every setting you do not name
+  keeps the preset's value or its default.
+- The slide is exactly what the editor's Scenes gallery writes: the scene's
+  page inlined, its still, its settings and a library marker. Only runtime
+  scenes can be inserted this way; a web scene goes on a slide the person
+  owns, so tell them to insert it from the editor's **Scenes** button.
+
+Change a library slide's settings with a `values` edit, never by replacing
+it from a folder:
+
+```json
+[{ "slideId": "cph", "values": { "place": "Malmö", "position": "55.605, 13.0038" } }]
+```
+
+- Only the settings you name change; every other value, including what the
+  person set in the panel, stays. `--read` lists library slides with their
+  current values.
+- A value must be one the setting keeps as given, or the run is refused,
+  naming the key: the right kind, one of a `select:` list's choices, `0` or
+  `1` for `bool`, inside a `range:min:max:step` and on its steps, and a
+  position written `"latitude, longitude"` with a comma and a space and at
+  most six decimals.
+- A slide carrying a library marker is replaced from a scene folder only
+  when that folder's `scene.json` declares the same `"library": "<id>"`.
+  Without it the run is refused, naming the slide: the replace would discard
+  what the person set. Declared, the replace is a normal replace (values are
+  dropped, as for any replace) and the marker stays.
+
+### Adding a scene to the library
+
+Write a library scene when the same live scene will be wanted in more than
+one deck: a widget people insert from the editor's **Scenes** gallery and
+tune in its settings panel. A scene for one deck stays a scene folder in
+that deck's project. Check `node splice.mjs --library` first; a setting on
+an existing scene is cheaper than a new one.
+
+A library scene is a folder in the betamobility/slides repository, reviewed
+like code on its own branch and pull request:
+
+```
+beta/library/<id>/
+  scene.json    name, version, description, kind, steps, props, presets
+  index.html    the page (kind "runtime"), the same scene contract as any runtime slide
+  still.svg     what the slide shows wherever no frame runs
+```
+
+- `<id>` is lower case letters, digits and hyphens, starting with a letter.
+  Copy `beta/library/counter/` (no steps) or `beta/library/map/` (two steps)
+  as the starting point.
+- `version` is a whole number. Raise it on every change: a deck keeps the
+  copy it was given, and the number says which.
+- `index.html` follows the scene contract under "Runtime slides": wait for `bento:init`, send
+  `bento:ready`, leave steps and navigation to the shell, honour reduced
+  motion, and draw its defaults on its own so it previews in a plain
+  browser tab. Everything inline; at most 256 KB as the shell measures it
+  (base64, padding included).
+- `still.svg` is a picture: no script, no `foreignObject`, no event
+  handlers, no links out, and under about 60 KB so it travels with the
+  slide to every collaborator.
+- `props` are the settings the person edits in the panel, with the shell's
+  three kinds: `text`, `number`, `color`. Anything else rides on `text` or
+  `number` with a `format` hint: `bool`, `latlon`, `select:a|b|c`,
+  `range:min:max:step`. Every prop has a `default`, and the scene reads
+  every value from `bento:init` and `bento:props`.
+- `presets` name sets of values; there is at least one, the gallery opens on
+  the first, and a preset lists only what differs from the defaults.
+- A web scene (`"kind": "web"`) has a `url` instead of `index.html`; it is
+  `https` on a host Beta controls (`WEB_HOSTS` in
+  `slides/src/beta/libraryrules.ts`: today `slides.betamobility.ai` and
+  `design.betamobility.ai`).
+
+Check it before the pull request, with the same commands CI runs:
+
+```bash
+node scripts/build-beta-library.mjs --check     # validates every folder into one manifest
+node scripts/test-beta-library.ts
+node scripts/test-beta-library-browser.mjs      # needs Chrome and a built shell
+```
+
+Open `index.html` in a plain browser tab to see the defaults before calling
+it done. Merging does not reach
+the gallery: `node scripts/build-beta-library.mjs --upload` publishes the
+manifest to the store with the store's service token, and that is a release
+step the maintainer runs or asks for, never one an agent takes on its own.
+Once uploaded, the scene is in every signed-in person's **Scenes** gallery,
+in `node splice.mjs --library`, and insertable with a `library` edit.
