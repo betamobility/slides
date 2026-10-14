@@ -309,8 +309,9 @@ export function createRuntimeShow(
    * (see sync), never just because a remote edit landed: a collaborator
    * typing must neither reload a neighbour's page nor run out its clock.
    *
-   * A rebuild of the section SHOWING does detach its frames (the caller
-   * replaces the nodes), and their replacements start a new clock. That is
+   * A section the caller rebuilds does lose its frames (the nodes are
+   * replaced: the section SHOWING on any remote edit, every section on an
+   * insert, delete or reorder), and their replacements start a new clock. That is
    * deliberate: the other rule, one clock across replacements, removes a
    * healthy page that needs 600 ms while edits land every 500 ms and leaves
    * it failed after the typing stops. A page that hangs under constant edits
