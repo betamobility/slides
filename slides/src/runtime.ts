@@ -136,8 +136,12 @@ const finite = (v: unknown): number | undefined => {
 function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | undefined {
   if (kind === 'number') return finite(v)
   if (kind === 'color') return safeColor(v) ? v.trim() : undefined // trimmed: what safeColor measured is what is kept
-  // characters, as the schema's maxLength counts them (an emoji is one, not two)
-  return typeof v === 'string' && [...v].length <= MAX_TEXT ? v : undefined
+  // UTF-16 units, as every shell already shipped counts them. Counting
+  // characters here would let this shell keep a value an older one then
+  // resets on save (R18). The schema's maxLength counts characters, so for
+  // text made of astral characters (an emoji is two units) it allows up to
+  // twice what the gate keeps; a schema cannot say "UTF-16 units".
+  return typeof v === 'string' && v.length <= MAX_TEXT ? v : undefined
 }
 
 /**
@@ -222,7 +226,7 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
       if (!isPlainObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || p.key === PROTO) continue
       if (p.kind !== 'text' && p.kind !== 'number' && p.kind !== 'color') continue
       if (out.props.some((q) => q.key === p.key)) continue
-      const label = typeof p.label === 'string' && [...p.label].length <= 200 ? p.label : p.key
+      const label = typeof p.label === 'string' && p.label.length <= 200 ? p.label : p.key // UTF-16 units, as in checkValue
       const prop: RuntimeProp = { key: p.key, label, kind: p.kind, default: checkValue(p.kind, p.default) ?? KIND_DEFAULT[p.kind] }
       // U9: a hint is kept when it is one printable line, and dropped (not the setting) otherwise
       if (formatHint(p.format)) prop.format = p.format as string
@@ -246,7 +250,8 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
   }
   // U9: the library marker, or nothing; a malformed one is dropped, never repaired
   const lib = value.library
-  if (isPlainObject(lib) && typeof lib.id === 'string' && LIBRARY_ID.test(lib.id) && Number.isInteger(lib.version) && (lib.version as number) >= 1 && (lib.version as number) <= MAX_LIBRARY_VERSION) {
+  // exactly its two keys, as the schema says: a marker with anything else on it is not repaired into one
+  if (isPlainObject(lib) && Object.getOwnPropertyNames(lib).sort().join() === 'id,version' && typeof lib.id === 'string' && LIBRARY_ID.test(lib.id) && Number.isInteger(lib.version) && (lib.version as number) >= 1 && (lib.version as number) <= MAX_LIBRARY_VERSION) {
     out.library = { id: lib.id, version: lib.version as number }
   }
   return out

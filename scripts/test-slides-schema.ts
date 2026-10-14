@@ -315,6 +315,36 @@ console.log('\na runtime slide validates; a broken one does not\n')
     ok(!multiline.length,
       `U9 independent schema: published single-line pattern refuses Unicode line separators; accepted=${JSON.stringify(multiline)}`)
   }
+  // BETA FORK (U9 independent round 2): derive malformed markers from the
+  // published closed schema, then require the gate's promised atomic drop.
+  {
+    const malformed = ['extra', '__proto__', 'constructor'].map(key =>
+      JSON.parse(`{"steps":0,"props":[],"library":{"id":"map","version":1,"${key}":true}}`))
+    const rejected = malformed.every(r => validate(rt, r, file).some(e => e.includes('unknown key')))
+    const repaired = malformed.filter(r => checkRuntime(r)?.library !== undefined)
+    ok(rejected && repaired.length === 0,
+      `U9 R2 schema-malformed library is dropped, never repaired; schema rejected all=${rejected}, gate retained=${repaired.length}`)
+  }
+  // BETA FORK (U9 independent round 2): generated boundary cross-product,
+  // with independent expectations and bad inputs to prove rejection works.
+  {
+    const mismatches: string[] = []
+    for (const id of ['a', 'a' + '-'.repeat(39), 'A', 'a'.repeat(41)]) {
+      for (const version of [1, 1000000, 0, 1.5, 1000001]) {
+        for (const format of ['bool', '🚲'.repeat(200), '', '🚲'.repeat(201), 'bool\u0085']) {
+          const record = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format }], library: { id, version } }
+          const validLibrary = (id === 'a' || id === 'a' + '-'.repeat(39)) && (version === 1 || version === 1000000)
+          const validHint = format === 'bool' || format === '🚲'.repeat(200)
+          const gated = checkRuntime(record)!
+          if ((validate(rt, record, file).length === 0) !== (validLibrary && validHint) ||
+              (gated.library !== undefined) !== validLibrary || (gated.props[0].format !== undefined) !== validHint ||
+              validate(rt, gated, file).length !== 0)
+            mismatches.push(`${id}/${version}/${[...format].length}`)
+        }
+      }
+    }
+    ok(!mismatches.length, `U9 R2 generated schema boundaries: 100 records agree in both directions; mismatches=${mismatches.join(',')}`)
+  }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a
   // schema-valid saved record. Kind/value joins remain the documented gap.

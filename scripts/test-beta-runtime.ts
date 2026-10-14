@@ -1317,8 +1317,7 @@ console.log('\nlibrary fields: library and format')
   // the gate drops a malformed marker or hint, never the slide or the setting
   for (const [lib, why] of [[{ id: 'Map', version: 1 }, 'an upper-case id'], [{ id: 'map', version: 0 }, 'version 0'], [{ id: 'map', version: '3' }, 'a string version'], [{ id: 'map' }, 'no version'], ['map', 'a string'], [{ id: 'map', version: 1, extra: 'x' }, 'an extra key']] as [unknown, string][]) {
     const out = rt.checkRuntime({ ...record, library: lib })
-    const tidy = lib && typeof lib === 'object' && (lib as { extra?: string }).extra !== undefined
-    ok(tidy ? JSON.stringify(out?.library) === '{"id":"map","version":1}' : out?.library === undefined && out?.props.length === 4, `a library marker with ${why} is ${tidy ? 'cut to its two keys' : 'dropped, the slide kept'}`)
+    ok(out?.library === undefined && out?.props.length === 4, `a library marker with ${why} is dropped, the slide kept`)
   }
   for (const [format, why] of [['', 'empty'], ['x'.repeat(201), 'too long'], ['a\nb', 'two lines'], [7, 'a number']] as [unknown, string][]) {
     const out = rt.checkRuntime({ ...record, props: [{ key: 'm', label: 'M', kind: 'text', default: 'a', format }] })
@@ -1370,16 +1369,41 @@ console.log('\nlibrary fields: library and format')
   const oldReopened = mod.exports.checkRuntime(JSON.parse(JSON.stringify(newOpened)))
   ok(compatible(oldSaved) && compatible(newOpened) && compatible(oldReopened),
     'U9 independent compatibility: prototype-named select and chosen Unicode value survive OLD -> NEW -> OLD')
+  // U9 independent round 2: the character-count fix must not widen the
+  // saved text domain beyond what the frozen pre-U9 gate can preserve.
+  // Use a short, valid select hint; values are intentionally free strings
+  // until U10, and a downloaded deck must retain them on an old-shell save.
+  {
+    const cases = [2000, 2001, 4000].map(n => {
+      const text = '🚲'.repeat(n)
+      const input = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text',
+        default: text, format: 'select:a|b' }], values: { mode: text }, library: { id: 'map', version: 1 } }
+      const current = rt.checkRuntime(JSON.parse(JSON.stringify(input)))!
+      const oldSave = mod.exports.checkRuntime(JSON.parse(JSON.stringify(current)))!
+      const reopened = rt.checkRuntime(JSON.parse(JSON.stringify(oldSave)))!
+      return { n, admitted: current.props[0].default === text && current.values?.mode === text,
+        kept: reopened.props[0].default === text && reopened.values?.mode === text,
+        oldDefaultLength: [...String(oldSave.props[0].default)].length, oldValuePresent: !!oldSave.values }
+    })
+    // (corrected after the round: the property is admitted => kept; 2 001 emoji are
+    // past every shipped shell's limit, so this shell must refuse them, not keep them)
+    ok(cases.every(c => !c.admitted || c.kept) && cases[0].admitted && !cases[1].admitted,
+      `U9 R2 old-shell Unicode save: admitted select defaults and chosen values survive NEW -> OLD -> NEW; ${JSON.stringify(cases)}`)
+  }
   const older = mod.exports.checkRuntime(record)
   ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
   ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
     'and keeps every setting, its kind, its default and the chosen value: a select is plain text there, a bool and a range plain numbers')
-  // lengths are characters, as the schema counts them, on every text the record holds
+  // A hint counts characters (older shells drop it anyway); a label and a text
+  // value count UTF-16 units, as every shipped shell does, so nothing this
+  // shell keeps is reset by an older one (R18, Codex round 2 on U9).
   const bikes = (n: number) => '\u{1F6B2}'.repeat(n)
-  const wide = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(200), kind: 'text', default: bikes(4000), format: 'select:' + bikes(193) }], values: { k: bikes(4000) } })
-  ok(wide?.props[0].label === bikes(200) && wide?.props[0].default === bikes(4000) && wide?.props[0].format === 'select:' + bikes(193) && wide?.values?.k === bikes(4000), 'a label, a default, a hint and a value at their limits in emoji are kept: a limit counts characters')
-  const over = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(201), kind: 'text', default: bikes(4001), format: 'select:' + bikes(194) }], values: { k: bikes(4001) } })
-  ok(over?.props[0].label === 'k' && over?.props[0].default === '' && !('format' in over!.props[0]) && over?.values === undefined, 'one character past each limit is refused as before')
+  const fits = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(100), kind: 'text', default: bikes(2000), format: 'select:' + bikes(193) }], values: { k: bikes(2000) } })
+  ok(fits?.props[0].label === bikes(100) && fits?.props[0].default === bikes(2000) && fits?.props[0].format === 'select:' + bikes(193) && fits?.values?.k === bikes(2000), 'emoji up to the UTF-16 limit are kept in a label and a value, up to 200 characters in a hint')
+  const past = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(101), kind: 'text', default: bikes(2001), format: 'select:' + bikes(194) }], values: { k: bikes(2001) } })
+  ok(past?.props[0].label === 'k' && past?.props[0].default === '' && !('format' in past!.props[0]) && past?.values === undefined, 'one emoji past each limit is refused, exactly where an older shell refuses it')
+  const oldKeeps = mod.exports.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(100), kind: 'text', default: bikes(2000) }], values: { k: bikes(2000) } })
+  ok(oldKeeps?.props[0].default === bikes(2000) && oldKeeps?.values?.k === bikes(2000), 'and what this shell keeps, the older one keeps too')
   ok(JSON.stringify(rt.checkRuntime(older)) === JSON.stringify(older), 'what the older shell saved opens on this one unchanged (the hints are gone; nothing else is)')
 }
 
@@ -1444,6 +1468,29 @@ console.log('\nlibrary fields: library and format')
     return clean?.props.length !== 1 || clean.props[0].format !== undefined || clean.values?.mode !== 'b' || clean.library?.id !== 'map'
   })
   ok(!offenders.length, `U9 independent single-line gate: drop Unicode multiline hints, keep setting and value; accepted=${JSON.stringify(offenders)}`)
+}
+
+// U9 independent round 2: a schema-malformed marker must be dropped
+// atomically, including at clipboard and Replace-from-JSON intakes, not promoted to
+// a valid ownership marker by silently deleting the offending key.
+{
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const failuresByKey: string[] = []
+  for (const extra of ['extra', '__proto__', 'constructor']) {
+    const doc = runtimeDeck()
+    doc.slides[0].runtime!.props[0].format = 'select:Oslo|Bergen'
+    doc.slides[0].runtime!.library = JSON.parse(`{"id":"map","version":1,"${extra}":true}`)
+    const clean = sanitizeSlide(JSON.parse(JSON.stringify(doc.slides[0])))?.runtime
+    const clip = parseClip(serializeSlides(doc.slides, doc))!
+    const pasted = insertSlides(clip, newDoc(), 1)[0]?.runtime
+    const reopened = parseDocInputReport(JSON.stringify(doc), { fit: false })?.doc.slides[0].runtime
+    for (const [path, out] of [['sanitizeSlide', clean], ['clipboard', pasted], ['replace-from-JSON', reopened]] as const) {
+      if (!out || out.library !== undefined || out.props[0].format !== 'select:Oslo|Bergen' || out.values?.title !== 'Bergen')
+        failuresByKey.push(`${extra}/${path}: ${JSON.stringify(out?.library)}`)
+    }
+  }
+  ok(!failuresByKey.length,
+    `U9 R2 atomic library transport: malformed markers dropped, setting kept; repaired=${failuresByKey.join('; ')}`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
