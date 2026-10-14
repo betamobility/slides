@@ -21,6 +21,9 @@ import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
 import { LightTable, thumbBase } from '../beta/lighttable' // BETA FORK: the slide list as a grid
 import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { fetchLibrary, storeHost } from '../beta/store' // BETA FORK (U11): the scene library
+import { insertScene, openGallery } from '../beta/gallery' // BETA FORK (U11)
+import { OfflineError } from '../../../kernel/src/net.ts' // BETA FORK (U11)
 import { rasterizeSvg } from '../export/raster'
 import { openExportImagesDialog } from './exportimages'
 import { paletteSignature, resolveThemeRefs } from '../palette'
@@ -512,6 +515,11 @@ export class Editor {
     }, !!this.lightTable?.on, this.buildScope.signal)
     history.prepend(this.lightTable.button) // BETA FORK: in the group beside the slide-list toggle; an authored home, so unfolding puts it back
     this.phoneChrome.demote.push(this.lightTable.button) // BETA FORK: folds into ⋯ with the rest
+    // BETA FORK (U11): the scene gallery, beside the light table; folds into ⋯ too
+    const galleryB = btn(ICONS.template, t('Scenes'), () => this.openSceneGallery(), t('Insert a scene from the library'))
+    galleryB.classList.add('ed-btn-gallery')
+    history.append(galleryB)
+    this.phoneChrome.demote.push(galleryB)
     const canvasWrap = div('ed-canvas-wrap')
     // presenting lives in ONE split pill beside the zoom control: the main
     // half starts the fullscreen show; its menu holds tab-fill and speaker view.
@@ -631,6 +639,20 @@ export class Editor {
     this.panel = new PropsPanel(this.props, this.store)
 
     if (!canWriteDeck(this.store.doc.collab)) this.enterReaderMode()
+  }
+
+  /** BETA FORK (U11): the scene gallery (beta/gallery.ts). Off the store
+   *  origin, or offline, it says why and fetches nothing. */
+  private openSceneGallery() {
+    const store = storeHost()
+    openGallery({
+      availability: () => (!isStoreOrigin() ? 'not-store' : offlineEnabled() ? 'offline' : 'ok'),
+      storeLink: store ? `${store}/` : null,
+      load: fetchLibrary,
+      signedOut: (err) => err instanceof StoreSignedOutError,
+      offline: (err) => err instanceof OfflineError,
+      insert: (scene, preset) => insertScene(this.store, scene, preset),
+    })
   }
 
   /** BETA FORK (runtime slides U5): hide the insert tools while the current
