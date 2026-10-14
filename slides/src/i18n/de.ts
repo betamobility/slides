@@ -26,6 +26,7 @@ export const de: Catalog = {
   "Insert — text, shapes, images, media, tables, charts": "Einfügen — Text, Formen, Bilder, Medien, Tabellen, Diagramme",
   "More actions": "Weitere Aktionen",
   "Slides — show or hide the slide list": "Folien — Folienliste ein- oder ausblenden",
+  "Slide grid": "Folienraster",
   "Format — show or hide the properties panel": "Format — Eigenschaftenleiste ein- oder ausblenden",
   "Motion path — drag points · click a point for bezier handles · double-click path to insert · double-click point to remove · scroll a point to change its speed": "Bewegungspfad — Punkte ziehen · Punkt anklicken für Bezier-Griffe · Doppelklick auf den Pfad fügt ein · Doppelklick auf einen Punkt entfernt · Scrollen ändert das Tempo",
   "Slide number": "Foliennummer",

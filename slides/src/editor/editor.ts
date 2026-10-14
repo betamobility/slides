@@ -19,6 +19,7 @@ import { renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
+import { LightTable, thumbBase } from '../beta/lighttable' // BETA FORK: the slide list as a grid
 import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { rasterizeSvg } from '../export/raster'
 import { openExportImagesDialog } from './exportimages'
@@ -156,6 +157,7 @@ export class Editor {
    *  is the anchor and the canvas slide; this set is what a drag moves and
    *  Delete removes. Empty = just the current slide, as before. */
   private thumbSel: number[] = []
+  private lightTable?: LightTable // BETA FORK: the slide list as a grid (beta/lighttable.ts); its on/off lives in memory
   private sidebar!: HTMLElement
   private props!: HTMLElement
   private dirtyDot!: HTMLElement
@@ -493,6 +495,23 @@ export class Editor {
     // main area
     const main = div('ed-main')
     this.sidebar = div('ed-sidebar')
+    // BETA FORK: the light table. It gets what it needs through this object and
+    // owns its own button; the state survives a rebuild of the workspace.
+    this.lightTable = new LightTable({
+      sidebar: this.sidebar,
+      slides: () => this.store.doc.slides,
+      current: () => this.store.currentIndex,
+      selection: () => this.thumbSel,
+      goTo: (i) => this.store.goTo(i),
+      drop: (payload, i) => this.dropSlides(payload, i),
+      rebuild: () => { this.rebuildSidebar(); this.updatePanelChevrons() },
+      deselect: () => this.store.select([]),
+      allowed: () => !this.panelsAreDrawers,
+      rtl: () => isRtl(),
+      label: t('Slide grid'),
+    }, !!this.lightTable?.on, this.buildScope.signal)
+    history.prepend(this.lightTable.button) // BETA FORK: in the group beside the slide-list toggle; an authored home, so unfolding puts it back
+    this.phoneChrome.demote.push(this.lightTable.button) // BETA FORK: folds into ⋯ with the rest
     const canvasWrap = div('ed-canvas-wrap')
     // presenting lives in ONE split pill beside the zoom control: the main
     // half starts the fullscreen show; its menu holds tab-fill and speaker view.
@@ -880,6 +899,7 @@ export class Editor {
   }
 
   togglePanel(side: 'left' | 'right') {
+    if (side === 'left' && this.lightTable?.on) { this.lightTable.leave(); return } // BETA FORK: hiding the list while it is the grid means back to the list
     const el = side === 'left' ? this.sidebar : this.props
     el.classList.toggle('ed-collapsed')
     this.updatePanelChevrons()
@@ -1757,7 +1777,7 @@ export class Editor {
       num.textContent = String(this.linearNumber(i))
     }
     // thumb width tracks the (resizable) sidebar; states render smaller
-    const base = Math.max(96, this.panelW.left - 52)
+    const base = thumbBase(this.panelW.left, !!this.lightTable?.on) // BETA FORK: one getter for both places, the grid has its own width
     const surface = renderThumbnail(slide, this.store.doc, isState ? Math.round(base * 0.84) : base)
     if (slide.comments?.some((c) => !c.resolved)) {
       const badge = div('ed-thumb-cmt')
@@ -1976,6 +1996,7 @@ export class Editor {
     const before = this.store.doc.slides
     const after = moveBlock(before, from, index)
     if (after === before) return
+    if (this.store.readOnly) return // BETA FORK: the commit is refused on a read-only copy; the selection and the current slide must not move to where nothing went
     const currentId = before[this.store.currentIndex]?.id
     const movedIds = expand(before, from).map((i) => before[i].id)
     this.store.commit(() => { this.store.doc.slides = after }, 'slides')
@@ -1996,7 +2017,7 @@ export class Editor {
       n.classList.toggle('selected', selected.has(idx))
       if (isActive) active = n
     })
-    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (!this.lightTable?.holdsScroll(this.store.currentIndex)) active?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) // BETA FORK: a scrolled grid must not jump under the pointer
   }
 
   private scheduleThumbs() {
@@ -2004,7 +2025,7 @@ export class Editor {
     this.thumbTimer = window.setTimeout(() => {
       const thumbs = this.sidebar.querySelectorAll<HTMLElement>('.ed-thumb')
       if (thumbs.length !== this.store.doc.slides.length) return this.rebuildSidebar()
-      const base = Math.max(96, this.panelW.left - 52)
+      const base = thumbBase(this.panelW.left, !!this.lightTable?.on) // BETA FORK
       thumbs.forEach((item) => {
         const slide = this.store.doc.slides[Number(item.dataset.index)]
         if (!slide) return
@@ -3267,6 +3288,9 @@ export class Editor {
       const inField =
         ev.target instanceof Element &&
         ev.target.closest('input, textarea, select, [contenteditable="true"]') != null
+
+      // BETA FORK: in the grid, Escape leaves it and the arrows walk it (beta/lighttable.ts)
+      if (!inField && !document.querySelector('.ed-about-overlay, dialog[open], .ed-dropdown.open, .ed-layoutpick') && this.lightTable?.key(ev)) return
 
       if (mod && ev.key.toLowerCase() === 's') {
         ev.preventDefault()

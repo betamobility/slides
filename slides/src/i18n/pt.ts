@@ -29,6 +29,7 @@ export const pt: Catalog = {
   "Insert — text, shapes, images, media, tables, charts": "Inserir — texto, formas, imagens, mídia, tabelas, gráficos",
   "More actions": "Mais ações",
   "Slides — show or hide the slide list": "Slides — mostrar ou ocultar a lista",
+  "Slide grid": "Grade de slides",
   "Format — show or hide the properties panel": "Formato — mostrar ou ocultar o painel de propriedades",
   "Motion path — drag points · click a point for bezier handles · double-click path to insert · double-click point to remove · scroll a point to change its speed": "Trajetória — arraste os pontos · clique num ponto para as alças bézier · duplo clique na trajetória para inserir · duplo clique num ponto para remover · role para mudar a velocidade",
   "Insert": "Inserir",

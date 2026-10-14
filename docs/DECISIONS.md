@@ -10687,3 +10687,36 @@ while building it; each was tried the other way first.
 Guards: `scripts/test-beta-runtime.ts` (sections 9 and 10) and
 `scripts/test-beta-liveness.mjs`.
 
+## 2026-10-14 — Beta fork: the light table is the slide list, and what it holds back
+
+The grid view (`slides/src/beta/lighttable.ts`) is a class on `.ed-sidebar`:
+upstream's thumbnails, selection, drag payload and `moveBlock`, laid over the
+whole work area as a wrapping grid. No second slide list. Settled while
+building it:
+
+- **The keyboard move is Alt+arrow**, and it moves the painted selection (or,
+  with none, the slide the grid is on). Plain arrows walk the grid; Shift and
+  Cmd/Ctrl arrows are left to upstream.
+- **The on/off state is in memory**, like the drawer state, and so is whether
+  the list was collapsed before. The selection survives leaving the grid.
+- **The grid covers the properties panel and the present buttons too.** It is
+  for arranging; Escape or a double-click is one step back.
+- **A drag in the grid follows slides, not numbers.** Upstream's payload holds
+  indices from when the drag began; a slide inserted remotely during the drag
+  made them name other slides. The grid notes the dragged slides by id at
+  dragstart and finds them again at the drop, or cancels. A drag in the LIST
+  is upstream's and unchanged.
+- **A state of a state is held.** Upstream's unit is a parent with its states.
+  A deck can still carry a state whose parent is itself a state; moving the
+  parent would leave it behind, so the grid refuses that move, by key and by
+  drag, and takes other slides past the chain as a whole.
+- **Two marked lines in upstream files change behaviour outside the grid, and
+  are worth offering upstream.** `slidesel.ts` `moveBlock` builds the moved
+  block unit by unit and places every moving slide exactly once (a state that
+  had drifted away from its parent used to land inside the next unit of the
+  block). `editor.ts` `dropSlides` returns on a read-only copy before it moves
+  the selection and the current slide to where nothing went.
+
+Guards: `scripts/test-beta-lighttable.ts`, `scripts/test-beta-lighttable-browser.mjs`,
+and upstream's `scripts/test-slides-multiselect.ts`, now in the `beta` job.
+
