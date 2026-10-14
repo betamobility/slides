@@ -1409,6 +1409,32 @@ console.log('\nlibrary fields: library and format')
       JSON.stringify(legacy) === JSON.stringify(expected) && JSON.stringify(reopened) === JSON.stringify(expected),
       'U9 R3 old-shell capacity: 64 select props preserve boundary labels, defaults and own prototype-named values')
   }
+  // U9 independent round 4: an old shell edits a selected value, then its
+  // saved JSON is pasted into this shell and imported over an existing deck.
+  // Delimiters are data: neither gate owns the future format grammar.
+  {
+    const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+    const selected = '東京 | "quoted" \\u003c </script> 🚲'
+    const input = { steps: 1, props: [
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'initial', format: 'select:initial|東京' },
+      { key: 'other', label: 'Other', kind: 'text', default: 'kept', format: 'bad\nline' },
+    ], values: { mode: 'initial', other: 'also kept' }, library: { id: 'map', version: 2 } }
+    const legacy = mod.exports.checkRuntime(rt.checkRuntime(input))!
+    legacy.values!.mode = selected
+    if (process.env.U9_R4_MUTANT === 'compat') legacy.props[0].kind = 'select' as any
+    const doc = runtimeDeck()
+    doc.slides[0].runtime = JSON.parse(JSON.stringify(legacy))
+    const target = newDoc()
+    const clip = parseClip(serializeSlides(doc.slides, doc))!
+    const pasted = insertSlides(clip, target, 1)[0]
+    const live = newDoc()
+    const loaded = parseDocInputReport(JSON.stringify(target), { fit: false, live })!.doc
+    const out = loaded.slides.find(s => s.id === pasted.id)!.runtime!
+    ok(out.props.length === 2 && out.props[0].kind === 'text' && out.props[0].default === 'initial' &&
+      out.props.every(p => !('format' in p)) && out.library === undefined &&
+      out.values?.mode === selected && out.values?.other === 'also kept' && loaded.docId === live.docId,
+      'U9 R4 legacy edit transport: selected text and malformed-hint sibling survive old save, paste and live JSON import')
+  }
   const older = mod.exports.checkRuntime(record)
   ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
   ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
@@ -1546,6 +1572,42 @@ console.log('\nlibrary fields: library and format')
     JSON.stringify(canonical) === JSON.stringify(rt.checkRuntime!(JSON.parse(JSON.stringify(canonical)))) &&
     reopened.docId === target.docId,
     'U9 R3 sync transport: insert, remote setting edit, clipboard, save/reopen and canonical byte stability')
+}
+
+// U9 independent round 4: run the splice tool's actual read/derive/write
+// pipeline for a title edit, with opaque hints that tempt a grammar parser or
+// an HTML/replace-string decoder. No network or scene replacement is needed.
+{
+  const { pathToFileURL } = await import('node:url')
+  const { join } = await import('node:path')
+  const { derive } = await import(pathToFileURL(join(process.cwd(), 'plugins/beta-slides/scripts/splice.mjs')).href)
+  const { readBlock, writeBlock } = await import(pathToFileURL(join(process.cwd(), 'plugins/beta-slides/scripts/lib/bento-doc.mjs')).href)
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const doc = runtimeDeck()
+  const hint = 'future: $& $` $\' \\u003c </script> "quoted" | 🚲'
+  doc.slides[0].runtime!.library = { id: 'a' + '-'.repeat(39), version: 1000000 }
+  doc.slides[0].runtime!.props[0].format = hint
+  const expected = JSON.stringify(doc.slides[0].runtime)
+  const shell = '<html><script id="bento-doc" type="application/bento+json">{}</script><p>shell stays</p></html>'
+  let html = writeBlock(shell, doc)
+  const errors: string[] = []
+  for (let pass = 0; pass < 3; pass++) {
+    const read = readBlock(html)
+    const edited = derive(read, { scenes: [] }, [], { title: `renamed ${pass}` }).doc
+    if (process.env.U9_R4_MUTANT === 'transport') delete edited.slides[0].runtime.props[0].format
+    html = writeBlock(html, edited)
+    const loaded = parseDocInputReport(JSON.stringify(readBlock(html)), { fit: false })!.doc
+    if (JSON.stringify(loaded.slides[0].runtime) !== expected || loaded.docId !== doc.docId ||
+      loaded.title !== `renamed ${pass}` || JSON.stringify(read.slides[0].runtime) !== expected ||
+      html.split('</script>').length !== 2 || !html.endsWith('<p>shell stays</p></html>')) errors.push(String(pass))
+    // A paste must own its marker/prop objects; editing the copy must not
+    // rewrite the source document that the next splice read will use.
+    const [copy] = insertSlides(parseClip(serializeSlides(loaded.slides, loaded))!, newDoc(), 1)
+    copy.runtime!.library!.version = 7
+    copy.runtime!.props[0].format = 'changed'
+    if (JSON.stringify(loaded.slides[0].runtime) !== expected) errors.push(`alias-${pass}`)
+  }
+  ok(!errors.length, `U9 R4 splice transport: opaque hints and library survive three renames, HTML saves and detached pastes; failures=${errors}`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

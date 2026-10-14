@@ -371,6 +371,43 @@ console.log('\na runtime slide validates; a broken one does not\n')
     }
     ok(!failures.length, `U9 R3 schema differential: 1476 generated hint/kind/position records; mismatches=${failures.slice(0, 12).join(',')}`)
   }
+  // BETA FORK (U9 independent round 4): typed JSON boundaries beyond the
+  // earlier integer/range matrix; hints remain opaque even when their grammar
+  // is unknown. The expectation table is independent of both regex sources.
+  {
+    const markers: Array<[unknown, boolean]> = [
+      [{ id: 'a0-9', version: 1e6 }, true], [{ id: 'a', version: 1.0000000000000002 }, false],
+      [{ id: 'a', version: true }, false], [{ id: 'a', version: null }, false],
+      [{ id: 'a', version: [] }, false], [{ id: 'a', version: {} }, false],
+      [{ id: 'a', version: -0 }, false], [{ id: 'a', version: Number.MAX_SAFE_INTEGER }, false],
+      [{ id: ['a'], version: 1 }, false], [{ id: null, version: 1 }, false],
+      [{ id: 'a\n', version: 1 }, false], [{ id: 'a\u2028', version: 1 }, false],
+      [{ id: 'a/b', version: 1 }, false], [{ id: 'a', version: 1, toString: null }, false],
+      [[], false], [null, false],
+    ]
+    const hints: Array<[unknown, boolean]> = [
+      ['range:not-yet-parsed', true], ['select:', true], [' ', true],
+      ['future: $& \\u003c </script> "quoted" | 🚲', true],
+      [true, false], [null, false], [[], false], [{ toString: 'bool' }, false],
+    ]
+    const schema = structuredClone(rt)
+    if (process.env.U9_R4_MUTANT === 'schema') {
+      const lib = ((schema.properties as J).library as J).properties as J
+      ;(lib.version as J).type = 'number'
+    }
+    const errors: string[] = []
+    for (const [i, [library, goodMarker]] of markers.entries()) for (const [j, [format, goodHint]] of hints.entries()) {
+      const input = JSON.parse(JSON.stringify({ steps: 0, props: [
+        { key: 'mode', label: 'Mode', kind: 'text', default: 'a', format },
+      ], values: { mode: 'b' }, library }))
+      const out = checkRuntime(input)!
+      if ((validate(schema, input, file).length === 0) !== (goodMarker && goodHint) ||
+        (out.library !== undefined) !== goodMarker || (out.props[0].format !== undefined) !== goodHint ||
+        (goodHint && out.props[0].format !== format) || out.props[0].default !== 'a' || out.values?.mode !== 'b' ||
+        validate(schema, out, file).length !== 0) errors.push(`${i}/${j}`)
+    }
+    ok(!errors.length, `U9 R4 schema typed boundaries: 128 records reject coercions and preserve opaque hints; mismatches=${errors}`)
+  }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a
   // schema-valid saved record. Kind/value joins remain the documented gap.
