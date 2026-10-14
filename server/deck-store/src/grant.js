@@ -24,11 +24,12 @@
 
 import { ID_RE, TOKEN_RE, mintId, mintToken } from './ids.js'
 
-// Seven days, the lifetime Johan set on 2026-10-13 (it was eight hours from
-// 2026-09-16) and the number the approval page tells the person out loud: a
-// working week asks once, and a lost laptop stops publishing within the week.
+// Thirty days, the lifetime Johan set on 2026-10-14 (seven days from
+// 2026-10-13, eight hours from 2026-09-16) and the number the approval page
+// tells the person out loud: a month of work asks once, and a lost laptop
+// stops publishing within the month (sooner if the person revokes it).
 // Fixed, never renewed. One place, so the page and the grant cannot disagree.
-export const GRANT_TTL_S = 7 * 24 * 60 * 60
+export const GRANT_TTL_S = 30 * 24 * 60 * 60
 export const LABEL_MAX = 80
 
 // Ten minutes for a pairing, and that number is also the sentence the tool
@@ -78,7 +79,7 @@ export async function mintGrant(env, email, label, { now = Date.now() } = {}) {
   const value = JSON.stringify(record)
   // ORDER MATTERS, and it is the revocation index first. These two writes are
   // not atomic: if the second throws, the first has already landed. Writing
-  // the live credential first would leave a grant that verifies for seven
+  // the live credential first would leave a grant that verifies for thirty
   // days, appears on nobody's list and cannot be revoked — fail-open. This
   // way the worst case is an index entry pointing at a grant that does not
   // verify: visible, revocable, inert.
@@ -264,7 +265,7 @@ export async function pollPairing(env, handle) {
   if (rec.state !== 'approved' || !rec.email) return { state: 'gone' }
   // CLAIM, THEN MINT. The handle is marked delivered BEFORE a credential
   // exists, because the two writes are not atomic and the orderings fail
-  // differently: mint-then-mark loses a live seven-day grant into KV that
+  // differently: mint-then-mark loses a live thirty-day grant into KV that
   // nobody holds and nobody knows to revoke, while mark-then-mint loses only
   // the approval — the person clicks again, which is a cost they can see and
   // undo. Two polls racing here can still both mint; only the agent holds the

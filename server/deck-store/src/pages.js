@@ -156,7 +156,7 @@ function fmtTime(iso) {
 /**
  * "Agent access": the live grants of the person reading the page (U4, R10).
  *
- * A grant ends by itself after seven days, so this is not the safety net —
+ * A grant ends by itself after thirty days, so this is not the safety net —
  * it is how someone SEES that an agent can currently publish as them, which
  * a background capability has to be. Absent entirely when there are none: an
  * empty table would be a question nobody asked.

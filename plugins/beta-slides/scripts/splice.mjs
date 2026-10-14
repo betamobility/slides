@@ -911,7 +911,7 @@ export async function link({ env = process.env, log = console.log, force = false
   const ms = timeout('store')
 
   // An agent that re-runs --link defensively must not cost the person another
-  // click: one approval covers a week and any number of decks, so say so and
+  // click: one approval covers a month and any number of decks, so say so and
   // stop rather than starting a second pairing.
   const held = readGrant(env)
   if (!force && held && !expiredGrant(held) && held.store.replace(/\/+$/, '') === store) {

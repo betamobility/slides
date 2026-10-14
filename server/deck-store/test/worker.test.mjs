@@ -1305,22 +1305,22 @@ export async function run(Miniflare) {
     eq(raws, 0, 'no KV value holds the raw token, only its hash')
     ok(dump.keys.some((k) => k.name === `grant:${g1.hash}`), 'the grant is keyed by its hash')
 
-    // The lifetime is seven days and one constant (upstream-merge plan U7, R7):
+    // The lifetime is thirty days and one constant (upstream-merge plan U7, R7):
     // the value's clock and KV's own expiry both come from it.
-    eq(GRANT_TTL_S, 7 * 24 * 60 * 60, 'a grant lasts seven days')
+    eq(GRANT_TTL_S, 30 * 24 * 60 * 60, 'a grant lasts thirty days')
     eq(g1.exp - Math.floor(Date.parse(g1.created) / 1000), GRANT_TTL_S, "the grant's stored expiry is the constant after its creation")
     for (const name of [`grant:${g1.hash}`, `person:alice@betamobility.io:${g1.hash}`]) {
       const key = (await kv.list({ prefix: name })).keys[0]
       ok(Math.abs(key.expiration - g1.exp) <= 5, `KV retires ${name.split(':')[0]}:… at the same moment`)
     }
-    // AE4: approved on Monday morning, still good on Friday.
-    const sixDays = await mintGrant(grantEnv, 'alice@betamobility.io', 'day six', { now: Date.now() - 6 * 86400_000 })
-    eq((await verifyGrant(asReq(bearer(sixDays.token)), grantEnv))?.id, 'alice@betamobility.io', 'a grant used on day 6 still verifies')
-    await revokeGrant(grantEnv, 'alice@betamobility.io', sixDays.hash)
+    // AE4: approved at the start of the month, still good on day 29.
+    const day29 = await mintGrant(grantEnv, 'alice@betamobility.io', 'day 29', { now: Date.now() - 29 * 86400_000 })
+    eq((await verifyGrant(asReq(bearer(day29.token)), grantEnv))?.id, 'alice@betamobility.io', 'a grant used on day 29 still verifies')
+    await revokeGrant(grantEnv, 'alice@betamobility.io', day29.hash)
 
-    // Expiry is the value's own clock, not only KV's TTL: a grant minted eight
-    // days ago is dead even while the key survives.
-    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 8 * 86400_000 })
+    // Expiry is the value's own clock, not only KV's TTL: a grant minted
+    // thirty-one days ago is dead even while the key survives.
+    const stale = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 31 * 86400_000 })
     ok(await kv.get(`grant:${stale.hash}`), 'a stale grant can still be in KV')
     ok(!(await verifyGrant(asReq(bearer(stale.token)), grantEnv)), 'and does not verify: its stored exp has passed')
 
@@ -1434,8 +1434,8 @@ export async function run(Miniflare) {
     eq(r.status, 200, 'a signed-in person gets the page')
     const approvePage = await r.text()
     ok(approvePage.includes('publish decks as you'), 'it says what is being granted')
-    ok(approvePage.includes('publish decks as you for 7 days.'), 'it says for how long, in days, in one sentence')
-    ok(approvePage.includes('Approve for 7 days'), 'and the button repeats it')
+    ok(approvePage.includes('publish decks as you for 30 days.'), 'it says for how long, in days, in one sentence')
+    ok(approvePage.includes('Approve for 30 days'), 'and the button repeats it')
     ok(!/\d+ hours/.test(approvePage), 'never as a count of hours')
     ok(approvePage.includes('Approve only if you asked an agent to publish in the last few minutes.'),
       'it says when not to approve')
@@ -1486,7 +1486,7 @@ export async function run(Miniflare) {
     eq(r.status, 200, 'alice approves, same-origin, with the nonce')
     const donePage = await r.text()
     ok(/close this tab/i.test(donePage), 'and is told she can close the tab')
-    ok(donePage.includes('for the next 7 days.'), 'and for how long, in days')
+    ok(donePage.includes('for the next 30 days.'), 'and for how long, in days')
 
     // AE9: approved, not yet polled — the namespace holds nothing usable.
     const beforeDelivery = await kv.list({})
@@ -1791,19 +1791,19 @@ export async function run(Miniflare) {
     r = await publish('POST', '/api/publish/decks', { headers: asGrant(deadGrant.token), body: deck(slidesDoc('Revoked')) })
     eq(r.status, 401, 'a revoked grant cannot create')
     eq((await bodyOf(r)).length, 0, 'and the refusal carries no body')
-    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 8 * 86400_000 })
+    const expiredGrant = await mintGrant(grantEnv, 'alice@betamobility.io', 'old', { now: Date.now() - 31 * 86400_000 })
     r = await publish('POST', '/api/publish/decks', { headers: asGrant(expiredGrant.token), body: deck(slidesDoc('Expired')) })
     eq(r.status, 401, 'an expired grant cannot create either (F3)')
 
     // Independent U7 probe: actual conditional writes, not just verifyGrant.
-    for (const day of [6, 8]) {
+    for (const day of [29, 31]) {
       const g = await mintGrant(grantEnv, 'alice@betamobility.io', `independent day ${day}`, { now: Date.now() - day * 86400_000 })
       const read = await publish('GET', `/api/publish/decks/${grantMade.id}`, { headers: asGrant(aliceTok) })
       const before = await read.text()
       const write = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
         headers: asGrant(g.token, { 'if-match': read.headers.get('x-bento-etag') }), body: before,
       })
-      eq(write.status, day === 6 ? 200 : 401, `NEW worker day ${day} conditional write ${day === 6 ? 'succeeds' : 'refuses'}`)
+      eq(write.status, day === 29 ? 200 : 401, `NEW worker day ${day} conditional write ${day === 29 ? 'succeeds' : 'refuses'}`)
       await revokeGrant(grantEnv, 'alice@betamobility.io', g.hash)
       const revoked = await publish('PUT', `/api/publish/decks/${grantMade.id}`, {
         headers: asGrant(g.token, { 'if-match': '*' }), body: before,

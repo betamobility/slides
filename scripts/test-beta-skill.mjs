@@ -168,7 +168,7 @@ console.log('\npublishing is one click in a browser, for everyone (one-click pub
 const splicePairs = /--link/.test(read('plugins/beta-slides/scripts/splice.mjs'))
 for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(splicePairs && /splice\.mjs --link/.test(text), `${name} gives the pairing command`)
-  ok(/7 days/.test(text) && !/8 hours/.test(text), `${name} says how long one approval lasts`)
+  ok(/30 days/.test(text) && !/8 hours/.test(text), `${name} says how long one approval lasts`)
   ok(!/1Password/i.test(text), `${name} never sends anyone to 1Password`)
   ok(/Approve/.test(text), `${name} says the person clicks Approve`)
   ok(/Agent access/.test(text), `${name} says where the person can end it`)
@@ -222,7 +222,7 @@ function sectionOf(text, heading) {
   const said = new RegExp(`\\b${days} days\\b`)
   const storeReadme = read('server/deck-store/README.md')
   const concepts = read('CONCEPTS.md')
-  ok(days === 7 && [skill, guide, storeReadme, concepts].every((t) => said.test(t)),
+  ok(days === 30 && [skill, guide, storeReadme, concepts].every((t) => said.test(t)),
     `the grant lifetime is ${days} days in grant.js, the skill, the guide, the store README and CONCEPTS.md`)
   // R25: revocation is per person, from inside their login, so the order matters.
   const off = sectionOf(storeReadme, '### Offboarding')
