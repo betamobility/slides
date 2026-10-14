@@ -251,12 +251,9 @@ interface Held {
   key: string
   slideId: string
   frame: HTMLIFrameElement
-  timer: number
   /** The node the frame was put on. A reorder under the show moves a slide to
    *  another section; a frame on its old section's node is in the wrong place. */
   host: HTMLElement | null
-  /** Give up on this frame: remove it and remember that it failed. */
-  fail: () => void
   /** What the frame was built from. A remote edit that changes it makes the frame stale. */
   made: string
   scene: { channel: SceneChannel; steps: number; rt: RuntimeSlide; inline: boolean; fetched: boolean } | null
@@ -304,8 +301,28 @@ export function createRuntimeShow(
     return n ? slide.id + DUP + n : slide.id
   }
 
-  const drop = (h: Held) => {
-    clearTimeout(h.timer)
+  /**
+   * One deadline per frame KEY, not per frame: a remote edit mounts every
+   * frame again, and a page that hangs must not get ten fresh seconds each
+   * time someone types. The clock for a key starts when it is first mounted
+   * (or when the show enters its slide) and stops when a frame for it reports,
+   * fails, or stops being wanted.
+   */
+  const deadlines = new Map<string, number>()
+  const stopClock = (key: string) => { clearTimeout(deadlines.get(key)); deadlines.delete(key) }
+  const startClock = (key: string) => {
+    stopClock(key)
+    deadlines.set(key, window.setTimeout(() => {
+      deadlines.delete(key)
+      const h = frames.get(key)
+      if (h) drop(h, true)
+      failed.add(key)
+    }, LOAD_TIMEOUT_MS))
+  }
+
+  /** Remove a frame. `keepClock`: another frame for the same key follows, on the same deadline. */
+  const drop = (h: Held, keepClock = false) => {
+    if (!keepClock) stopClock(h.key)
     h.frame.removeAttribute('srcdoc')
     h.frame.removeAttribute('src')
     h.frame.remove()
@@ -320,7 +337,8 @@ export function createRuntimeShow(
     return h && h.scene && h.frame.isConnected ? h : null
   }
 
-  const uncover = (h: Held) => { clearTimeout(h.timer); h.frame.style.visibility = '' }
+  // (only the frame that holds the key: a dropped frame's late `load` must not stop its successor's clock)
+  const uncover = (h: Held) => { if (frames.get(h.key) !== h) return; stopClock(h.key); h.frame.style.visibility = '' }
 
   const onMessage = (ev: MessageEvent) => {
     let from: Held | null = null
@@ -348,10 +366,9 @@ export function createRuntimeShow(
   window.addEventListener('message', onMessage)
 
   /** Put `frame` on `host`, covered until it reports, removed if it never does. */
-  const hold = (part: Omit<Held, 'fail'>, host: HTMLElement) => {
+  const hold = (h: Held, host: HTMLElement) => {
     const fail = () => { if (frames.get(h.key) === h) { drop(h); failed.add(h.key) } }
-    const h: Held = Object.assign(part, { fail })
-    h.timer = window.setTimeout(fail, LOAD_TIMEOUT_MS)
+    if (!deadlines.has(h.key)) startClock(h.key)
     h.frame.style.visibility = 'hidden'
     h.frame.addEventListener('load', () => uncover(h), { once: true })
     h.frame.addEventListener('error', fail, { once: true })
@@ -389,8 +406,8 @@ export function createRuntimeShow(
     if (!allowed || !source) return
     const frame = blank(slide.name || slide.id)
     const steps = rt.steps
-    const h: Omit<Held, 'fail'> = {
-      key, slideId: key, frame, timer: 0, made, host: null,
+    const h: Held = {
+      key, slideId: key, frame, made, host: null,
       scene: {
         steps, rt, inline: sceneGetsAssets(source), fetched: false,
         // Not entered: a scene mounted ahead of the show hears nothing. Init
@@ -434,7 +451,7 @@ export function createRuntimeShow(
       if (!allowed || !host) continue
       const frame = blank((el as EmbedElement).url ?? '')
       frame.src = made
-      hold({ key, slideId: slideKey, frame, timer: 0, made, host: null, scene: null }, host)
+      hold({ key, slideId: slideKey, frame, made, host: null, scene: null }, host)
     }
   }
 
@@ -514,7 +531,7 @@ export function createRuntimeShow(
       // covered gets its full time again. Once per entry; a refresh of the
       // slide showing must not keep a hung frame alive.
       for (const f of frames.values()) {
-        if (f.slideId === key && f.frame.style.visibility === 'hidden') { clearTimeout(f.timer); f.timer = window.setTimeout(f.fail, LOAD_TIMEOUT_MS) }
+        if (f.slideId === key && f.frame.style.visibility === 'hidden') startClock(f.key)
       }
       // walking onto a slide is one more try for a frame that gave up
       if (key !== null) for (const k of [...failed]) if (k.split(SEP)[0] === key) failed.delete(k)
@@ -554,8 +571,10 @@ export function createRuntimeShow(
         // or went: every frame is mounted again from the document as it is
         // now. (What had failed stays failed; sync() also checks each frame
         // against its slide on every slide change.)
-        for (const h of [...frames.values()]) drop(h)
+        for (const h of [...frames.values()]) drop(h, true)
         enter(at(), true)
+        // a key that was not mounted again has no frame to time
+        for (const key of [...deadlines.keys()]) if (!frames.has(key)) stopClock(key)
       })
     },
     next: () => move('next', true),
@@ -586,6 +605,7 @@ export function createRuntimeShow(
     dispose: () => {
       disposed = true
       for (const h of [...frames.values()]) drop(h)
+      for (const key of [...deadlines.keys()]) stopClock(key)
       failed.clear()
       current = -1
       currentId = null

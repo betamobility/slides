@@ -987,6 +987,79 @@ console.log('\npresent: the frame owner')
         'U13 round3: refused source recovers on rebuild and opens at the followed step')
       t.show.dispose()
     }
+    // Round 4: new contract-first probes, written before execution. Product
+    // code is deliberately untouched so a failing expectation stays visible.
+    // Timeout: an unrelated remote edit rebuilds the current section, but a
+    // hung neighbour has neither left the window nor been entered again.
+    {
+      const t = build([sceneSlide('r4-anchor'), embedSlide('r4-hung', 'page')])
+      t.show.enter(0, true)
+      t.framesOn(0)[0].fire('load')
+      tick(6_000)
+      t.rebuild(0); t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      t.framesOn(0)[0].fire('load')
+      tick(4_001)
+      const atDeadline = t.framesOn(1).length
+      // Keep simulating document updates more often than LOAD_TIMEOUT_MS.
+      for (let n = 0; n < 3; n++) {
+        t.rebuild(0); t.show.rebuilt(() => 0)
+        await new Promise<void>((r) => queueMicrotask(r))
+        t.framesOn(0)[0].fire('load')
+        tick(6_000)
+      }
+      ok(atDeadline === 0 && t.framesOn(1).length === 0,
+        `U13 round4: audience rebuilds cannot renew a hung neighbour's deadline (frames at 10001ms=${atDeadline}, at 28001ms=${t.framesOn(1).length})`)
+      t.show.dispose()
+    }
+    // Error: deleting the failed slide and shrinking the section list must
+    // not poison the surviving scene or accept the failed frame's messages.
+    {
+      const t = build([sceneSlide('r4-delete'), sceneSlide('r4-survivor', 4)])
+      t.show.enter(0, true)
+      const old = t.framesOn(0)[0]
+      old.fire('error')
+      t.doc.slides.splice(0, 1)
+      for (let i = 0; i < t.slidesEl.children.length; i++) {
+        for (const f of t.framesOn(i)) f.remove()
+      }
+      t.slidesEl.children = t.doc.slides.map(t.section)
+      t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      const f = t.framesOn(0)[0]
+      const followed = t.show.follow(0, 3)
+      t.say(old, { type: 'bento:ready' }); t.say(old, { type: 'bento:navigate', dir: 'exit' })
+      if (f) t.say(f, { type: 'bento:ready' })
+      ok(t.live().join() === '1' && followed && t.show.step() === 3
+        && t.moved.length === 0 && t.types(old).length === 0
+        && (f?.contentWindow.posted[0] as { step?: number } | undefined)?.step === 3,
+        'U13 round4: deleting an errored current slide leaves the survivor followable')
+      t.show.dispose()
+    }
+    // Refused source: a runtime record takes precedence over an old live
+    // embed element. A missing scene must not accidentally run that page;
+    // removing the runtime record makes it an ordinary embed slide again.
+    {
+      const mixed = embedSlide('r4-mixed', 'page')
+      mixed.runtime = { src: 'asset:missing', steps: 3, props: [] }
+      const t = build([mixed])
+      t.show.enter(0, false)
+      const refused = t.framesOn(0).length === 0 && t.show.step() === null
+        && !t.show.follow(0, 2) && !t.show.next() && !t.show.prev()
+      delete mixed.runtime
+      t.rebuild(0); t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      const f = t.framesOn(0)[0]
+      if (f) {
+        t.say(f, { type: 'bento:ready' }); t.say(f, { type: 'bento:navigate', dir: 'exit' })
+        f.fire('load')
+      }
+      tick(10_001)
+      ok(refused && !!f?.isConnected && f.style.visibility === ''
+        && t.types(f).length === 0 && t.moved.length === 0 && t.show.step() === null,
+        'U13 round4: refused mixed scene becomes a channel-free embed after conversion')
+      t.show.dispose()
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
