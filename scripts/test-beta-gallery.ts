@@ -14,7 +14,7 @@ import { checkRuntime, runtimeSource } from '../slides/src/runtime.ts'
 import { sanitizeElement, sanitizeSlide } from '../slides/src/untrusted.ts'
 import { Store } from '../slides/src/store.ts'
 import { SyncState, BLOB_INLINE_MAX } from '../slides/src/sync/crdt.ts'
-import { STILL_INLINE_MAX, stillDataUri, stillTooLarge } from '../slides/src/beta/libraryrules.ts'
+import { RESERVED_KEYS, STILL_INLINE_MAX, stillDataUri, stillTooLarge } from '../slides/src/beta/libraryrules.ts'
 import * as g from '../slides/src/beta/gallery.ts'
 import { presetsFor, webSceneOf } from '../slides/src/beta/scenesettings.ts'
 
@@ -374,7 +374,7 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
   let seed = 7
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
   const pick = <T>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)]
-  const values: unknown[] = [null, undefined, 0, -1, 1.5, 1e308, Number.NaN, '', ' ', 'x'.repeat(250), '<b>', '\n', '地', true, [], {}, { a: 1 }, '__proto__', '#ff0000', 'red', '59.9, 10.7', 'wide', 'near']
+  const values: unknown[] = [null, undefined, 0, -1, 1.5, 1e308, Number.NaN, '', ' ', 'x'.repeat(250), '<b>', '\n', '地', true, [], {}, { a: 1 }, '__proto__', '#ff0000', 'red', '59.9, 10.7', 'wide', 'near', 'constructor', 'prototype', '\ud800x']
   const fields = ['id', 'version', 'name', 'description', 'kind', 'steps', 'props', 'presets', 'still', 'view', 'html', 'url']
   const propFields = ['key', 'label', 'kind', 'default', 'format']
   const bases = [...clone(manifest).scenes, web()]
@@ -386,7 +386,12 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
     const scene = clone(pick(bases)) as Record<string, unknown>
     for (let m = 0, n = 1 + Math.floor(rnd() * 3); m < n; m++) {
       const r = rnd()
-      if (r < 0.3) scene[pick(fields)] = pick(values)
+      if (r < 0.1 && Array.isArray(scene.props) && scene.props.length) {
+        // a consistent rename: the presets follow, so the scene stays well-formed apart from the new name
+        const pr = pick(scene.props as Record<string, unknown>[]), from = pr.key as string, to = pick(['constructor', 'prototype', '__proto__', 'fresh', '地', 'a b'])
+        pr.key = to
+        for (const ps of (Array.isArray(scene.presets) ? scene.presets as Array<{ values?: Record<string, unknown> }> : [])) if (ps && ps.values && typeof ps.values === "object" && from in ps.values) { ps.values[to] = ps.values[from]; delete ps.values[from] }
+      } else if (r < 0.3) scene[pick(fields)] = pick(values)
       else if (r < 0.6 && Array.isArray(scene.props) && scene.props.length) (pick(scene.props as Record<string, unknown>[]))[pick(propFields)] = pick(values)
       else if (r < 0.85 && Array.isArray(scene.presets) && scene.presets.length) {
         const pr = pick(scene.presets as Record<string, unknown>[])
@@ -400,9 +405,18 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
     for (const preset of [undefined, ...sc.presets]) {
       const doc = deck()
       if (sc.kind === 'runtime') {
+        // and a collaborator receives it whole, through the sync engine (round 3:
+        // a key the engine refuses kept the slide from everyone else)
+        const a = new SyncState('fA'), b = new SyncState('fB')
+        const remote = deck()
+        a.adopt(doc); b.adopt(remote)
+        const before = clone(doc)
         const sl = g.runtimeSlide(doc, sc, preset)
+        if (sl) { doc.slides.splice(1, 0, sl); b.apply(remote, a.diff(before, doc, { text: true })) }
+        const got = sl ? remote.slides.find((x) => x.id === sl.id) : undefined
         const ok1 = !!sl && canon(sanitizeSlide(clone(sl))) === canon(sl) && runtimeSource(sl, doc)?.html === sc.html
           && (doc.assets?.[sl.runtime!.still!.slice(6)] ?? '').length <= STILL_INLINE_MAX
+          && !!got && canon(got) === canon(sl) && remote.assets?.[sl.runtime!.still!.slice(6)] === doc.assets?.[sl.runtime!.still!.slice(6)]
         if (!ok1 && bad++ < 5) console.log('    admitted runtime scene did not insert as read:', JSON.stringify(scene).slice(0, 300))
       } else {
         const r = g.webEmbed(doc, sc, preset)
@@ -412,6 +426,97 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
     }
   }
   ok(bad === 0 && admitted > 0, `${N} mutated scenes, ${admitted} admitted, ${bad} that did not insert as read`)
+}
+
+
+console.log('\nU11 independent round 3: admission versus actual transport')
+{
+  // These are permitted prop identifiers in both the build and runtime gate,
+  // but values become object keys in the insertion op. Test the receiver,
+  // not merely sanitizeSlide(sender), which cannot see the sync refusal.
+  const lost: string[] = []
+  for (const key of ['constructor', 'prototype']) {
+    const raw = clone(manifest).scenes[0]
+    const { id, html, still, stillType: _type, ...metadata } = raw
+    metadata.props = [{ key, label: 'Setting', kind: 'text', default: 'default' }]
+    metadata.presets = [{ name: 'Chosen', values: { [key]: 'chosen' } }]
+    // The build now refuses the key (round 3 fix). Refusing is correct, and the
+    // gallery must refuse the same scene when a manifest did not come from the
+    // build: both are checked, and the transport check below still runs for
+    // anything either side would admit.
+    let validated: unknown
+    try { validated = validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': html, 'still.svg': still }) } catch { validated = null }
+    const unbuilt = { id, ...metadata, html, still, stillType: 'image/svg+xml' }
+    const scene = g.readManifest(withScenes(validated ?? unbuilt))![0]
+    if (!scene) continue // refusing the unsafe scene is also correct
+    const store = new Store(deck()), remote = deck()
+    const a = new SyncState('r3-A'), b = new SyncState('r3-B')
+    a.adopt(store.doc); b.adopt(remote)
+    const before = clone(store.doc)
+    const refused = g.insertScene(store, scene, scene.presets[0])
+    b.apply(remote, a.diff(before, store.doc, { text: true }))
+    const received = remote.slides.find((s) => s.id === store.slide.id)
+    const rt = received?.runtime
+    if (refused || rt?.library?.id !== scene.id || rt?.values?.[key] !== 'chosen'
+      || !rt?.still || !remote.assets?.[rt.still.slice(6)]) {
+      lost.push(`${key}: refusal=${refused}, received=${JSON.stringify(received)}`)
+    }
+  }
+  ok(lost.length === 0, `R3 AE5 prototype-named settings arrive with runtime and still: ${lost.join('; ')}`)
+}
+{
+  // JSON can carry an unpaired surrogate (e.g. an author's truncated emoji).
+  // TextEncoder replaces it; the gallery must reject, not silently repair HTML.
+  const html = '<!doctype html><p>\ud800</p><!-- bento:init bento:ready -->'
+  const scene = g.readManifest(withScenes({ ...clone(manifest).scenes[0], html }))![0]
+  const doc = deck()
+  const slide = scene ? g.runtimeSlide(doc, scene, scene.presets[0]) : null
+  const decoded = slide ? runtimeSource(slide, doc)?.html : undefined
+  ok(!scene || (!!slide && decoded === html),
+    `R3 runtime HTML survives UTF-8 insertion without repair: admitted=${!!scene}, decoded=${JSON.stringify(decoded)}`)
+}
+{
+  // URLSearchParams coerces strings to USVString; gate survival alone misses
+  // the fact that the web page receives a different preset from the one read.
+  const value = '\ud800'
+  const scene = g.readManifest(withScenes(web({
+    props: [{ key: 'label', label: 'Label', kind: 'text', default: '' }],
+    presets: [{ name: 'Chosen', values: { label: value } }],
+  })))![0]
+  const result = scene ? g.webEmbed(deck(), scene, scene.presets[0]) : null
+  const written = result && 'element' in result ? new URL(result.element.url!).searchParams.get('label') : undefined
+  ok(!scene || (result && 'element' in result && written === value),
+    `R3 web preset survives query encoding without repair: admitted=${!!scene}, written=${JSON.stringify(written)}`)
+}
+{
+  // Attack the shared encoding rule through a real URL consumer (fetch),
+  // including percent signs, fragments, XML entities, astral text and both
+  // encoding choices. decodeURIComponent alone isn't a transport oracle.
+  const problems: string[] = []
+  for (const body of ['?x=1&amp;y=2 # 100% + ;base64,', '😀地Ø'.repeat(2000), '\n'.repeat(24000)]) {
+    const still = `<svg xmlns="http://www.w3.org/2000/svg"><text>${body}</text></svg>`
+    const scene = g.readManifest(withScenes({ ...clone(manifest).scenes[0], still }))![0]
+    if (!scene) { problems.push('valid fixture refused'); continue }
+    const uri = g.svgDataUri(scene.still)
+    const received = await (await fetch(uri)).text()
+    if (received !== still || uri.length > STILL_INLINE_MAX) problems.push(`bad transport: ${uri.length}`)
+  }
+  ok(problems.length === 0, `R3 shared still encoder survives data-URL fetch: ${problems.join('; ')}`)
+}
+
+console.log('\nRESERVED_KEYS is what the sync engine refuses')
+{
+  // the engine's list is not exported (kernel zone): prove each name is dropped
+  for (const k of RESERVED_KEYS) {
+    const a = new SyncState('A'), b = new SyncState('B')
+    const docA = deck(), docB = deck()
+    a.adopt(docA); b.adopt(docB)
+    const shadow = clone(docA)
+    docA.slides[0].runtime = { src: 'asset:s', still: 'asset:t', steps: 0, props: [], values: JSON.parse(`{"${k}":"x"}`) } as never
+    b.apply(docB, a.diff(shadow, docA, { text: true }))
+    ok(!docB.slides[0].runtime, `a setting named ${k} does not reach a collaborator, so the library refuses it`)
+  }
+  ok(!['place', 'zoom', 'label'].some((k) => RESERVED_KEYS.includes(k)), 'ordinary setting names are not reserved')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

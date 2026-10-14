@@ -30,7 +30,7 @@ import type { RuntimeSlide } from '../model.ts'
 import type { Store } from '../store.ts'
 import { sanitizeElement } from '../untrusted.ts'
 import { t } from '../i18n.ts'
-import { activeSvg, stillDataUri, stillTooLarge, WEB_HOSTS } from './libraryrules.ts'
+import { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillDataUri, stillTooLarge, WEB_HOSTS } from './libraryrules.ts'
 import { applyPreset, coerce, rememberPresets, webSceneOf, writeQueryAll, type Preset } from './scenesettings.ts'
 
 export interface LibraryScene {
@@ -82,7 +82,8 @@ export function readManifest(json: unknown): LibraryScene[] | null {
 }
 
 function readScene(raw: unknown): LibraryScene | null {
-  if (!isObject(raw)) return null
+  // text that is not well-formed would become U+FFFD when written as UTF-8 or into a URL: a repair
+  if (!isObject(raw) || hasLoneSurrogate(raw)) return null
   const { id, version, name, kind } = raw
   if (typeof id !== 'string' || !LIBRARY_ID.test(id)) return null
   if (!Number.isInteger(version) || (version as number) < 1 || (version as number) > MAX_VERSION) return null
@@ -95,6 +96,8 @@ function readScene(raw: unknown): LibraryScene | null {
   // settings: the same reading a web scene's `doc` gets, and every one must survive it
   if (raw.props !== undefined && !Array.isArray(raw.props)) return null
   const rawProps = (raw.props as unknown[] | undefined) ?? []
+  // a key the sync engine refuses would keep the slide from every collaborator
+  if (rawProps.some((p) => isObject(p) && RESERVED_KEYS.includes(p.key as string))) return null
   // the runtime gate's own reading of the settings (labels, kinds, defaults,
   // format hints), and every one must come through exactly as written
   const gated = checkRuntime({ steps: 0, props: rawProps, values: {} }) as RuntimeSlide | undefined

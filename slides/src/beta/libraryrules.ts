@@ -16,6 +16,23 @@
 export const WEB_HOSTS: readonly string[] = ['slides.betamobility.ai', 'design.betamobility.ai']
 
 /**
+ * Setting keys a scene may not use: the names that address an object's
+ * prototype. The sync engine drops any op that carries one anywhere
+ * (kernel/src/sync/crdt.ts PROTO_NAMES), so a slide holding such a setting
+ * would never reach a collaborator. Not exported there (kernel zone);
+ * scripts/test-beta-gallery.ts checks the engine really drops each of these.
+ */
+export const RESERVED_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype']
+
+/** A text that is not well-formed UTF-16 (a lone surrogate), anywhere in a value: it cannot be written as UTF-8 or a URL without becoming U+FFFD, which would be a repair. */
+export function hasLoneSurrogate(v: unknown, depth = 0): boolean {
+  if (typeof v === 'string') return /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(v)
+  if (depth > 32 || v === null || typeof v !== 'object') return depth > 32
+  if (Array.isArray(v)) return v.some((x) => hasLoneSurrogate(x, depth + 1))
+  return Object.keys(v).some((k) => hasLoneSurrogate(k) || hasLoneSurrogate((v as Record<string, unknown>)[k], depth + 1))
+}
+
+/**
  * The largest data URI an asset may be and still travel INSIDE a sync op:
  * kernel/src/sync/crdt.ts BLOB_INLINE_MAX (64 K characters; scripts/
  * test-beta-gallery.ts checks the two agree). Above it the session sends the

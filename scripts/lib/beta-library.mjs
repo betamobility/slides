@@ -26,8 +26,8 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 // the rules the gallery applies too: one copy (slides/src/beta/libraryrules.ts)
-import { activeSvg, stillTooLarge, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
-export { activeSvg, stillTooLarge, WEB_HOSTS }
+import { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillTooLarge, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
+export { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillTooLarge, WEB_HOSTS }
 
 export const FORMAT = 'beta/library'
 export const MANIFEST_V = 1
@@ -72,6 +72,8 @@ export function validateScene(id, files) {
   if (typeof files['scene.json'] !== 'string') fail('scene.json', 'is missing')
   let m
   try { m = JSON.parse(files['scene.json'].replace(/^\ufeff/, '')) } catch (e) { fail('scene.json', `does not parse: ${e.message}`) }
+  // an escaped lone surrogate parses, and becomes U+FFFD the moment it is written as UTF-8 or into a URL
+  if (hasLoneSurrogate(m)) fail('scene.json', 'carries text that is not well-formed (a lone surrogate escape)')
   if (!isObject(m)) fail('scene.json', 'must be an object')
   for (const k of Object.keys(m)) if (!SCENE_KEYS.has(k)) fail('scene.json', `has a key this build does not know: ${JSON.stringify(k)}`)
   if (typeof m.name !== 'string' || !m.name.trim() || m.name.length > 80 || UNPRINTABLE.test(m.name)) fail('scene.json', 'name must be text of 1 to 80 characters, with no control or direction characters')
@@ -86,7 +88,7 @@ export function validateScene(id, files) {
   if (!Array.isArray(props) || props.length > MAX_PROPS) fail('scene.json', `props must be a list of at most ${MAX_PROPS}`)
   const kinds = new Map()
   const outProps = props.map((p) => {
-    if (!isObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || p.key === '__proto__' || kinds.has(p.key)) fail('scene.json', `prop key ${JSON.stringify(p?.key)} is missing, repeated or not a plain identifier`)
+    if (!isObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || RESERVED_KEYS.includes(p.key) || kinds.has(p.key)) fail('scene.json', `prop key ${JSON.stringify(p?.key)} is missing, repeated, reserved (${RESERVED_KEYS.join(', ')}) or not a plain identifier`)
     for (const k of Object.keys(p)) if (!PROP_KEYS.has(k)) fail('scene.json', `prop "${p.key}" has a key this build does not know: ${JSON.stringify(k)}`)
     if (!KINDS.includes(p.kind)) fail('scene.json', `prop "${p.key}" kind must be text, number or color`)
     if (typeof p.label !== 'string' || !p.label.trim() || p.label.length > 200 || UNPRINTABLE.test(p.label)) fail('scene.json', `prop "${p.key}" needs a label of 1 to 200 characters, with no control or direction characters`)
