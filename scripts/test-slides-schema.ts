@@ -345,6 +345,32 @@ console.log('\na runtime slide validates; a broken one does not\n')
     }
     ok(!mismatches.length, `U9 R2 generated schema boundaries: 100 records agree in both directions; mismatches=${mismatches.join(',')}`)
   }
+  // BETA FORK (U9 independent round 3): generate controls at every position
+  // and all supported kinds. Oracle uses numeric code points, not the gate's
+  // regex or the published schema. Test-only mutation proves false acceptance
+  // is detected even when the gate still strips the bad hint.
+  {
+    const failures: string[] = []
+    const schema = structuredClone(rt)
+    if (process.env.U9_R3_MUTANT === 'schema') {
+      const branches = ((((schema.properties as J).props as J).items as J).anyOf as J[])
+      for (const branch of branches) delete ((branch.properties as J).format as J).pattern
+    }
+    const chars = [...Array.from({ length: 161 }, (_, n) => n), 0x2028, 0x2029, 0x1f6b2]
+    for (const kind of ['text', 'number', 'color']) for (const cp of chars) for (const position of [0, 1, 2]) {
+      const pieces = ['a', 'b']; pieces.splice(position, 0, String.fromCodePoint(cp))
+      const format = pieces.join('')
+      const printable = cp >= 32 && !(cp >= 127 && cp <= 159) && cp !== 0x2028 && cp !== 0x2029
+      const prop = { key: 'mode', label: 'Mode', kind, default: kind === 'number' ? 1 : kind === 'color' ? '#123456' : 'a', format }
+      const record = { steps: 0, props: [prop], library: { version: 1, id: 'map' } }
+      const gated = checkRuntime(record)!
+      if ((validate(schema, record, file).length === 0) !== printable ||
+          (gated.props[0].format === format) !== printable || gated.props.length !== 1 ||
+          gated.props[0].default !== prop.default || gated.library?.id !== 'map' ||
+          validate(schema, gated, file).length !== 0) failures.push(`${kind}/U+${cp.toString(16)}/${position}`)
+    }
+    ok(!failures.length, `U9 R3 schema differential: 1476 generated hint/kind/position records; mismatches=${failures.slice(0, 12).join(',')}`)
+  }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a
   // schema-valid saved record. Kind/value joins remain the documented gap.

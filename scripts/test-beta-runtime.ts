@@ -1390,6 +1390,25 @@ console.log('\nlibrary fields: library and format')
     ok(cases.every(c => !c.admitted || c.kept) && cases[0].admitted && !cases[1].admitted,
       `U9 R2 old-shell Unicode save: admitted select defaults and chosen values survive NEW -> OLD -> NEW; ${JSON.stringify(cases)}`)
   }
+  // U9 independent round 3: fill every prop slot, including Object names;
+  // old shells must retain labels/defaults/values, not merely the first prop.
+  {
+    const keys = ['constructor', 'toString', 'hasOwnProperty', ...Array.from({ length: 61 }, (_, i) => `mode_${i}`)]
+    const props = keys.map((key, i) => ({ key, label: '🚲'.repeat(100), kind: 'text' as const,
+      default: i % 2 ? 'x'.repeat(4000) : '🚲'.repeat(2000), format: 'select:a|b' }))
+    const values = Object.fromEntries(keys.map((key, i) => [key, i % 2 ? '🚲'.repeat(2000) : 'b']))
+    const input = { steps: 0, props, values, library: { id: 'map', version: 1 } }
+    const current = rt.checkRuntime(input)!
+    const legacyInput = structuredClone(current)
+    // Test-only fault injection: reproduce an unsupported-kind regression.
+    if (process.env.U9_R3_MUTANT === 'compat') (legacyInput.props[63] as any).kind = 'select'
+    const legacy = mod.exports.checkRuntime(JSON.parse(JSON.stringify(legacyInput)))!
+    const reopened = rt.checkRuntime(JSON.parse(JSON.stringify(legacy)))!
+    const expected = { steps: 0, props: props.map(({ format, ...p }) => p), values }
+    ok(current.props.length === 64 && legacy.props.every(p => !('format' in p)) &&
+      JSON.stringify(legacy) === JSON.stringify(expected) && JSON.stringify(reopened) === JSON.stringify(expected),
+      'U9 R3 old-shell capacity: 64 select props preserve boundary labels, defaults and own prototype-named values')
+  }
   const older = mod.exports.checkRuntime(record)
   ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
   ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
@@ -1491,6 +1510,42 @@ console.log('\nlibrary fields: library and format')
   }
   ok(!failuresByKey.length,
     `U9 R2 atomic library transport: malformed markers dropped, setting kept; repaired=${failuresByKey.join('; ')}`)
+}
+
+// U9 independent round 3: exercise the wire's insert and set operations,
+// then the clipboard gate and save/reopen after a remote settings change.
+{
+  const { SyncState } = await import('../slides/src/sync/crdt.ts')
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const base = newDoc()
+  const sender = structuredClone(base), receiver = structuredClone(base)
+  const a = new SyncState('u9-r3-a'), b = new SyncState('u9-r3-b')
+  a.adopt(sender); b.adopt(receiver)
+  const slide = runtimeDeck().slides[0]
+  // Deliberately reverse field order: the result must be semantically intact
+  // and its canonical gate serialization must become byte-stable.
+  slide.runtime = { library: { version: 1000000, id: 'a' + '-'.repeat(39) },
+    props: [{ format: 'select:' + '🚲'.repeat(193), default: 'Oslo', kind: 'text', label: 'Mode', key: 'mode' }],
+    values: { mode: 'Bergen' }, steps: 3 }
+  const before = structuredClone(sender)
+  sender.slides.push(slide)
+  b.apply(receiver, JSON.parse(JSON.stringify(a.diff(before, sender, { text: true }))))
+  const remoteBefore = structuredClone(receiver)
+  receiver.slides[1].runtime!.values!.mode = '東京'
+  a.apply(sender, JSON.parse(JSON.stringify(b.diff(remoteBefore, receiver, { text: true }))))
+  const target = newDoc()
+  const clip = parseClip(serializeSlides([sender.slides[1]], sender))!
+  const pasted = insertSlides(clip, target, 1)[0]
+  const reopened = parseDocInputReport(JSON.stringify(target), { fit: false })!.doc
+  const actual = reopened.slides.find(s => s.id === pasted.id)!.runtime!
+  if (process.env.U9_R3_MUTANT === 'transport') delete actual.library
+  const canonical = rt.checkRuntime!(actual)!
+  ok(actual.library?.id === 'a' + '-'.repeat(39) && actual.library.version === 1000000 &&
+    actual.props[0].format === 'select:' + '🚲'.repeat(193) && actual.values?.mode === '東京' &&
+    receiver.slides[1].runtime?.values?.mode === '東京' &&
+    JSON.stringify(canonical) === JSON.stringify(rt.checkRuntime!(JSON.parse(JSON.stringify(canonical)))) &&
+    reopened.docId === target.docId,
+    'U9 R3 sync transport: insert, remote setting edit, clipboard, save/reopen and canonical byte stability')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
