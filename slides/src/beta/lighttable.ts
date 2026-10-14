@@ -146,7 +146,8 @@ export function neighbour(rects: Box[], from: number, key: ArrowKey, rtl = false
  * would change nothing.
  */
 export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1 | 1): number | null {
-  const moving = new Set(expand(slides, selected))
+  const sel = [...selected]
+  const moving = new Set(expand(slides, sel))
   if (!moving.size) return null
   const free = parents(slides, slides.map((_, i) => i)).filter((p) => !moving.has(p))
   let drop: number
@@ -167,7 +168,8 @@ export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1
     const before = free.filter((p) => p < min)
     drop = before.length ? before[before.length - 1] : free[0] ?? slides.length
   }
-  return moveBlock(slides, moving, drop) === slides ? null : drop
+  // asked with the selection as the caller holds it: that is what the drop is made with
+  return moveBlock(slides, sel, drop) === slides ? null : drop
 }
 
 // ---- the DOM half (editor.ts) ------------------------------------------------

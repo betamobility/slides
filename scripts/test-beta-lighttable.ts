@@ -21,8 +21,11 @@
 // The DOM half (toggle, drag, double-click, Escape) is
 // scripts/test-beta-lighttable-browser.mjs.
 
-import { moveBlock } from '../slides/src/editor/slidesel.ts'
+import { expand, moveBlock, parents } from '../slides/src/editor/slidesel.ts'
 import * as lt from '../slides/src/beta/lighttable.ts'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 let failures = 0, checks = 0
 const ok = (cond: boolean, msg: string) => { checks++; if (!cond) { failures++; console.log(`  FAIL  ${msg}`) } else console.log(`  ok    ${msg}`) }
@@ -232,6 +235,140 @@ console.log('\nindependent adversarial cases (U14, R16, AE9)')
   ok(lt.keyMove(s, all, -1) === null && lt.keyMove(s, all, 1) === null &&
     lt.keyMove(s, [0], -1) === null && lt.keyMove(s, [2], 1) === null && JSON.stringify(s) === before,
     'ADVERSARIAL all-selected and end-unit keyboard moves are no-ops without mutating the deck')
+}
+
+console.log('\nround 2: keyboard, state identity, and undo (no browser required)')
+{
+  // Execute the actual Store and editor dropSlides method, not a rewritten
+  // approximation. Only DOM painting is omitted. The bundle stays in memory.
+  const require = createRequire(new URL('../slides/package.json', import.meta.url))
+  const ts = require('typescript')
+  const esbuild = require('esbuild')
+  const bundle = esbuild.buildSync({
+    stdin: { contents: "export { Store } from './store.ts'; export { sanitizeSlide } from './untrusted.ts'",
+      resolveDir: fileURLToPath(new URL('../slides/src/', import.meta.url)), loader: 'ts' },
+    bundle: true, write: false, platform: 'node', format: 'cjs',
+  })
+  const mod = { exports: {} as any }
+  new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(mod, mod.exports, require)
+  const Store = mod.exports.Store
+  const source = readFileSync(new URL('../slides/src/editor/editor.ts', import.meta.url), 'utf8')
+  const ast = ts.createSourceFile('editor.ts', source, ts.ScriptTarget.Latest, true)
+  const cls = ast.statements.find((n: any) => ts.isClassDeclaration(n) && n.name.text === 'Editor')
+  const drop = cls.members.find((n: any) => n.name?.getText(ast) === 'dropSlides')
+  if (!drop?.body) throw new Error('Cannot find the production dropSlides method')
+  const dropSlides = new Function('moveBlock', 'expand',
+    ts.transpile('function dropSlides(payload, index) ' + drop.body.getText(ast), { target: ts.ScriptTarget.ES2022 }) + '; return dropSlides')(moveBlock, expand)
+
+  const harness = (slides: S[], selected: number[] = [], current = 0) => {
+    const store = new Store({ format: 'bento/slides', docId: 'lt-round2', title: 'round 2',
+      size: { width: 1280, height: 720 }, slides: slides.map((s) => ({ ...s, elements: [] })) })
+    store.goTo(current)
+    const editor = { store, thumbSel: selected,
+      setThumbSel(sel: number[]) { this.thumbSel = parents(store.doc.slides, sel) } }
+    store.on('slides', () => { editor.thumbSel = [] })
+    // key() has no DOM dependency for Alt+arrow or Escape. Its actual host
+    // boundary is exercised; leave records navigation instead of repainting.
+    const table: any = Object.create(lt.LightTable.prototype)
+    table.on = true
+    table.host = { slides: () => store.doc.slides, current: () => store.currentIndex,
+      selection: () => editor.thumbSel, rtl: () => false,
+      drop: (payload: string, index: number) => dropSlides.call(editor, payload, index) }
+    table.leave = (at?: number) => { table.on = false; if (at != null) store.goTo(at) }
+    const key = (name: string, altKey = false) => table.key({ key: name, altKey, preventDefault() {} })
+    return { store, editor, table, key }
+  }
+
+  // A normal imported deck may contain a cyclic pair (the shape gate accepts
+  // both stateOf strings). Moving a slide must NEVER remove another identity,
+  // even when its relationship is malformed. Round 1's repeated parents()
+  // normalization removes B and inserts another A here.
+  {
+    const s: S[] = [{ id: 'A', stateOf: 'B' }, { id: 'B', stateOf: 'A' }, { id: 'D' }]
+    for (const slide of s) {
+      const accepted = mod.exports.sanitizeSlide({ ...slide, elements: [] })
+      if (!accepted || accepted.stateOf !== slide.stateOf) throw new Error('Cyclic fixture no longer passes the shape gate')
+    }
+    const h = harness(s)
+    h.key('ArrowRight', true)
+    const got = ids(h.store.doc.slides)
+    ok(h.store.doc.slides.length === s.length &&
+      [...h.store.doc.slides.map((x: S) => x.id)].sort().join(',') === 'A,B,D',
+      `R2 cyclic-state keyboard move preserves every slide exactly once: expected permutation of A,B,D; got ${got}`)
+  }
+
+  // This chain can be authored with the State of dropdown: make C a state
+  // of B, then make B a state of A. Click C (empty thumbSel), Alt+Right.
+  {
+    const s: S[] = [{ id: 'A' }, { id: 'B', stateOf: 'A' }, { id: 'C', stateOf: 'B' }, { id: 'D' }]
+    const h = harness(s, [], 2)
+    h.key('ArrowRight', true)
+    const got = ids(h.store.doc.slides)
+    ok(h.store.doc.slides.length === s.length &&
+      [...h.store.doc.slides.map((x: S) => x.id)].sort().join(',') === 'A,B,C,D',
+      `R2 nested-state keyboard move preserves identity and count: expected permutation of A,B,C,D; got ${got}`)
+  }
+
+  {
+    const h = harness(plain(8), [1, 4], 1)
+    h.store.readOnly = true
+    h.key('ArrowRight', true)
+    const at = h.store.currentIndex, selected = h.editor.thumbSel.join(',')
+    h.key('Escape')
+    ok(ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8' && at === 1 &&
+      selected === '1,4' && h.store.currentIndex === 1,
+      `R2 read-only keyboard move and Escape retain the real selection: expected current 1 / selection 1,4 / Escape 1; got ${at} / ${selected} / ${h.store.currentIndex}`)
+  }
+
+  {
+    const s = plain(8).map((slide, i) => ({ ...slide, hidden: i === 1 || i === 6 }))
+    const h = harness(s, [1, 4], 1)
+    const r = grid(8, 3, { rtl: true })
+    const gap = lt.gapAt(r, s, r[7].right + 5, r[7].top + 20, true)
+    dropSlides.call(h.editor, '[1,4]', gap)
+    const moved = ids(h.store.doc.slides)
+    const dimmed = h.store.doc.slides.filter((s: any) => s.hidden).map((s: S) => s.id).sort().join(',')
+    h.store.undo()
+    const undone = ids(h.store.doc.slides)
+    h.store.redo()
+    ok(gap === 7 && moved === '1,3,4,6,7,2,5,8' && dimmed === '2,7' &&
+      undone === '1,2,3,4,5,6,7,8' && ids(h.store.doc.slides) === moved,
+      'R2 AE9 RTL drag preserves hidden flags through real Store undo and redo')
+  }
+
+  {
+    const s = plain(4).map((slide) => ({ ...slide, stateOf: 'missing-' + slide.id }))
+    const h = harness(s, [0, 1])
+    h.key('ArrowRight', true)
+    const moved = ids(h.store.doc.slides)
+    h.store.undo()
+    ok(moved === '3,1,2,4' && ids(h.store.doc.slides) === '1,2,3,4',
+      `R2 two selected orphan states move one gap and undo as units: got ${moved}`)
+  }
+
+  {
+    const empty = harness(plain(8), [], 5)
+    empty.key('Escape')
+    const selected = harness(plain(8), [4, 1], 6)
+    selected.key('Escape')
+    ok(!empty.table.on && empty.store.currentIndex === 5 && !selected.table.on &&
+      selected.store.currentIndex === 1 && selected.editor.thumbSel.join(',') === '4,1',
+      'R2 Escape keeps current with no selection and opens the first selected index without clearing selection')
+  }
+
+  {
+    const h = harness(plain(8), [1, 4], 1)
+    let intercepted = 0
+    const event = { dataTransfer: { types: ['Files'], getData() { throw new Error('File drag read as a slide') } },
+      preventDefault() { intercepted++ }, stopPropagation() { intercepted++ } }
+    // These capture handlers must return without touching geometry or taking
+    // the event away from the document's deck-file loader. Browser launch is
+    // unavailable here; this proves routing, not the browser's file opening.
+    h.table.dragOver(event)
+    h.table.dropped(event)
+    ok(intercepted === 0 && ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8',
+      'R2 file-only drag passes through both grid capture handlers untouched')
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

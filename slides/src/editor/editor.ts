@@ -1996,6 +1996,7 @@ export class Editor {
     const before = this.store.doc.slides
     const after = moveBlock(before, from, index)
     if (after === before) return
+    if (this.store.readOnly) return // BETA FORK: the commit is refused on a read-only copy; the selection and the current slide must not move to where nothing went
     const currentId = before[this.store.currentIndex]?.id
     const movedIds = expand(before, from).map((i) => before[i].id)
     this.store.commit(() => { this.store.doc.slides = after }, 'slides')
