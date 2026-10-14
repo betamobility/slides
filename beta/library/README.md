@@ -22,7 +22,9 @@ beta/library/<id>/
   listens for `bento:init` before it trusts any state, says `bento:ready`, and
   draws its defaults on its own. At most 256 KB.
 - `still.svg` is a picture: no script, no `foreignObject`, no handlers, no
-  links out. At most 64 KB.
+  links out. At most 64 KB on disk, and its data URI (percent-encoded or
+  base64, whichever is shorter) at most 64 K characters, so it travels with
+  its slide to every collaborator. In practice: keep it under about 60 KB.
 - `props` are settings, with the shell's three kinds: `text`, `number`,
   `color`. A setting the shell has no control for rides on `text` or `number`
   with a `format` hint: `bool`, `latlon`, `select:a|b|c`,

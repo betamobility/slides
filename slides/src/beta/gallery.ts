@@ -26,10 +26,11 @@
 import type { BentoDoc, EmbedElement, RuntimeProp, Slide } from '../model.ts'
 import { defaultImage, emptySlide, internAsset, RUNTIME_SRC_BUDGET, RUNTIME_STILL_BUDGET, uid } from '../model.ts'
 import { checkRuntime, isRuntimeSlide, LIBRARY_ID } from '../runtime.ts'
+import type { RuntimeSlide } from '../model.ts'
 import type { Store } from '../store.ts'
 import { sanitizeElement } from '../untrusted.ts'
 import { t } from '../i18n.ts'
-import { activeSvg, WEB_HOSTS } from './libraryrules.ts'
+import { activeSvg, stillDataUri, stillTooLarge, WEB_HOSTS } from './libraryrules.ts'
 import { applyPreset, coerce, rememberPresets, webSceneOf, writeQueryAll, type Preset } from './scenesettings.ts'
 
 export interface LibraryScene {
@@ -94,14 +95,19 @@ function readScene(raw: unknown): LibraryScene | null {
   // settings: the same reading a web scene's `doc` gets, and every one must survive it
   if (raw.props !== undefined && !Array.isArray(raw.props)) return null
   const rawProps = (raw.props as unknown[] | undefined) ?? []
-  const props = webSceneOf({ library: { id, version }, props: rawProps })?.props ?? []
-  if (props.length !== rawProps.length || rawProps.some((p, i) => !isObject(p) || p.default !== props[i].default || p.label !== props[i].label)) return null
+  // the runtime gate's own reading of the settings (labels, kinds, defaults,
+  // format hints), and every one must come through exactly as written
+  const gated = checkRuntime({ steps: 0, props: rawProps, values: {} }) as RuntimeSlide | undefined
+  const props = gated?.props ?? []
+  const asWritten = (p: unknown) => isObject(p) ? JSON.stringify({ key: p.key, label: p.label, kind: p.kind, default: p.default, ...(p.format !== undefined ? { format: p.format } : {}) }) : ''
+  if (props.length !== rawProps.length || rawProps.some((p, i) => asWritten(p) !== JSON.stringify(props[i]))) return null
+  if (!webSceneOf({ library: { id, version }, props })) return null
   const presets: Preset[] = []
   if (!Array.isArray(raw.presets) || raw.presets.length > MAX_PRESETS) return null
   for (const p of raw.presets) {
     if (!isObject(p) || !line(p.name, MAX_NAME) || presets.some((q) => q.name === p.name)) return null
+    if (p.values !== undefined && !isObject(p.values)) return null
     const values = p.values ?? {}
-    if (!isObject(values)) return null
     // every value names a declared setting and is one it keeps as given:
     // a preset the form would have to hold or refuse is not repaired here
     for (const [k, v] of Object.entries(values)) {
@@ -113,7 +119,7 @@ function readScene(raw: unknown): LibraryScene | null {
   }
   const still = kind === 'web' ? raw.view : raw.still
   // a picture by the library's own rules (libraryrules.ts): nothing that can run, load or link
-  if (typeof still !== 'string' || utf8Bytes(still).length > RUNTIME_STILL_BUDGET || activeSvg(still) !== null) return null
+  if (typeof still !== 'string' || utf8Bytes(still).length > RUNTIME_STILL_BUDGET || activeSvg(still) !== null || stillTooLarge(still) !== null) return null
   const base = { id, version: version as number, name: name as string, description: description as string, kind, steps: steps as number, props, presets, still } as LibraryScene
   if (kind === 'runtime') {
     if (typeof raw.html !== 'string' || !raw.html || utf8Bytes(raw.html).length > RUNTIME_SRC_BUDGET) return null
@@ -127,20 +133,8 @@ function readScene(raw: unknown): LibraryScene | null {
   return { ...base, url: raw.url }
 }
 
-/**
- * An svg as a data: URI, percent-encoding only what a URI cannot carry, so
- * it costs about its own size (base64 costs a third more). That decides
- * whether a library still (at most 64 KB) travels INSIDE the op that inserts
- * its slide: an asset value over BLOB_INLINE_MAX (64 K characters) goes the
- * relay's blob route instead, and a collaborator would see the slide before
- * its still (AE5). runtime.ts decodeAsset reads both forms.
- */
-export function svgDataUri(svg: string): string {
-  // % and # would be read as an escape and a fragment; control characters
-  // are stripped by the URL parser; non-ASCII as UTF-8. Code points, not
-  // halves (the u flag): a still has passed activeSvg, so no lone surrogate.
-  return 'data:image/svg+xml,' + svg.replace(/[\u0000-\u001f%#\u007f-\u{10ffff}]/gu, (c) => encodeURIComponent(c))
-}
+/** A still as a data: URI (libraryrules.ts): the shorter encoding, under the inline limit for any still readScene admits. */
+export const svgDataUri = stillDataUri
 
 /** A data: URI holding UTF-8 text, base64 as the splice tool writes it. */
 function textDataUri(type: string, text: string): string {

@@ -14,6 +14,7 @@ import { checkRuntime, runtimeSource } from '../slides/src/runtime.ts'
 import { sanitizeElement, sanitizeSlide } from '../slides/src/untrusted.ts'
 import { Store } from '../slides/src/store.ts'
 import { SyncState, BLOB_INLINE_MAX } from '../slides/src/sync/crdt.ts'
+import { STILL_INLINE_MAX, stillDataUri, stillTooLarge } from '../slides/src/beta/libraryrules.ts'
 import * as g from '../slides/src/beta/gallery.ts'
 import { presetsFor, webSceneOf } from '../slides/src/beta/scenesettings.ts'
 
@@ -276,6 +277,141 @@ console.log('\nU11 independent round 1: rejection and transport boundaries')
   ok(restored && JSON.stringify(store.doc) === inserted && store.slide.id === second
     && order.join() === ['a', 'a-state', first, second, 'b'].join() && first !== second,
     'R1 state-slide insertion twice preserves order, identities and assets through undo/redo')
+}
+
+
+console.log('\nU11 independent round 2: encoding and no-repair contract')
+{
+  // This is not the round-one ASCII padding case. Real SVG whitespace and
+  // UTF-8 labels expand under percent encoding too; raw byte size is not a
+  // bound on the asset sent in an insertion op.
+  const raw = clone(manifest).scenes.find((s) => s.id === 'map')!
+  const { id, html, still: _still, stillType: _type, ...metadata } = raw
+  const prefix = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9"><rect width="16" height="9" fill="#123456"/><desc>'
+  const suffix = '</desc></svg>'
+  const missing: string[] = []
+  for (const [name, content] of [['UTF-8 description', '地'.repeat(9000)], ['pretty-print whitespace', '\n'.repeat(24000)]] as const) {
+    const still = prefix + content + suffix
+    const validated = validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': html, 'still.svg': still })
+    const scene = g.readManifest(withScenes(validated))![0]
+    const store = new Store(deck()), remote = deck()
+    const a = new SyncState('round2-A'), b = new SyncState('round2-B')
+    a.adopt(store.doc); b.adopt(remote)
+    const before = clone(store.doc)
+    const refusal = g.insertScene(store, scene, scene.presets[0])
+    b.apply(remote, a.diff(before, store.doc, { text: true }))
+    const received = remote.slides.find((s) => s.id === store.slide.id)
+    const key = store.slide.runtime!.still!.slice(6)
+    if (refusal !== null || !received || remote.assets?.[key] !== store.doc.assets![key]) {
+      missing.push(`${name}: rawBytes=${new TextEncoder().encode(still).length}, uriChars=${store.doc.assets![key].length}, receiverHasStill=${!!remote.assets?.[key]}`)
+    }
+  }
+  ok(missing.length === 0, `R2 AE5 percent-expanded still arrives in the insertion op: ${missing.join('; ')}`)
+}
+{
+  // readManifest compares only label/default to webSceneOf; runtimeSlide's
+  // checkRuntime has stricter label/format rules and silently changes them.
+  const raw = clone(manifest).scenes[0]
+  const admitted: string[] = []
+  for (const prop of [
+    { key: 'n', label: 'N'.repeat(201), kind: 'number', default: 1 },
+    { key: 'n', label: 'N', kind: 'number', default: 1, format: 'range:0:10:1\n' },
+  ]) {
+    const scene = g.readManifest(withScenes({ ...raw, props: [prop], presets: [{ name: 'Default', values: {} }] }))![0]
+    if (scene) {
+      const store = new Store(deck())
+      const refusal = g.insertScene(store, scene, scene.presets[0])
+      admitted.push(JSON.stringify({ input: prop, refusal, written: store.slide.runtime?.props }))
+    }
+  }
+  ok(admitted.length === 0, `R2 runtime settings that would be repaired are left off the shelf: ${admitted.join('; ')}`)
+}
+{
+  // null is an explicitly wrong value shape, not an absent optional field.
+  // It must not become a valid default preset on the web insertion path.
+  const scenes = g.readManifest(withScenes(web({ presets: [{ name: 'Broken', values: null }] })))!
+  const scene = scenes[0]
+  const result = scene ? g.webEmbed(deck(), scene, scene.presets[0]) : null
+  ok(scenes.length === 0, `R2 web preset with null values is refused, not repaired: ${JSON.stringify(result)}`)
+}
+{
+  // Scanner/preset controls: the new rules must still reject obfuscated
+  // external refs and wrong-kind empty values, not only the round-one strings.
+  const bad = [
+    '<svg xmlns="http://www.w3.org/2000/svg"><use href="&#104;ttps://evil.invalid/x#p"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(&#104;ttps://evil.invalid/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="u&#92;72l(//evil.invalid/x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><g xmlns="http://www.w3.org/1999/xhtml"><text>Hi</text></g></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><text>\ud800</text></svg>',
+  ]
+  const admitted = bad.filter((view) => g.readManifest(withScenes(web({ view })))!.length)
+  for (const value of [null, false, {}, []]) {
+    if (g.readManifest(withScenes(web({ props: [{ key: 'mode', label: 'Mode', kind: 'text', default: '' }], presets: [{ name: 'Broken', values: { mode: value } }] })))!.length) admitted.push(JSON.stringify(value))
+  }
+  ok(admitted.length === 0, `R2 obfuscated SVG references and wrong-kind empty preset values stay rejected: ${admitted.join('; ')}`)
+}
+
+console.log('\nthe inline rule (libraryrules.ts): a still travels with its slide')
+{
+  ok(STILL_INLINE_MAX === BLOB_INLINE_MAX, `the library limit is the sync engine one (${STILL_INLINE_MAX} = ${BLOB_INLINE_MAX})`)
+  const svg = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9"><text>${body}</text></svg>`
+  for (const [why, body] of [['ASCII', 'x'.repeat(60000)], ['CJK', '地'.repeat(9000)], ['newlines', '\n'.repeat(30000)], ['mixed', 'Ø#%地\n'.repeat(4000)]] as const) {
+    const s = svg(body)
+    const uri = stillDataUri(s)
+    const decoded = uri.startsWith('data:image/svg+xml;base64,') ? new TextDecoder().decode(Uint8Array.from(atob(uri.slice(26)), (c) => c.charCodeAt(0))) : decodeURIComponent(uri.slice(19))
+    ok(decoded === s, `${why}: the encoding decodes back to the still`)
+    ok((uri.length <= STILL_INLINE_MAX) === (stillTooLarge(s) === null), `${why}: refused exactly when it would not travel inline (${uri.length})`)
+  }
+  const big = svg('地'.repeat(30000))
+  ok(stillTooLarge(big) !== null && g.readManifest(withScenes({ ...clone(manifest).scenes[0], still: big }))!.length === 0, 'a still that cannot travel inline is left off the shelf')
+}
+
+console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
+{
+  // Mutate the real scenes (and a web scene) at random; for every scene the
+  // reader admits, both inserts must succeed, survive the gate unchanged and
+  // keep the still inline. GALLERY_FUZZ_N sets the count.
+  let seed = 7
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
+  const pick = <T>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)]
+  const values: unknown[] = [null, undefined, 0, -1, 1.5, 1e308, Number.NaN, '', ' ', 'x'.repeat(250), '<b>', '\n', '地', true, [], {}, { a: 1 }, '__proto__', '#ff0000', 'red', '59.9, 10.7', 'wide', 'near']
+  const fields = ['id', 'version', 'name', 'description', 'kind', 'steps', 'props', 'presets', 'still', 'view', 'html', 'url']
+  const propFields = ['key', 'label', 'kind', 'default', 'format']
+  const bases = [...clone(manifest).scenes, web()]
+  // key order is the gate's business, not a difference: compare canonically
+  const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x)
+  let admitted = 0, bad = 0
+  const N = Number(process.env.GALLERY_FUZZ_N ?? 3000)
+  for (let i = 0; i < N; i++) {
+    const scene = clone(pick(bases)) as Record<string, unknown>
+    for (let m = 0, n = 1 + Math.floor(rnd() * 3); m < n; m++) {
+      const r = rnd()
+      if (r < 0.3) scene[pick(fields)] = pick(values)
+      else if (r < 0.6 && Array.isArray(scene.props) && scene.props.length) (pick(scene.props as Record<string, unknown>[]))[pick(propFields)] = pick(values)
+      else if (r < 0.85 && Array.isArray(scene.presets) && scene.presets.length) {
+        const pr = pick(scene.presets as Record<string, unknown>[])
+        if (rnd() < 0.5) pr.values = pick(values); else pr.values = { ...(pr.values as object ?? {}), [pick(['place', 'zoom', 'mode', 'to', 'zz'])]: pick(values) }
+      } else delete scene[pick(fields)]
+    }
+    const read = g.readManifest(withScenes(scene))
+    if (!read || !read.length) continue
+    admitted++
+    const sc = read[0]
+    for (const preset of [undefined, ...sc.presets]) {
+      const doc = deck()
+      if (sc.kind === 'runtime') {
+        const sl = g.runtimeSlide(doc, sc, preset)
+        const ok1 = !!sl && canon(sanitizeSlide(clone(sl))) === canon(sl) && runtimeSource(sl, doc)?.html === sc.html
+          && (doc.assets?.[sl.runtime!.still!.slice(6)] ?? '').length <= STILL_INLINE_MAX
+        if (!ok1 && bad++ < 5) console.log('    admitted runtime scene did not insert as read:', JSON.stringify(scene).slice(0, 300))
+      } else {
+        const r = g.webEmbed(doc, sc, preset)
+        const ok2 = 'element' in r && canon(sanitizeElement(clone(r.element))) === canon(r.element)
+        if (!ok2 && bad++ < 5) console.log('    admitted web scene did not insert as read:', JSON.stringify(scene).slice(0, 300), JSON.stringify(r).slice(0, 200))
+      }
+    }
+  }
+  ok(bad === 0 && admitted > 0, `${N} mutated scenes, ${admitted} admitted, ${bad} that did not insert as read`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -15,6 +15,37 @@
  */
 export const WEB_HOSTS: readonly string[] = ['slides.betamobility.ai', 'design.betamobility.ai']
 
+/**
+ * The largest data URI an asset may be and still travel INSIDE a sync op:
+ * kernel/src/sync/crdt.ts BLOB_INLINE_MAX (64 K characters; scripts/
+ * test-beta-gallery.ts checks the two agree). Above it the session sends the
+ * bytes by the relay's blob route, which a collaborator receives after the
+ * slide. A library still has to arrive WITH its slide (AE5), so the rule is
+ * on the still's encoded form, the thing that travels, not on its raw size:
+ * no single encoding keeps every 64 KB picture under 64 K characters
+ * (base64 grows it by a third, percent-encoding grows CJK text ninefold).
+ */
+export const STILL_INLINE_MAX = 64 * 1024
+
+/** A still as a data: URI, in whichever of percent-encoding and base64 is shorter for it. */
+export function stillDataUri(svg: string): string {
+  // % and # would be read as an escape and a fragment; control characters
+  // are stripped by the URL parser; non-ASCII as UTF-8. Code points (the u
+  // flag): a still that passed activeSvg holds no lone surrogate.
+  const pct = 'data:image/svg+xml,' + svg.replace(/[\u0000-\u001f%#\u007f-\u{10ffff}]/gu, (c) => encodeURIComponent(c))
+  const bytes = new TextEncoder().encode(svg)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  const b64 = 'data:image/svg+xml;base64,' + btoa(bin)
+  return pct.length <= b64.length ? pct : b64
+}
+
+/** Why this still cannot travel with its slide, or null when it can. */
+export function stillTooLarge(svg: string): string | null {
+  const n = stillDataUri(svg).length
+  return n > STILL_INLINE_MAX ? `encodes to ${n} characters, over the ${STILL_INLINE_MAX} that travel with a slide` : null
+}
+
 // A still is a PICTURE. The check reads it with a strict scanner for a small
 // subset of XML (elements, double- or single-quoted attributes separated by
 // whitespace, text, comments, one leading XML declaration) and then holds the

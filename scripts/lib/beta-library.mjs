@@ -26,14 +26,14 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 // the rules the gallery applies too: one copy (slides/src/beta/libraryrules.ts)
-import { activeSvg, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
-export { activeSvg, WEB_HOSTS }
+import { activeSvg, stillTooLarge, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
+export { activeSvg, stillTooLarge, WEB_HOSTS }
 
 export const FORMAT = 'beta/library'
 export const MANIFEST_V = 1
 /** A runtime scene's page: the shell's RUNTIME_SRC_BUDGET (slides/src/model.ts). */
 export const HTML_BUDGET = 256 * 1024
-/** A library still (KTD14): smaller than the shell allows, so it travels inline with the first frame. */
+/** A library still's size on disk (KTD14). The rule that makes it travel inline with its slide is stillTooLarge (libraryrules.ts), on its encoded form; it binds first. */
 export const STILL_BUDGET = 64 * 1024
 /** The whole manifest; the store refuses more. */
 export const MANIFEST_BUDGET = 8 * 1024 * 1024
@@ -116,6 +116,8 @@ export function validateScene(id, files) {
   const still = files['still.svg']
   if (typeof still !== 'string') fail('still.svg', 'is missing')
   if (bytes(still) > STILL_BUDGET) fail('still.svg', `is ${kb(bytes(still))}, over the ${STILL_BUDGET / 1024} KB a library still may be`)
+  const tooLarge = stillTooLarge(still)
+  if (tooLarge) fail('still.svg', tooLarge)
   const active = activeSvg(still)
   if (active) fail('still.svg', `carries ${active}; a still is a picture`)
 
