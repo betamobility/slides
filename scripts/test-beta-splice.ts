@@ -1722,6 +1722,112 @@ try {
         'U12-R1 read lists both library ids and post-race values')
     }
 
+    // U12 independent round 2: failures are asserted before any product fix.
+    {
+      // A formerly declared key disappears during the 412: validation must use
+      // the freshly read schema, and neither a content edit nor a value may land.
+      const raceId = await seed(d)
+      log = []; bumps = 1
+      panelRace = (fresh) => {
+        const runtime = slideOf(fresh, 'cph').runtime
+        runtime.props = runtime.props.filter((p: any) => p.key !== 'zoom')
+        delete runtime.values.zoom
+      }
+      let result
+      try {
+        result = await runTool([raceId, '--edits', editsFile([
+          { slideId: 'cph', values: { zoom: 4 } },
+          { slideId: 's1', elementId: 't-04', html: 'Must not land' },
+        ])])
+      } finally { bumps = 0; panelRace = undefined }
+      const fresh = (await readDeck(raceId)).doc
+      ok(result.code !== 0 && /"zoom" is not one of its settings/.test(result.err)
+        && putsTo(raceId).map(x => x.status).join() === '412'
+        && !Object.hasOwn(slideOf(fresh, 'cph').runtime.values, 'zoom')
+        && slideOf(fresh, 's1').elements[0].html !== 'Must not land',
+        'U12-R2 removed setting on retry refuses atomically naming key')
+    }
+    {
+      // The folder was allowed at the first read; a person marks the slide as
+      // a library instance before PUT. The retry must now enforce AE6.
+      const raceId = await seed()
+      log = []; bumps = 1
+      panelRace = (fresh) => {
+        const runtime = slideOf(fresh, 'map').runtime
+        runtime.library = { id: 'map', version: 1 }
+        runtime.values = { title: 'Person owns this value' }
+      }
+      let result
+      try { result = await runTool([raceId, project({ map: {} })]) }
+      finally { bumps = 0; panelRace = undefined }
+      const fresh = (await readDeck(raceId)).doc
+      ok(result.code !== 0 && /slide "map" is the library scene "map"/.test(result.err)
+        && putsTo(raceId).map(x => x.status).join() === '412'
+        && slideOf(fresh, 'map').runtime.values.title === 'Person owns this value',
+        'U12-R2 library marker on retry refuses folder replacement naming slide')
+    }
+    {
+      const target = await seed(d)
+      const before = await readDeck(target)
+      log = []
+      const result = await runTool([target, '--edits', editsFile([
+        { library: 'counter', id: 'valid-first', insertAfter: 'end' },
+        { slideId: 'cph', values: { place: 'Must not land' } },
+        { library: 'absent-round-two', id: 'absent', insertAfter: 'end' },
+      ])])
+      ok(result.code !== 0 && /absent-round-two/.test(result.err)
+        && putsTo(target).length === 0 && (await readDeck(target)).etag === before.etag,
+        'U12-R2 missing manifest id rolls back preceding library insert and values edit')
+    }
+    {
+      // Raw deck JSON can contain props that the shell drops. A tool must not
+      // report success for a setting that disappears when the person opens it.
+      const handEdited = structuredClone(d)
+      slideOf(handEdited, 'cph').runtime.props.push({ key: 'ghost', label: 'Ghost', kind: 'unknown', default: '' })
+      const target = await seed(handEdited)
+      const before = await readDeck(target)
+      log = []
+      const result = await runTool([target, '--edits', editsFile([{ slideId: 'cph', values: { ghost: 'lost on load' } }])])
+      const saved = (await readDeck(target)).doc
+      const gate = rt?.checkRuntime(slideOf(saved, 'cph').runtime, saved.assets)
+      ok(result.code !== 0 && /ghost/.test(result.err) && putsTo(target).length === 0
+        && (await readDeck(target)).etag === before.etag,
+        `U12-R2 hand-edited invalid prop refuses value the shell drops (exit=${result.code}, gate=${JSON.stringify(gate?.values)})`)
+    }
+    {
+      // Exercise the distributable skill, not imports resolved through this repo.
+      const toolkit = join(project({}), 'toolkit')
+      const built = spawnSync(process.execPath, [join(root, 'scripts/build-beta-toolkit-skill.mjs'), toolkit], { encoding: 'utf8' })
+      const tool = join(toolkit, 'scripts/splice.mjs')
+      rmSync(GRANT_FILE, { force: true })
+      log = []
+      const listing = await runTool(['--library'], { tool, env: noCredential })
+      const target = await seed(d)
+      const result = await runTool([target, '--edits', editsFile([
+        { library: 'counter', id: 'one', insertAfter: 's1' },
+        { library: 'counter', id: 'two', insertAfter: 's1' },
+        { slideId: 'cph', values: { zoom: 9 } },
+      ])], { tool, env: noCredential })
+      const output = join(toolkit, 'read.bento.html')
+      const listed = await runTool(['--read', target, '--out', output], { tool, env: noCredential })
+      const fresh = (await readDeck(target)).doc
+      ok(built.status === 0 && listing.code === 0 && result.code === 0 && listed.code === 0
+        && log.some(x => x.path === '/api/publish/library.json' && x.status === 200)
+        && !log.some(x => x.path === '/api/harness/library.json')
+        && fresh.slides.slice(0, 3).map((x: any) => x.id).join() === 's1,one,two'
+        && slideOf(fresh, 'cph').runtime.values.place === 'Copenhagen'
+        && /cph.*library scene "map".*zoom=9/.test(listed.out)
+        && /one.*library scene "counter"/.test(listed.out) && /two.*library scene "counter"/.test(listed.out),
+        `U12-R2 toolkit grant lists inserts edits and reads without harness access: ${listing.err} ${result.err} ${listed.err}`)
+    }
+    {
+      const script = join(root, 'scripts/build-beta-plugin-library.mjs')
+      const atRoot = spawnSync(process.execPath, [script, '--check'], { cwd: root, encoding: 'utf8' })
+      const atSlides = spawnSync(process.execPath, [script, '--check'], { cwd: join(root, 'slides'), encoding: 'utf8' })
+      ok(atRoot.status === 0 && atSlides.status === 0,
+        `U12-R2 bundle check is independent of caller cwd (root=${atRoot.status}, slides=${atSlides.status}: ${atSlides.stderr.trim()})`)
+    }
+
     // what a library insert refuses
     const refusals: Array<[string, unknown, RegExp]> = [
       ['an id the library does not have', { library: 'harbour', id: 'h', insertAfter: 'end' }, /"harbour" is not in the scene library/],

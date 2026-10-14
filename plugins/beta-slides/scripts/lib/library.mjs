@@ -14,7 +14,10 @@
 // settings panel's own coerce. This file only adapts that to the tool:
 // presets by name, values over a preset, and refusals that name the key.
 
-import { readManifest, runtimeSlideWith, valueRefusal, valuesFor as presetValues } from './library-core.mjs'
+import { gatedProps, readManifest, runtimeSlideWith, valueRefusal, valuesFor as presetValues } from './library-core.mjs'
+
+/** A slide's settings as the shell keeps them on load: what a values edit may name. */
+export { gatedProps }
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k)

@@ -641,6 +641,10 @@ function textDataUri(type, text) {
   for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
   return `data:${type};base64,${btoa(bin)}`;
 }
+function gatedProps(props) {
+  const r = checkRuntime({ steps: 0, props, values: {} });
+  return r?.props ?? [];
+}
 var valuesFor = (scene, preset) => applyPreset(scene.props, preset ?? { name: "", values: {} });
 function valueRefusal(prop, v) {
   const r = coerce(prop, v);
@@ -675,6 +679,7 @@ function runtimeSlideWith(doc, scene, values) {
   });
 }
 export {
+  gatedProps,
   readManifest,
   runtimeSlide,
   runtimeSlideWith,

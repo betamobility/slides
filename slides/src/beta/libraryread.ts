@@ -132,6 +132,17 @@ function textDataUri(type: string, text: string): string {
 }
 
 /** The values a preset gives (every declared setting); the defaults when there is no preset. */
+/**
+ * A slide's settings as the shell's gate keeps them on load (checkRuntime):
+ * a setting of a kind it does not know, or one hand-edited past its rules, is
+ * not there. A tool that writes values checks against these, or it would
+ * write a value the next load drops.
+ */
+export function gatedProps(props: unknown): RuntimeProp[] {
+  const r = checkRuntime({ steps: 0, props, values: {} }) as RuntimeSlide | undefined
+  return r?.props ?? []
+}
+
 export const valuesFor = (scene: LibraryScene, preset: Preset | undefined) => applyPreset(scene.props, preset ?? { name: '', values: {} })
 
 /**

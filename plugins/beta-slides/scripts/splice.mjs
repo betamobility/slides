@@ -109,7 +109,7 @@ import { join, extname, dirname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { readBlock, writeBlock, isEncrypted } from './lib/bento-doc.mjs'
-import { checkValues, LIBRARY_ID, librarySlide, readLibrary, valuesFor } from './lib/library.mjs'
+import { checkValues, gatedProps, LIBRARY_ID, librarySlide, readLibrary, valuesFor } from './lib/library.mjs'
 
 // slides/src/model.ts RUNTIME_*_BUDGET; restated because this file cannot
 // import the app.
@@ -463,7 +463,8 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
     const slide = hits[0]
     if (!isRuntime(slide) || !slide.runtime.library) throw new Refusal(`values edit: slide "${e.slideId}" is not a library scene (it carries no runtime.library); nothing was written`)
     if (sceneIds.has(e.slideId)) throw new Refusal(`values edit: slide "${e.slideId}" is also replaced by a scene folder in this run; do one or the other; nothing was written`)
-    try { checkValues(Array.isArray(slide.runtime.props) ? slide.runtime.props : [], e.values, `values edit on slide "${e.slideId}"`) } catch (err) { throw new Refusal(`${err.message}; nothing was written`) }
+    // the settings as the shell keeps them: a hand-edited one it drops on load cannot take a value
+    try { checkValues(gatedProps(slide.runtime.props), e.values, `values edit on slide "${e.slideId}"`) } catch (err) { throw new Refusal(`${err.message}; nothing was written`) }
     const before = slide.runtime.values && typeof slide.runtime.values === 'object' ? slide.runtime.values : {}
     slide.runtime.values = { ...before, ...structuredClone(e.values) }
     const keys = valued.get(e.slideId) || new Set()
