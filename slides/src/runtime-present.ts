@@ -275,7 +275,7 @@ export function createRuntimeShow(
   const frames = new Map<string, Held>()
   /** Frames that reported nothing in time. Not mounted again until their slide
    *  leaves the window or the show enters it; else every slide change would retry. */
-  const failed = new Set<string>()
+  const failed = new Map<string, string>()
   let current = -1
   /** The id of the slide at `current`. A remote edit can move a slide to another
    *  index under the show; it is still the same slide, on the same step. */
@@ -302,27 +302,34 @@ export function createRuntimeShow(
   }
 
   /**
-   * One deadline per frame KEY, not per frame: a remote edit mounts every
-   * frame again, and a page that hangs must not get ten fresh seconds each
-   * time someone types. The clock for a key starts when it is first mounted
-   * (or when the show enters its slide) and stops when a frame for it reports,
-   * fails, or stops being wanted.
+   * One clock per frame, held by its key. It starts when the frame is mounted
+   * (or when the show enters its slide) and stops when the frame reports,
+   * fails or is removed. A frame is removed only when it stops being valid
+   * (see sync), never just because a remote edit landed: a collaborator
+   * typing must neither reload a neighbour's page nor run out its clock.
+   *
+   * A rebuild of the section SHOWING does detach its frames (the caller
+   * replaces the nodes), and their replacements start a new clock. That is
+   * deliberate: the other rule, one clock across replacements, removes a
+   * healthy page that needs 600 ms while edits land every 500 ms and leaves
+   * it failed after the typing stops. A page that hangs under constant edits
+   * is never torn down, but it is never uncovered either: its view shows.
    */
   const deadlines = new Map<string, number>()
   const stopClock = (key: string) => { clearTimeout(deadlines.get(key)); deadlines.delete(key) }
-  const startClock = (key: string) => {
-    stopClock(key)
-    deadlines.set(key, window.setTimeout(() => {
-      deadlines.delete(key)
-      const h = frames.get(key)
-      if (h) drop(h, true)
-      failed.add(key)
+  const startClock = (h: Held) => {
+    stopClock(h.key)
+    deadlines.set(h.key, window.setTimeout(() => {
+      deadlines.delete(h.key)
+      if (frames.get(h.key) === h) fail(h)
     }, LOAD_TIMEOUT_MS))
   }
+  /** Give up on a frame, and on its definition: the same thing is not tried again
+   *  until its slide leaves the window or the show enters it. A changed one is. */
+  const fail = (h: Held) => { drop(h); failed.set(h.key, h.made) }
 
-  /** Remove a frame. `keepClock`: another frame for the same key follows, on the same deadline. */
-  const drop = (h: Held, keepClock = false) => {
-    if (!keepClock) stopClock(h.key)
+  const drop = (h: Held) => {
+    if (frames.get(h.key) === h) stopClock(h.key)
     h.frame.removeAttribute('srcdoc')
     h.frame.removeAttribute('src')
     h.frame.remove()
@@ -367,13 +374,12 @@ export function createRuntimeShow(
 
   /** Put `frame` on `host`, covered until it reports, removed if it never does. */
   const hold = (h: Held, host: HTMLElement) => {
-    const fail = () => { if (frames.get(h.key) === h) { drop(h); failed.add(h.key) } }
-    if (!deadlines.has(h.key)) startClock(h.key)
     h.frame.style.visibility = 'hidden'
     h.frame.addEventListener('load', () => uncover(h), { once: true })
-    h.frame.addEventListener('error', fail, { once: true })
+    h.frame.addEventListener('error', () => { if (frames.get(h.key) === h) fail(h) }, { once: true })
     h.host = host
     frames.set(h.key, h)
+    startClock(h)
     host.appendChild(h.frame)
   }
 
@@ -399,9 +405,13 @@ export function createRuntimeShow(
       offline: offlineEnabled(),
       online: typeof navigator === 'undefined' || navigator.onLine !== false,
     })
-    const made = allowed ? JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null]) : ''
+    // (the definition, apart from whether it is allowed right now: a frame that
+    // failed is not tried again just because the network went away and came back)
+    const def = JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null])
+    const made = allowed ? def : ''
     const old = frames.get(key)
-    if (old && (old.made !== made || old.host !== surface)) { drop(old); failed.delete(key) }
+    if (old && (old.made !== made || old.host !== surface)) drop(old)
+    if (failed.has(key) && failed.get(key) !== def) failed.delete(key) // it changed: one more try
     if (frames.has(key) || failed.has(key)) return
     if (!allowed || !source) return
     const frame = blank(slide.name || slide.id)
@@ -442,11 +452,13 @@ export function createRuntimeShow(
       if (el.type !== 'embed') continue
       const key = slideKey + SEP + el.id
       const allowed = liveFrameAllowed(el as EmbedElement)
-      const made = allowed ? (el as EmbedElement).url!.trim() : ''
+      const def = typeof (el as EmbedElement).url === 'string' ? (el as EmbedElement).url!.trim() : ''
+      const made = allowed ? def : ''
       // scoped to this section: the grid and the speaker view repeat the ids
       const host = surface.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
       const old = frames.get(key)
-      if (old && (old.made !== made || old.host !== host)) { drop(old); failed.delete(key) }
+      if (old && (old.made !== made || old.host !== host)) drop(old)
+      if (failed.has(key) && failed.get(key) !== def) failed.delete(key) // it changed: one more try
       if (frames.has(key) || failed.has(key)) continue
       if (!allowed || !host) continue
       const frame = blank((el as EmbedElement).url ?? '')
@@ -465,7 +477,7 @@ export function createRuntimeShow(
     const win = liveWindow(doc.slides.map(inLinearFlow), current, vd)
     const ids = new Set(win.map((i) => sid(i)!))
     for (const h of [...frames.values()]) if (!ids.has(h.slideId) || !h.frame.isConnected) drop(h)
-    for (const key of [...failed]) if (!ids.has(key.split(SEP)[0])) failed.delete(key)
+    for (const key of [...failed.keys()]) if (!ids.has(key.split(SEP)[0])) failed.delete(key)
     for (const i of win) {
       const slide = doc.slides[i]
       const key = sid(i)!
@@ -531,10 +543,10 @@ export function createRuntimeShow(
       // covered gets its full time again. Once per entry; a refresh of the
       // slide showing must not keep a hung frame alive.
       for (const f of frames.values()) {
-        if (f.slideId === key && f.frame.style.visibility === 'hidden') startClock(f.key)
+        if (f.slideId === key && f.frame.style.visibility === 'hidden') startClock(f)
       }
       // walking onto a slide is one more try for a frame that gave up
-      if (key !== null) for (const k of [...failed]) if (k.split(SEP)[0] === key) failed.delete(k)
+      if (key !== null) for (const k of [...failed.keys()]) if (k.split(SEP)[0] === key) failed.delete(k)
     }
     sync()
     arrive()
@@ -563,19 +575,9 @@ export function createRuntimeShow(
     rebuilt: (at) => {
       if (pendingRefresh) return
       pendingRefresh = true
-      queueMicrotask(() => {
-        pendingRefresh = false
-        if (disposed) return
-        // A remote edit landed. Only the section showing was rebuilt, so any
-        // frame waiting on a neighbour may stand on a slide that changed, moved
-        // or went: every frame is mounted again from the document as it is
-        // now. (What had failed stays failed; sync() also checks each frame
-        // against its slide on every slide change.)
-        for (const h of [...frames.values()]) drop(h, true)
-        enter(at(), true)
-        // a key that was not mounted again has no frame to time
-        for (const key of [...deadlines.keys()]) if (!frames.has(key)) stopClock(key)
-      })
+      // enter() keeps whatever is still valid and replaces what the rebuild
+      // detached or the edit changed (sync checks every frame against its slide)
+      queueMicrotask(() => { pendingRefresh = false; enter(at(), true) })
     },
     next: () => move('next', true),
     prev: () => move('prev', true),

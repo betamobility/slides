@@ -1060,6 +1060,46 @@ console.log('\npresent: the frame owner')
         'U13 round4: refused mixed scene becomes a channel-free embed after conversion')
       t.show.dispose()
     }
+    // --- found by a local model-based hunt, after Codex round 4
+    {
+      // a collaborator typing: a doc event every 500 ms, each rebuilding the section showing
+      const t = build([embedSlide('p', 'e1'), sceneSlide('b'), sceneSlide('c')])
+      t.show.enter(0, true)
+      const b = t.framesOn(1)[0]
+      t.say(b, { type: 'bento:ready' })
+      for (let i = 0; i < 30; i++) {
+        tick(500)
+        t.rebuild(0); t.show.rebuilt(() => 0)
+        await new Promise<void>((r) => queueMicrotask(r))
+      }
+      ok(t.framesOn(1)[0] === b && b.isConnected && t.types(b).length === 0, 'fifteen seconds of typing leave a neighbour\'s frame alone: not reloaded, not timed out, still silent')
+      ok(t.live()[0] === 1, 'and the page on the slide showing is mounted again after each rebuild, never marked failed')
+      t.framesOn(0)[0].fire('load')
+      ok(t.framesOn(0)[0].style.visibility === '', 'so it shows as soon as the typing stops and it loads')
+      t.show.dispose()
+    }
+    {
+      // what failed stays failed until it changes
+      const t = build([sceneSlide('a'), embedSlide('p', 'e1')])
+      t.show.enter(0, true)
+      t.framesOn(0)[0].fire('load')
+      tick(10_001)
+      ok(t.live().join('') === '10', 'the embed that hung is removed')
+      const g = globalThis as unknown as { navigator?: unknown }
+      const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+      Object.defineProperty(globalThis, 'navigator', { value: { onLine: false }, configurable: true })
+      t.show.refresh(0)
+      Object.defineProperty(globalThis, 'navigator', { value: { onLine: true }, configurable: true })
+      t.show.refresh(0)
+      if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete g.navigator
+      ok(t.live().join('') === '10', 'the network going away and coming back is not a reason to try it again')
+      ;(t.doc.slides[1].elements[0] as unknown as { url: string }).url = 'https://example.com/other'
+      t.show.refresh(0)
+      ok(t.live().join('') === '11' && t.framesOn(1)[0].attrs.src === 'https://example.com/other', 'its url changing is: the new page gets its try')
+      tick(9_999)
+      ok(t.live().join('') === '11', 'with its own ten seconds')
+      t.show.dispose()
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
