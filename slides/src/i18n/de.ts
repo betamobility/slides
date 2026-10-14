@@ -882,7 +882,7 @@ export const de: Catalog = {
   // BETA FORK (U2): the About dialog's Beta fragment (slides/src/beta/about.ts)
   "Visit slides.betamobility.ai (opens in a new tab)": "slides.betamobility.ai besuchen (öffnet in neuem Tab)",
   "Templates and the agent guide live at {home}; the source and changelog are on {gh}.": "Vorlagen und die Agenten-Anleitung finden Sie unter {home}; Quellcode und Änderungsprotokoll liegen auf {gh}.",
-  "Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Enthält reveal.js, Moveable, Selecto (MIT) · Schriften Inter, Playfair Display und DM Mono (OFL-1.1) — vollständige Hinweise reisen im Quelltext dieser Datei mit.",
+  "Includes reveal.js, Moveable, Selecto (MIT) · Geist and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.": "Enthält reveal.js, Moveable, Selecto (MIT) · Schriften Geist und DM Mono (OFL-1.1) — vollständige Hinweise reisen im Quelltext dieser Datei mit.",
   "Up to date, {v}": "Auf dem neuesten Stand, {v}",
   "The update check did not run ({m}). Check manually below.": "Die Update-Prüfung lief nicht ({m}). Prüfen Sie unten manuell.",
   "Save to Beta…": "Bei Beta speichern…",

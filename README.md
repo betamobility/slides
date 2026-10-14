@@ -52,7 +52,7 @@ The plans of record are `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-p
 | Cloudflare Workers + R2 + Access | deck store at `slides.betamobility.ai` | wrangler OAuth login; Access apps in the dashboard |
 | Cloudflare Pages | release tree at `beta-slides-site.pages.dev` | dashboard |
 | GitHub `betamobility/slides-site` | published release tree | `gh` auth |
-| `Tools/design-system/tokens.json` | source of `beta/tokens.json` | none (sibling repo) |
+| `Tools/design-system/tokens.json` | source of the `beta/v131/` snapshot | none (sibling repo) |
 
 ## Environment Variables
 

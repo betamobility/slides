@@ -1,14 +1,46 @@
 // Beta general template. Existing decks and legacy templates are unchanged.
 // One library on the native 1280×720 canvas; 16:9 geometry scales uniformly.
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-const dir = fileURLToPath(new URL('../../beta/v131/', import.meta.url))
+import { join } from 'node:path'
+// The snapshot, beside this file in the repo; a rig that bundles this module into a temp folder
+// (esbuild) runs from the repo root, so the root's copy is the fallback.
+const besideThis = fileURLToPath(new URL('../../beta/v131/', import.meta.url))
+// BETA_SNAPSHOT_DIR points at another copy (scripts/test-beta-theme.ts proves a missing token fails loudly)
+const dir = process.env.BETA_SNAPSHOT_DIR ? process.env.BETA_SNAPSHOT_DIR.replace(/\/?$/, '/') : existsSync(besideThis + 'tokens.json') ? besideThis : join(process.cwd(), 'beta', 'v131') + '/'
 const core = JSON.parse(readFileSync(dir+'tokens.json','utf8'))
 const tokens = {...core.contexts.find(c=>c.selector===':root').tokens,...core.contexts.find(c=>c.selector==='[data-format="slide"]').tokens}
 function value(name, seen=new Set()) { if(seen.has(name)) throw Error('Cyclic token '+name); seen.add(name); const v=tokens[name]; if(!v) throw Error('Missing token '+name); return v.startsWith('var(')?value(v.slice(4,-1),seen):v }
 const metric=name=>parseFloat(value('--slide-'+name))
 const P={bg1:value('--color-surface'),tx1:value('--color-on-surface'),bg2:value('--color-surface-alt'),tx2:value('--color-on-tint-muted'),accent1:value('--color-surface-deep'),accent2:value('--color-surface-sage'),accent3:value('--color-surface-peach'),accent4:value('--color-on-tint-muted'),accent5:value('--color-on-surface-subtle'),accent6:value('--color-surface-emphasis')}
 const SANS="'Geist', Arial, sans-serif", SERIF="'Times New Roman', Times, serif", MONO="'DM Mono', 'Courier New', monospace"
+// The editorial chart palette (design system v1.5.0, :root --chart-1..4): new charts in a deck take these.
+// Tables: the general template's (header on the second surface, no stripes: zebra is the surface itself, a colour as the format requires).
+const CHART=[1,2,3,4].map(i=>value('--chart-'+i).toUpperCase())
+/** The design system commit the snapshot in beta/v131/ was taken from: read from its SOURCE.md, the one place it is written (scripts/beta-sync-tokens.mjs updates both). */
+export const DESIGN_SYSTEM=(/commit ([0-9a-f]{7})/.exec(readFileSync(dir+'SOURCE.md','utf8'))??[])[1]??(()=>{throw Error('beta/v131/SOURCE.md names no design-system commit')})()
+/**
+ * What every Beta deck carries, from one source: the v1.5.0 theme (palette,
+ * chart palette, Geist and the serif fallback), the embedded fonts (Geist
+ * 300-700, DM Mono 400) and their assets. beta/theme.json is this, written by
+ * scripts/build-beta-theme.mjs; the blank deck, the starter deck and every
+ * template carry it, so there is one Beta look and no second copy of it.
+ */
+export function betaFoundation(){
+ const assets={}
+ // WOFF2, converted losslessly from the TTFs beside them (about 140 KB for five weights instead of 365 KB);
+ // the TTFs stay in beta/v131/fonts/ for people who install Geist for PowerPoint
+ const fonts=[300,400,500,600,700].map(weight=>{assets['geist-'+weight]='data:font/woff2;base64,'+readFileSync(dir+'fonts/geist-'+weight+'.woff2').toString('base64');return {family:'Geist',weight:String(weight),asset:'geist-'+weight}})
+ assets['dm-mono-400']='data:font/woff2;base64,'+readFileSync(dir+'../fonts/dm-mono-latin-400-normal.woff2').toString('base64')
+ fonts.push({family:'DM Mono',weight:'400',asset:'dm-mono-400'})
+ return {
+  theme:{background:P.bg1,color:P.tx1,accent:P.accent1,fontFamily:SANS,headingFamily:SERIF,palette:{...Object.fromEntries(Object.entries(P).filter(([k])=>!['bg1','tx1','accent1'].includes(k))),
+   // v1.5.0 has no link colour: a link is the text's own ink, underlined; a followed one the muted ink
+   hlink:P.tx1,folHlink:P.tx2},chartPalette:CHART,
+   table:{headerBg:P.bg2,headerColor:P.tx1,zebra:P.bg1,borderColor:P.accent5,color:P.tx1,fontFamily:SANS}},
+  fonts,assets,meta:{company:'Beta Mobility'},beta:{tokens:core.version,designSystem:DESIGN_SYSTEM},
+ }
+}
 const frame=(id,x,y,w,h)=>({id,x,y,w,h,rotation:0,opacity:1})
 const text=(id,html,x,y,w,h,size=28,o={})=>({...frame(id,x,y,w,h),type:'text',html:html.replaceAll('\n','<br>'),fontSize:size,fontFamily:SANS,fontWeight:400,color:P[o.ink??'tx1'],themeRefs:{color:o.ink??'tx1'},align:'left',valign:'top',lineHeight:1.25,letterSpacing:-.28,role:o.role??'body',...Object.fromEntries(Object.entries(o).filter(([k])=>k!=='ink'))})
 const shape=(id,x,y,w,h,slot='bg2',o={})=>({...frame(id,x,y,w,h),type:'shape',shape:'rect',fill:P[slot],stroke:'none',strokeWidth:0,radius:0,themeRefs:{fill:slot},...o})
@@ -99,10 +131,8 @@ export function generalTemplate(){
      for(const e of content)e.y-=top-start
    }
  }
- const assets={street:'data:image/jpeg;base64,'+readFileSync(dir+'images/cyclists-bus-lane.jpg').toString('base64'),workshop:'data:image/jpeg;base64,'+readFileSync(dir+'images/regulation-workshop.jpg').toString('base64')}
- const fonts=[300,400,500,600,700].map(weight=>{assets['geist-'+weight]='data:font/ttf;base64,'+readFileSync(dir+'fonts/geist-'+weight+'.ttf').toString('base64');return {family:'Geist',weight:String(weight),asset:'geist-'+weight}})
- assets['dm-mono-400']='data:font/woff2;base64,'+readFileSync(dir+'../fonts/dm-mono-latin-400-normal.woff2').toString('base64')
- fonts.push({family:'DM Mono',weight:'400',asset:'dm-mono-400'})
+ const base=betaFoundation()
+ const assets={...base.assets,street:'data:image/jpeg;base64,'+readFileSync(dir+'images/cyclists-bus-lane.jpg').toString('base64'),workshop:'data:image/jpeg;base64,'+readFileSync(dir+'images/regulation-workshop.jpg').toString('base64')}
  const layouts=structuredClone(slides).map(s=>{for(const e of s.elements)if(e.type==='text'&&e.role!=='list-marker'&&!e.html.includes('{{')){e.placeholder=e.role==='title'?'Your slide title':e.role==='source'?'Source and date':'Replace with your content';e.html=''}return s})
- return {format:'bento/slides',version:1,title:'Beta general template',template:true,size:{width:1280,height:720},theme:{background:P.bg1,color:P.tx1,accent:P.accent1,fontFamily:SANS,headingFamily:SERIF,palette:Object.fromEntries(Object.entries(P).filter(([k])=>!['bg1','tx1','accent1'].includes(k)))},meta:{company:'Beta Mobility',author:''},fonts,assets,layouts,slides,beta:{tokens:core.version,designSystem:'dad65b8',template:'general-v131'}}
+ return {format:'bento/slides',version:1,title:'Beta general template',template:true,size:{width:1280,height:720},theme:base.theme,meta:{...base.meta,author:''},fonts:base.fonts,assets,layouts,slides,beta:{...base.beta,template:'general-v131'}}
 }

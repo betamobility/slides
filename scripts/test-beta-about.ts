@@ -172,7 +172,7 @@ ok(about.whatsNewUrl('2026.10.11') === about.whatsNewUrl('2026.9.2'), 'whatsNewU
 // credits
 const credits = about.aboutCreditsText()
 ok(credits.includes('reveal.js, Moveable, Selecto (MIT)'), 'credits keep the MIT libraries')
-ok(credits.includes('Inter, Playfair Display and DM Mono typefaces (OFL-1.1)'), 'credits name Inter, Playfair Display and DM Mono')
+ok(credits.includes('Geist and DM Mono typefaces (OFL-1.1)'), 'credits name Geist and DM Mono, the faces a Beta deck embeds')
 ok(!/Fraunces|Instrument Sans/.test(credits), 'credits drop upstream\'s faces')
 
 // update section decision

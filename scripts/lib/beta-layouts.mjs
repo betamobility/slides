@@ -13,10 +13,9 @@
 //
 // Consumed by scripts/build-beta-templates.mjs and scripts/test-beta-layouts.ts.
 
+import { generalTemplate } from './beta-general.mjs'
+
 export const CANVAS = { width: 1280, height: 720 }
-const M = 96            // side margin
-const BAND = 1088       // content band
-const RIGHT = M + BAND  // 1184
 
 /** Slot name -> literal, from a generated beta/theme.json. */
 export function paletteFrom(theme) {
@@ -34,140 +33,43 @@ export function paletteFrom(theme) {
 // default made every slide change animate, wanted or not. The ids stay, and a
 // person or Claude sets 'morph' on the slides where the movement is the point.
 export const DEFAULT_TRANSITION = 'none'
-const T = DEFAULT_TRANSITION
-
-const HEADING = "'Playfair Display', Georgia, serif"
-const BODY = "'Inter', system-ui, sans-serif"
-const MONO = "'DM Mono', 'Courier New', monospace"
-
-const text = (pal, id, placeholder, frame, o = {}) => {
-  const colorSlot = o.colorSlot ?? 'tx1'
-  const el = {
-    id, type: 'text', ...frame, rotation: 0, opacity: 1,
-    html: o.html ?? '', fontSize: o.fontSize ?? 24,
-    fontFamily: o.fontFamily ?? BODY, fontWeight: o.fontWeight ?? 400,
-    color: pal[colorSlot], align: o.align ?? 'left', valign: o.valign ?? 'top',
-    lineHeight: o.lineHeight ?? 1.3, role: o.role,
-    themeRefs: { color: colorSlot },
-  }
-  if (placeholder) el.placeholder = placeholder
-  if (o.letterSpacing != null) el.letterSpacing = o.letterSpacing
-  if (o.fx) el.fx = o.fx
-  return el
+/**
+ * The Beta layouts every deck carries: the general template's 35, on design
+ * system v1.5.0 (64 px margins, 46 px working titles, 28 px body, no labels
+ * above titles and no slide numbers). Since 2026-10-14 the blank deck, the
+ * starter deck and the older templates are built on these too, so a new deck
+ * starts in the same look the general template shows. `theme` is accepted for
+ * the old signature and not read: the palette comes from the same snapshot.
+ */
+export function betaLayouts(_theme) {
+  return generalTemplate().layouts
 }
-const rect = (pal, id, frame, o = {}) => {
-  const fillSlot = o.fillSlot ?? 'accent1'
-  const el = {
-    id, type: 'shape', shape: o.shape ?? 'rect', ...frame, rotation: 0, opacity: o.opacity ?? 1,
-    fill: pal[fillSlot], stroke: 'none', strokeWidth: 0, radius: o.radius ?? 0,
-    themeRefs: { fill: fillSlot },
-  }
-  if (o.fx) el.fx = o.fx
-  return el
+
+/**
+ * The image the layouts' photo slots show in a deck that is not the general
+ * template: a quiet placeholder in the palette's second surface, with a
+ * picture glyph in its subtle ink. The general template carries two sample
+ * photographs (about 616 KB as data URIs); the blank deck, the starter deck
+ * (compiled into every shell) and the older templates take this instead, under
+ * the same asset keys, so every image layout still works and says "a picture
+ * goes here".
+ */
+export function placeholderImage(theme) {
+  const bg = theme.palette?.bg2 ?? '#F7F7F7', ink = theme.palette?.accent5 ?? '#767676'
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"><rect width="1600" height="900" fill="${bg}"/><g fill="none" stroke="${ink}" stroke-width="6" stroke-linejoin="round"><rect x="700" y="380" width="200" height="140" rx="12"/><path d="M712 508l56-60 40 40 28-28 52 48"/></g><circle cx="852" cy="416" r="14" fill="${ink}"/></svg>`
+  return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64')
 }
-const chart = (pal, id, frame) => ({
-  id, type: 'chart', ...frame, rotation: 0, opacity: 1, preset: 'bar',
-  option: {
-    xAxis: { type: 'category', data: ['2024', '2025', '2026'] },
-    yAxis: { type: 'value' },
-    series: [{ type: 'bar', name: 'Series', data: [4, 7, 9], itemStyle: { color: pal.accent1, borderRadius: 4 } }],
-  },
-})
 
-/** Footer chrome shared by every content layout: same ids, so it can morph. */
-const footer = (pal) => [
-  rect(pal, 'beta-foot-rule', { x: M, y: 640, w: BAND, h: 1 }, { fillSlot: 'tx2', opacity: 0.25 }),
-  text(pal, 'beta-foot-company', '', { x: M, y: 652, w: 540, h: 28 },
-    { html: '{{company}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
-  text(pal, 'beta-foot-page', '', { x: RIGHT - 200, y: 652, w: 200, h: 28 },
-    { html: '{{page:2}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', align: 'right', valign: 'middle', role: 'kicker' }),
-]
-
-export function betaLayouts(theme) {
-  const pal = paletteFrom(theme)
-  return [
-    {
-      id: 'beta-title', name: 'Beta title', background: pal.bg1, transition: T, notes: '',
-      themeRefs: { background: 'bg1' },
-      elements: [
-        rect(pal, 'beta-orbit', { x: 1000, y: 96, w: 120, h: 120 },
-          { shape: 'ellipse', fillSlot: 'accent1', fx: { loop: { type: 'motion-path', path: 'M0,0 C40,-30 80,30 0,60 C-60,80 -40,-40 0,0', duration: 14, ease: 'none' } } }),
-        text(pal, 'beta-kicker', 'Event or date', { x: M, y: 232, w: 640, h: 32 },
-          { fontSize: 14, fontFamily: MONO, colorSlot: 'accent4', letterSpacing: 1, valign: 'middle', role: 'kicker' }),
-        text(pal, 'beta-title-h', 'Deck title', { x: M, y: 272, w: 860, h: 200 },
-          { fontSize: 72, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.05, valign: 'top', role: 'title' }),
-        text(pal, 'beta-title-sub', 'One sentence on what this deck is for', { x: M, y: 488, w: 720, h: 72 },
-          { fontSize: 24, colorSlot: 'accent4', lineHeight: 1.4, role: 'subtitle' }),
-        text(pal, 'beta-title-byline', '', { x: M, y: 620, w: 720, h: 28 },
-          { html: '{{company}} · {{date}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
-      ],
-    },
-    {
-      id: 'beta-section', name: 'Beta section', background: pal.tx1, transition: T, notes: '',
-      themeRefs: { background: 'tx1' },
-      elements: [
-        text(pal, 'beta-kicker', 'Part 1', { x: M, y: 272, w: 640, h: 32 },
-          { fontSize: 14, fontFamily: MONO, colorSlot: 'accent2', letterSpacing: 1, valign: 'middle', role: 'kicker' }),
-        text(pal, 'beta-title-h', 'Section title', { x: M, y: 312, w: 960, h: 160 },
-          { fontSize: 60, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.05, colorSlot: 'bg1', role: 'title' }),
-        text(pal, 'beta-title-sub', 'What this part answers', { x: M, y: 488, w: 720, h: 60 },
-          { fontSize: 22, colorSlot: 'accent5', lineHeight: 1.4, role: 'subtitle' }),
-      ],
-    },
-    {
-      id: 'beta-two-col', name: 'Beta two columns', background: pal.bg1, transition: T, notes: '',
-      themeRefs: { background: 'bg1' },
-      elements: [
-        text(pal, 'beta-title-h', 'Slide title', { x: M, y: 72, w: BAND, h: 84 },
-          { fontSize: 40, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.1, valign: 'middle', role: 'title' }),
-        text(pal, 'beta-col-left', 'Left column', { x: M, y: 208, w: 528, h: 400 },
-          { fontSize: 22, lineHeight: 1.5, role: 'body' }),
-        text(pal, 'beta-col-right', 'Right column', { x: 656, y: 208, w: 528, h: 400 },
-          { fontSize: 22, lineHeight: 1.5, role: 'body' }),
-        ...footer(pal),
-      ],
-    },
-    {
-      id: 'beta-chart-text', name: 'Beta chart + text', background: pal.bg1, transition: T, notes: '',
-      themeRefs: { background: 'bg1' },
-      elements: [
-        text(pal, 'beta-title-h', 'What the numbers say', { x: M, y: 72, w: BAND, h: 84 },
-          { fontSize: 40, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.1, valign: 'middle', role: 'title' }),
-        chart(pal, 'beta-chart', { x: M, y: 208, w: 624, h: 400 }),
-        text(pal, 'beta-col-right', 'The point the chart makes, in two sentences', { x: 752, y: 208, w: 432, h: 340 },
-          { fontSize: 22, lineHeight: 1.5, role: 'body' }),
-        text(pal, 'beta-asof', 'Data as of YYYY-MM-DD', { x: 752, y: 568, w: 432, h: 28 },
-          { fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
-        ...footer(pal),
-      ],
-    },
-    {
-      id: 'beta-hero', name: 'Beta hero', background: pal.tx1, transition: T, notes: '',
-      themeRefs: { background: 'tx1' },
-      elements: [
-        rect(pal, 'beta-hero-band', { x: 0, y: 0, w: CANVAS.width, h: 456 }, { fillSlot: 'accent3' }),
-        text(pal, 'beta-title-h', 'One big statement', { x: M, y: 496, w: BAND, h: 120 },
-          { fontSize: 48, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.1, colorSlot: 'bg1', valign: 'top', role: 'title' }),
-        text(pal, 'beta-foot-company', '', { x: M, y: 652, w: 540, h: 28 },
-          { html: '{{company}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent5', valign: 'middle', role: 'kicker' }),
-        text(pal, 'beta-foot-page', '', { x: RIGHT - 200, y: 652, w: 200, h: 28 },
-          { html: '{{page:2}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent5', align: 'right', valign: 'middle', role: 'kicker' }),
-      ],
-    },
-    {
-      id: 'beta-closing', name: 'Beta closing', background: pal.bg1, transition: T, notes: '',
-      themeRefs: { background: 'bg1' },
-      elements: [
-        rect(pal, 'beta-orbit', { x: 1000, y: 96, w: 120, h: 120 }, { shape: 'ellipse', fillSlot: 'accent1' }),
-        text(pal, 'beta-title-h', 'Thank you', { x: M, y: 272, w: 860, h: 120 },
-          { fontSize: 60, fontFamily: HEADING, fontWeight: 700, lineHeight: 1.05, role: 'title' }),
-        text(pal, 'beta-title-sub', 'Next step, and who to contact', { x: M, y: 412, w: 720, h: 96 },
-          { fontSize: 22, colorSlot: 'accent4', lineHeight: 1.5, role: 'subtitle' }),
-        text(pal, 'beta-title-byline', '', { x: M, y: 620, w: 720, h: 28 },
-          { html: '{{company}} · {{author}}', fontSize: 13, fontFamily: MONO, colorSlot: 'accent4', valign: 'middle', role: 'kicker' }),
-      ],
-    },
-  ]
+/**
+ * A chart slide's source line is where its date lives (the skill's as-of rule):
+ * a placeholder, never a live value, in a shipped deck. The author, or Claude
+ * refreshing the figures, writes "Data as of YYYY-MM-DD · source" there.
+ */
+function asOf(slide) {
+  if (!slide.elements.some((e) => e.type === 'chart')) return slide
+  const src = slide.elements.find((e) => e.type === 'text' && e.role === 'source')
+  if (src) { src.html = ''; src.placeholder = 'Data as of YYYY-MM-DD · source' }
+  return slide
 }
 
 /** A slide instantiated from a layout: same ids (so chrome morphs), html filled by id. */
@@ -186,49 +88,55 @@ export function slideFrom(layouts, layoutId, slideId, fill = {}, notes = '') {
   return s
 }
 
-/** The starter decks (plan R7) plus `blank` (2026-09-10 plan, U2).
- * Each is `template: true`, no docId, no collab. */
+/** The starter decks (plan R7) plus `blank` (2026-09-10 plan, U2), on the
+ * general template's layouts and the v1.5.0 foundation (2026-10-14). Each is
+ * `template: true`, no docId, no collab. Element ids are the general layouts'
+ * (`title`, `subtitle`, `byline`, `left-heading`, `left`, `right-heading`,
+ * `right`, `body`), so content rides across them by role. */
 export function betaTemplates(fragment) {
-  const layouts = betaLayouts(fragment.theme)
+  const general = generalTemplate()
+  const layouts = general.layouts
   const base = (title, subject, slides) => ({
     format: 'bento/slides', version: 1, title, template: true,
     meta: { ...fragment.meta, author: '', subject },
     size: { ...CANVAS },
-    theme: fragment.theme, fonts: fragment.fonts, assets: fragment.assets, beta: fragment.beta,
+    theme: fragment.theme, fonts: fragment.fonts,
+    // the layouts' photo slots take a placeholder here; only the general template carries sample photographs
+    assets: { ...fragment.assets, street: placeholderImage(fragment.theme), workshop: placeholderImage(fragment.theme) },
+    beta: fragment.beta,
     layouts, slides,
   })
-  const S = (layoutId, id, fill, notes) => slideFrom(layouts, layoutId, id, fill, notes)
+  const S = (layoutId, id, fill, notes) => asOf(slideFrom(layouts, layoutId, id, fill, notes))
+  const cols = (left, leftBody, right, rightBody) => ({ 'left-heading': left, left: leftBody, 'right-heading': right, right: rightBody })
   return {
     // The one /new clones (2026-09-10 plan, U2). One cover slide with every
     // placeholder intact, so a colleague lands on a deck that is theirs to
-    // fill rather than someone else's to edit down. It carries the same
-    // theme, fonts and six layouts as its siblings, so the first "＋ Slide"
-    // offers the whole design system.
+    // fill; it carries the 35 layouts, so the first "＋ Slide" offers them all.
     blank: base('Untitled deck', '', [
-      S('beta-title', 'cover', {}, 'Give the deck a title, then add slides from the Beta layouts.'),
+      S('title', 'cover', {}, 'Give the deck a title, then add slides from the Beta layouts.'),
     ]),
     'client-pitch': base('Client pitch', 'Client pitch', [
-      S('beta-title', 'cover', { 'beta-kicker': 'Proposal', 'beta-title-h': 'A better way to run the network', 'beta-title-sub': 'What we propose, what it costs, and what changes for riders.' }, 'Open with the one thing the client already wants to be true.'),
-      S('beta-section', 'why', { 'beta-kicker': 'Part 1', 'beta-title-h': 'Why now', 'beta-title-sub': 'The pressure the client is under this year.' }, ''),
-      S('beta-two-col', 'situation', { 'beta-title-h': 'Where the network stands', 'beta-col-left': '<b>What works</b><br>Two or three lines.', 'beta-col-right': '<b>What does not</b><br>Two or three lines.' }, 'Keep both columns to three lines each.'),
-      S('beta-chart-text', 'evidence', { 'beta-title-h': 'What the numbers say', 'beta-col-right': 'The point the chart makes, in two sentences.' }, 'Refresh the figures at edit time and keep the as-of date.'),
-      S('beta-two-col', 'proposal', { 'beta-title-h': 'What we propose', 'beta-col-left': '<b>Scope</b><br>Three bullets.', 'beta-col-right': '<b>Timeline and price</b><br>Three bullets.' }, ''),
-      S('beta-closing', 'close', { 'beta-title-h': 'Next step', 'beta-title-sub': 'A decision meeting within two weeks.' }, ''),
+      S('title', 'cover', { title: 'A better way to run the network', subtitle: 'What we propose, what it costs, and what changes for riders.', byline: 'Proposal · Month year' }, 'Open with the one thing the client already wants to be true.'),
+      S('chapter', 'why', { title: 'Why now', subtitle: 'The pressure the client is under this year.' }, ''),
+      S('two-columns', 'situation', { title: 'Where the network stands', ...cols('What works', 'Two or three lines.', 'What does not', 'Two or three lines.') }, 'Keep both columns to three lines each.'),
+      S('chart', 'evidence', { title: 'What the numbers say', body: 'The point the chart makes, in two sentences.' }, 'Refresh the figures at edit time and keep the as-of date.'),
+      S('two-columns', 'proposal', { title: 'What we propose', ...cols('Scope', 'Three short points.', 'Timeline and price', 'Three short points.') }, ''),
+      S('thank-you', 'close', { title: 'Next step', subtitle: 'A decision meeting within two weeks.' }, ''),
     ]),
     'insight-brief': base('Insight brief', 'Insight brief', [
-      S('beta-title', 'cover', { 'beta-kicker': 'Insight brief', 'beta-title-h': 'One finding, well argued', 'beta-title-sub': 'The claim in one sentence.' }, 'State the finding on the cover; the rest is evidence.'),
-      S('beta-chart-text', 'finding-1', { 'beta-title-h': 'The finding', 'beta-col-right': 'What the chart shows and why it matters.' }, ''),
-      S('beta-two-col', 'context', { 'beta-title-h': 'Context', 'beta-col-left': '<b>What we compared</b><br>Sources and period.', 'beta-col-right': '<b>What we excluded</b><br>And why.' }, ''),
-      S('beta-section', 'so-what', { 'beta-kicker': 'So what', 'beta-title-h': 'What it means for the client', 'beta-title-sub': 'Two implications, one recommendation.' }, ''),
-      S('beta-closing', 'close', { 'beta-title-h': 'Recommendation', 'beta-title-sub': 'The one thing to do next.' }, ''),
+      S('title', 'cover', { title: 'One finding, well argued', subtitle: 'The claim in one sentence.', byline: 'Insight brief · Month year' }, 'State the finding on the cover; the rest is evidence.'),
+      S('chart', 'finding-1', { title: 'The finding', body: 'What the chart shows and why it matters.' }, ''),
+      S('two-columns', 'context', { title: 'Context', ...cols('What we compared', 'Sources and period.', 'What we excluded', 'And why.') }, ''),
+      S('chapter', 'so-what', { title: 'What it means for the client', subtitle: 'Two implications, one recommendation.' }, ''),
+      S('thank-you', 'close', { title: 'Recommendation', subtitle: 'The one thing to do next.' }, ''),
     ]),
     'workshop': base('Workshop', 'Workshop', [
-      S('beta-title', 'cover', { 'beta-kicker': '{{date}}', 'beta-title-h': 'Workshop title', 'beta-title-sub': 'Who is in the room and what we leave with.' }, ''),
-      S('beta-section', 'agenda', { 'beta-kicker': 'Agenda', 'beta-title-h': 'Three blocks, one outcome', 'beta-title-sub': 'Framing, working session, decisions.' }, ''),
-      S('beta-hero', 'question', { 'beta-title-h': 'The question we are here to answer' }, 'Leave this on screen while groups work.'),
-      S('beta-two-col', 'exercise', { 'beta-title-h': 'Exercise', 'beta-col-left': '<b>Task</b><br>What each group does.', 'beta-col-right': '<b>Output</b><br>What they bring back.' }, ''),
-      S('beta-two-col', 'decisions', { 'beta-title-h': 'Decisions', 'beta-col-left': '<b>Decided</b><br>Fill in live.', 'beta-col-right': '<b>Parked</b><br>Fill in live.' }, ''),
-      S('beta-closing', 'close', { 'beta-title-h': 'Thank you', 'beta-title-sub': 'Notes go out within two days.' }, ''),
+      S('title', 'cover', { title: 'Workshop title', subtitle: 'Who is in the room and what we leave with.', byline: '{{date}}' }, ''),
+      S('chapter', 'agenda', { title: 'Three blocks, one outcome', subtitle: 'Framing, working session, decisions.' }, ''),
+      S('statement', 'question', { title: 'The question we are here to answer' }, 'Leave this on screen while groups work.'),
+      S('two-columns', 'exercise', { title: 'Exercise', ...cols('Task', 'What each group does.', 'Output', 'What they bring back.') }, ''),
+      S('two-columns', 'decisions', { title: 'Decisions', ...cols('Decided', 'Fill in live.', 'Parked', 'Fill in live.') }, ''),
+      S('thank-you', 'close', { title: 'Thank you', subtitle: 'Notes go out within two days.' }, ''),
     ]),
   }
 }
@@ -239,22 +147,25 @@ export function betaTemplates(fragment) {
  * NOT a template: the app mints its docId at boot (slides/src/betastarter.ts).
  */
 export function betaStarter(fragment) {
-  const layouts = betaLayouts(fragment.theme)
-  const S = (layoutId, id, fill, notes) => slideFrom(layouts, layoutId, id, fill, notes)
+  const general = generalTemplate()
+  const layouts = general.layouts
+  const S = (layoutId, id, fill, notes) => asOf(slideFrom(layouts, layoutId, id, fill, notes))
   return {
     format: 'bento/slides', version: 1, title: 'Beta Slides',
     meta: { ...fragment.meta, author: '', subject: 'Beta Slides' },
     size: { ...CANVAS },
-    theme: fragment.theme, fonts: fragment.fonts, assets: fragment.assets, beta: fragment.beta,
+    theme: fragment.theme, fonts: fragment.fonts,
+    assets: { ...fragment.assets, street: placeholderImage(fragment.theme), workshop: placeholderImage(fragment.theme) },
+    beta: fragment.beta,
     layouts,
     slides: [
-      S('beta-title', 'cover', { 'beta-kicker': 'Beta Slides', 'beta-title-h': 'The deck is one file.', 'beta-title-sub': 'Deck, viewer and editor in one HTML file, in the Beta design system. Press Esc to edit, or ask Claude.' },
+      S('title', 'cover', { title: 'The deck is one file.', subtitle: 'Deck, viewer and editor in one HTML file, in the Beta design system. Press Esc to edit, or ask Claude.', byline: 'Beta Slides' },
         'This is the starter deck a fresh Beta shell opens with. Save it under the deck\'s own name.'),
-      S('beta-two-col', 'how', { 'beta-title-h': 'How this works', 'beta-col-left': '<b>Edit here</b><br>Esc opens the editor. Apply a Beta layout from the slide panel; text rides across by role.', 'beta-col-right': '<b>Or ask Claude</b><br>Install the beta-slides plugin and describe the deck. It starts from a Beta template and exports PowerPoint.' },
+      S('two-columns', 'how', { title: 'How this works', 'left-heading': 'Edit here', left: 'Esc opens the editor. Apply a Beta layout from the slide panel; text rides across by role.', 'right-heading': 'Or ask Claude', right: 'Install the beta-slides plugin and describe the deck. It starts from a Beta template and exports PowerPoint.' },
         'The two ways a deck gets made. Both end in the same file.'),
-      S('beta-chart-text', 'numbers', { 'beta-title-h': 'Numbers are charts', 'beta-col-right': 'A chart element, in the theme\'s palette. Refresh figures when you edit and keep the date.' },
+      S('chart', 'numbers', { title: 'Numbers are charts', body: 'A chart element, in the theme\'s palette. Refresh figures when you edit and keep the date.' },
         'Replace the placeholder series with the real figures and update the as-of date.'),
-      S('beta-closing', 'close', { 'beta-title-h': 'Start writing', 'beta-title-sub': 'Delete these slides, keep the layouts. Export PPTX sits beside Export PDF.' }, ''),
+      S('thank-you', 'close', { title: 'Start writing', subtitle: 'Delete these slides, keep the layouts. Export PPTX sits beside Export PDF.' }, ''),
     ],
   }
 }

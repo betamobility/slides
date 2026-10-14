@@ -70,7 +70,7 @@ export function whatsNewUrl(_version: string): string {
 /** The licence line: the MIT libraries upstream credits, and the three OFL
  *  faces the Beta deck embeds (beta/fonts/). */
 export function aboutCreditsText(): string {
-  return t('Includes reveal.js, Moveable, Selecto (MIT) · Inter, Playfair Display and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.')
+  return t('Includes reveal.js, Moveable, Selecto (MIT) · Geist and DM Mono typefaces (OFL-1.1) — full notices travel in this file’s source.')
 }
 
 /** What the update section shows for a check result (KTD3).
