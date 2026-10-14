@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" role="img" aria-label="Counter: 1 250 000 trips this year">
+  <rect width="1280" height="720" fill="#FFFFFF"/>
+  <text x="640" y="372" text-anchor="middle" font-family="Geist, Inter, system-ui, sans-serif" font-size="158" font-weight="600" letter-spacing="-3" fill="#1A1A1A">1 250 000</text>
+  <text x="640" y="446" text-anchor="middle" font-family="Geist, Inter, system-ui, sans-serif" font-size="30" fill="#5C5C5C">trips this year</text>
+</svg>

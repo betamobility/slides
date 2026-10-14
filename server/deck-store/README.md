@@ -43,6 +43,9 @@ Anything not on that list is gated, so a path nobody thought about costs a login
 | `GET /api/harness/decks/:id` | service token or person | the stored bytes and `ETag`, for a read before a replace. Not owner-scoped, not tracked |
 | `PUT /api/harness/decks/:id` | service token or person | the replace handler, with `If-Match` **required**: `428` without it, `412` when stale, `200` + new `ETag` otherwise |
 | `PUT /api/harness/decks/:id/assets/:name` | service token only | store a scene asset under `assets/<id>/<name>`. Name `[A-Za-z0-9][A-Za-z0-9._-]{0,79}` (`400`), deck must exist (`404`), type `image/png`, `image/jpeg`, `image/webp`, `image/svg+xml`, `application/json` or `text/csv` (`415`), 16 MB cap (`413`). SVG is stored with `<script>`, `<foreignObject>` and `on*` attributes stripped. A person gets `403` |
+| `PUT /api/harness/library.json` | service token only | replace the scene library's manifest, stored under the one key `library/library.json`. `application/json` (`415`), 8 MB cap (`413`), must parse and be a `beta/library` manifest with a `scenes` list (`400`). Built and sent by `scripts/build-beta-library.mjs --upload`. A person gets `403` |
+| `GET /api/harness/library.json` | service token or person | the manifest as uploaded, `private, no-cache` with an `ETag` (`If-None-Match` → `304`); `404` until one is uploaded |
+| `GET /library/library.json` | person | the same bytes, for the editor's gallery in a store tab. A service token gets `403` here; it has the route above |
 
 Refusals: `401` with no body when the Access assertion is missing or does not verify (every gated route, including `/d/:id`); `403` for a service token anywhere outside `/api/harness/`; `400` with a one-word reason (`size`, `block`, `json`, `format`) on a write that fails the shape check, which is answered before any `If-Match` precondition; `404` with no body for an unknown id or path. The size cap is 32 MB.
 
@@ -72,6 +75,7 @@ Analytics: the worker posts `deck_open`, `deck_save` and `deck_new` to Plausible
 | `GET /api/publish/decks/:id` | grant | the deck **with its whole `collab` block removed**, re-serialised, `content-length` computed from the served bytes, and the stored object's `ETag` |
 | `PUT /api/publish/decks/:id` | grant | the replace handler with `If-Match` **required**, the stored `collab` block restored over whatever the body carried, and the bytes outside the `#bento-doc` block pinned to the stored ones (`400 shell`). The block's format may not change either (`400 format`) |
 | `PUT /api/publish/decks/:id/assets/:name` | grant | as the harness asset route |
+| `GET /api/publish/library.json` | grant | the scene library's manifest, the same bytes as the two gated read routes; `404` until one is uploaded. A grant never writes it |
 
 There is **no list route and no delete route** under `/api/publish/`: a leaked grant can neither enumerate the store nor destroy a deck.
 

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Map</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  svg { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<svg id="m" viewBox="0 0 1600 900" role="img"></svg>
+<script>
+  // A place on an equirectangular grid: x is longitude, y is latitude. There is
+  // no basemap in this scene; it draws meridians, parallels and one marker.
+  // Defaults match scene.json, so the file previews on its own in a browser.
+  // The font is an ATTRIBUTE on every text, not page CSS: the still is this
+  // drawing saved as a file, and a file has no stylesheet.
+  const W = 1600, NS = 'http://www.w3.org/2000/svg', FONT = 'Geist, Inter, system-ui, sans-serif'
+  let H = 900 // follows the frame's shape, so nothing is cropped on a 4:3 deck
+  const state = { step: 0, reduce: false,
+    props: { place: 'Oslo', position: '59.9139, 10.7522', zoom: 5, grid: 1, accent: '#C2410C', background: '#F5F3EE' } }
+  const svg = document.getElementById('m')
+  let span = 0, raf = 0
+
+  /** A colour a deck may set: a plain CSS colour, never something that loads (the shell refuses those too). */
+  const colour = (v, fallback) => (typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/.test(v) && !/url|expression|var\s*\(/i.test(v) ? v : fallback)
+
+  /** "59.9, 10.7" → [lat, lon], held inside the world; anything else is 0, 0.
+   *  "59,9 10,7" and "59,9, 10,7" (decimal commas) read the same. */
+  function position() {
+    const raw = String(state.props.position).trim()
+    let parts = raw.split(/\s*;\s*|\s*,\s+|\s+/)
+    parts = parts.length === 2 ? parts.map((s) => s.replace(',', '.')) : raw.split(',')
+    parts = parts.map((s) => Number(String(s).trim()))
+    const lat = Number.isFinite(parts[0]) ? Math.max(-85, Math.min(85, parts[0])) : 0
+    const lon = Number.isFinite(parts[1]) ? Math.max(-180, Math.min(180, parts[1])) : 0
+    return [lat, lon]
+  }
+  /** Degrees of longitude across the picture at a zoom: 360 at 1, halved each level. */
+  const spanAt = (zoom) => 360 / Math.pow(2, Math.max(1, Math.min(9, zoom)) - 1)
+  /** The stepped-in zoom, from 2: at 1 the wide view could be no wider and the step would do nothing. */
+  const zoomIn = () => Math.max(2, Math.min(9, Number(state.props.zoom) || 2))
+  /** The wide view is two levels out from the stepped-in one. */
+  const target = () => spanAt(state.step > 0 ? zoomIn() : zoomIn() - 2)
+  const nice = (deg) => [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 45, 90].find((s) => s >= deg) || 90
+  const el = (name, attrs, text) => {
+    const n = document.createElementNS(NS, name)
+    for (const k in attrs) n.setAttribute(k, attrs[k])
+    if (text != null) n.textContent = text
+    return n
+  }
+  const deg = (v, pos, neg) => `${Math.abs(v).toFixed(Math.abs(v) % 1 ? 2 : 0)}°${v === 0 ? '' : v > 0 ? pos : neg}`
+
+  function draw() {
+    const p = state.props
+    const [lat, lon] = position()
+    H = Math.round(W * Math.max(0.3, Math.min(3, (window.innerHeight || 9) / (window.innerWidth || 16))))
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    const accent = colour(p.accent, '#C2410C')
+    const perPx = span / W // degrees per unit, the same both ways
+    const x = (l) => W / 2 + (l - lon) / perPx
+    const y = (l) => H / 2 - (l - lat) / perPx
+    svg.replaceChildren(el('rect', { width: W, height: H, fill: colour(p.background, '#F5F3EE') }))
+    svg.setAttribute('aria-label', `${p.place}, ${deg(lat, 'N', 'S')} ${deg(lon, 'E', 'W')}`)
+    if (p.grid) {
+      const every = nice(span / 8)
+      const g = el('g', { stroke: '#1A1A1A', 'stroke-opacity': 0.14, 'stroke-width': 1.5, fill: 'none' })
+      const t = el('g', { fill: '#1A1A1A', 'fill-opacity': 0.5, 'font-size': 20, 'font-family': FONT })
+      const west = lon - span / 2, north = lat + (H / 2) * perPx, south = lat - (H / 2) * perPx
+      for (let l = Math.ceil(west / every) * every; l <= west + span; l += every) {
+        g.appendChild(el('line', { x1: x(l), y1: 0, x2: x(l), y2: H }))
+        const shown = ((l + 540) % 360) - 180
+        t.appendChild(el('text', { x: x(l) + 8, y: H - 14 }, deg(shown, 'E', 'W')))
+      }
+      for (let l = Math.ceil(south / every) * every; l <= north; l += every) {
+        if (l < -90 || l > 90) continue
+        g.appendChild(el('line', { x1: 0, y1: y(l), x2: W, y2: y(l) }))
+        t.appendChild(el('text', { x: 14, y: y(l) - 8 }, deg(l, 'N', 'S')))
+      }
+      svg.append(g, t)
+    }
+    svg.append(
+      el('circle', { cx: W / 2, cy: H / 2, r: 34, fill: accent, 'fill-opacity': 0.18 }),
+      el('circle', { cx: W / 2, cy: H / 2, r: 13, fill: accent, stroke: '#FFFFFF', 'stroke-width': 4 }),
+      el('text', { x: W / 2 + 30, y: H / 2 - 22, 'font-size': 54, 'font-weight': 600, 'font-family': FONT, fill: '#1A1A1A' }, String(p.place).slice(0, 80)),
+      el('text', { x: W / 2 + 30, y: H / 2 + 18, 'font-size': 24, 'font-family': FONT, fill: '#1A1A1A', 'fill-opacity': 0.6 }, `${deg(lat, 'N', 'S')}  ${deg(lon, 'E', 'W')}`),
+    )
+  }
+
+  /** Go to the view the step asks for: at once, or eased when motion is allowed. */
+  function settle(animate) {
+    cancelAnimationFrame(raf)
+    const to = target()
+    if (!animate || state.reduce || !span || span === to) { span = to; return draw() }
+    const from = span, t0 = performance.now()
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / 900), e = 1 - Math.pow(1 - k, 3)
+      span = Math.exp(Math.log(from) + (Math.log(to) - Math.log(from)) * e) // zoom is even in log space
+      draw()
+      if (k < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      state.step = m.step // the last step when the presenter arrives going backwards
+      Object.assign(state.props, m.props)
+      state.reduce = !!m.reduceMotion
+      settle(false)
+    } else if (m.type === 'bento:step') {
+      state.step = m.index
+      settle(true)
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+      settle(false)
+    } else if (m.type === 'bento:motion') {
+      state.reduce = !!m.reduce
+      if (state.reduce) settle(false) // a zoom under way lands at once
+    }
+  })
+  window.addEventListener('resize', draw)
+
+  // Keys pressed inside the frame never reach the shell: forward them.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  settle(false)
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>
