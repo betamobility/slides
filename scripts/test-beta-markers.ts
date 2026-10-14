@@ -144,7 +144,8 @@ export function markerLines(file: string, text: string): Set<number> {
     //   the scalar ENDS at the first non-blank line indented less than that.
     // Every line inside is text; a `#` there is never a marker. A line after
     // it is structure again, and a `#` comment there counts.
-    const indentOf = (l: string) => l.search(/\S/)
+    // YAML indents with SPACES only: a tab or a non-breaking space starts content (Codex round 10)
+    const indentOf = (l: string) => (/^[ \t]*$/.test(l) ? -1 : l.search(/[^ ]/))
     const unquoted = (l: string) => l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => '"' + ' '.repeat(Math.max(0, q.length - 2)) + '"')
     const HEADER = /^(?:(?:![^\s]*|&[^\s]+)\s+)*[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$/
     /** For a structure line: the column of the node its value belongs to, and whether that value is a block scalar header. */
@@ -152,16 +153,19 @@ export function markerLines(file: string, text: string): Set<number> {
       const bare = unquoted(l)
       let col = indentOf(bare)
       let rest = bare.slice(col)
-      let item = false
+      let dash = -1 // the column of the innermost `-` peeled, when the line is a sequence entry
       // peel `- ` sequence entries (nested `- - x` too)
-      for (let m; (m = /^-(?:\s+|$)/.exec(rest)); ) { col += m[0].length; rest = rest.slice(m[0].length); item = true }
+      for (let m; (m = /^-(?:\s+|$)/.exec(rest)); ) { dash = col; col += m[0].length; rest = rest.slice(m[0].length) }
       // a key: `key:` then a space or the end of the line (a header starts with | > ! or &, never a key)
       const key = /^[|>!&]/.test(rest) ? null : /^[^#:]*?:(?:\s+|$)/.exec(rest)
       const value = key ? rest.slice(key[0].length) : rest
       if (!HEADER.test(value.trim())) return null
-      const digit = Number(/[|>]([^\s#]*)/.exec(value)![1].replace(/[^1-9]/g, '') || 0)
-      // the owner: the key's column, or the item's; a header alone on its line is resolved by the caller (-1)
-      return { owner: key || item ? col : -1, digit }
+      // the indicators, read AFTER the tags and anchors (a verbatim tag `!<…>` holds a `>`)
+      const bareHeader = value.trim().replace(/^(?:(?:![^\s]*|&[^\s]+)\s+)*/, '')
+      const digit = Number(/^[|>]([^\s#]*)/.exec(bareHeader)![1].replace(/[^1-9]/g, '') || 0)
+      // the owner: the key's column; for an entry whose value IS the header (`- |2`), the dash's
+      // column; a header alone on its line is resolved by the caller (-1)
+      return { owner: key ? col : dash >= 0 ? dash : -1, digit }
     }
     const isComment = (l: string) => /^\s*#/.test(l)
     const inText = new Set<number>()
@@ -408,6 +412,28 @@ console.log('the rule itself (no git needed)')
   const lines = ['steps:', '  - run: |', '      echo hi', '    # BETA FORK: next step', '  - run: echo next']
   const h = hooksOf('.github/workflows/ci.yml', '@@ -3,0 +4,2 @@\n+' + lines.slice(3).join('\n+') + '\n', lines)[0]
   ok(h.marked && h.line === 4, 'round 9 real marker between run steps is accepted after scalar dedent')
+}
+
+// Round 10: Ruby/Psych is the independent oracle for valid BLOCK scalars.
+// Each fixture contains marker text as data; a real comment is then prepended
+// as the positive control. No quoted/flow scalar exceptions are exercised.
+{
+  const cases = [
+    ['sequence scalar owner column', ['- |2', '  # BETA FORK', '  echo next']],
+    ['verbatim tag before explicit indentation', ['run: !<tag:yaml.org,2002:str> |2', '    echo hi', '  # BETA FORK', '  echo next']],
+    ['non-ASCII whitespace is content, not YAML indentation', ['run: |', '  \u00a0echo hi', '  # BETA FORK', '  echo next']],
+  ] as const
+  for (const [name, lines] of cases) {
+    const parsed = JSON.parse(execFileSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.load(STDIN.read))'],
+      { input: lines.join('\n') + '\n', encoding: 'utf8' }))
+    const scalar = Array.isArray(parsed) ? parsed[0] : parsed.run
+    const diff = `@@ -0,0 +1,${lines.length} @@\n` + lines.map(l => '+' + l).join('\n') + '\n'
+    const hook = hooksOf('.github/workflows/ci.yml', diff, [...lines])[0]
+    const real = ['# BETA FORK: actual comment', ...lines]
+    const positive = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${real.length} @@\n` + real.map(l => '+' + l).join('\n') + '\n', real)[0]
+    ok(scalar.includes('# BETA FORK') && !hook.marked && hook.file === '.github/workflows/ci.yml' && hook.line === 1 && positive.marked,
+      `round 10 ${name}: Ruby confirms scalar data; forgotten hook must fail at ${hook.file}:${hook.line} (marked=${hook.marked})`)
+  }
 }
 
 console.log('\nthe upstream this fork tracks')

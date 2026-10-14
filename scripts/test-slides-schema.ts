@@ -704,5 +704,24 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ok(!misses.length, 'round 8 mixed-case embed URLs at the gate limit survive save/schema; bad scheme fails: ' + misses.join(', '))
 }
 
+// BETA FORK: round 10, saved repair output across all runtime metadata fields.
+{
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const rt = (file.$defs as any).slide.properties.runtime
+  const misses: string[] = []
+  for (const [key, bad] of Object.entries({ src: 'javascript:x', still: 'asset:', url: 'http://example.test',
+    steps: -1, props: [{ key: 'x', label: 'X', kind: 'unknown', default: 0 }],
+    assets: ['../secret'], library: { id: 'Bad ID', version: 0 } })) {
+    const raw = { [key]: bad }
+    if (!validate(rt, raw, file).length) misses.push(`invalid ${key} accepted`)
+    const deck = starterDoc(); deck.slides[0].runtime = checkRuntime(raw)!
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+    if (check(saved, file).length) misses.push(`saved repair of ${key} rejected`)
+    saved.slides[0].runtimeUnexpected = true
+    if (!check(saved, file).some(e => e.includes('unknown key runtimeUnexpected'))) misses.push(`unknown slide key after ${key}`)
+  }
+  ok(!misses.length, 'round 10 runtime invalid-field refusal and actual saved repairs: ' + misses.join(', '))
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

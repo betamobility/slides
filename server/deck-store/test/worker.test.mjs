@@ -348,6 +348,24 @@ export async function run(Miniflare) {
       }
       ok(!misses.length, 'round 9 schema suffix confusion refuses private routes and writes: ' + misses.join(', '))
     }
+    // Round 10: WHATWG backslash normalization must not grant private reads;
+    // double-encoded separators remain opaque and may only reach Pages.
+    {
+      const misses = []
+      for (const [path, publicPath] of [
+        ['/schema/..\\api/decks', false], ['/schema\\..\\api/decks', false],
+        ['/schema/%252e%252e%252fapi%252fdecks', true], ['/schema/', true],
+      ]) for (const method of ['PATCH', 'PUT', 'OPTIONS', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        const body = await response.text()
+        const allowed = publicPath && ['GET', 'HEAD'].includes(method)
+        if (response.status !== (allowed ? 200 : 401) || proxied.length - before !== Number(allowed)
+          || ((!allowed || method === 'HEAD') && body !== '')
+          || (allowed && new URL(proxied.at(-1).url).host !== PAGES_ORIGIN)) misses.push(`${method} ${path}: ${response.status}`)
+      }
+      ok(!misses.length, 'round 10 schema backslashes, double escapes, directory and uncommon methods: ' + misses.join(', '))
+    }
     // Independent U3 refusal tests: prefix lookalikes, normalized traversal and writes.
     for (const path of ['/schema', '/schemaX/slides.json', '/schema%2Fslides.json',
       '/schema/../api/decks', '/schema/%2e%2e/api/decks', '/schema/..%5capi/decks']) {

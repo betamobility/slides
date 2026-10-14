@@ -15,7 +15,7 @@ const { markerLines } = await import(new URL('./test-beta-markers.ts', import.me
 let seed = Number(process.argv[2] ?? 1)
 const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
 const pick = <T>(a: T[]): T => a[Math.floor(rnd() * a.length)]
-const props = ['', '!!str ', '&a ', '!!str &b ', '&c !!str ']
+const props = ['', '!!str ', '&a ', '!!str &b ', '&c !!str ', '!<tag:yaml.org,2002:str> ', '!<x>y> ']
 const inds = ['|', '>', '|-', '|+', '>-', '>+', '|2', '>1', '|2-', '|-2', '>+3', '|1+']
 const N = Number(process.argv[3] ?? 400)
 const docs: string[][] = []
@@ -34,6 +34,7 @@ for (let d = 0; d < N; d++) {
       const r = rnd()
       if (r < 0.3) marker(content + Math.floor(rnd() * 2))
       else if (r < 0.4) lines.push('')
+      else if (r < 0.5) lines.push(' '.repeat(content) + pick(['\u00a0', '\t']) + 'text ' + i) // content starting with a non-space blank
       else lines.push(' '.repeat(content) + 'text ' + i)
     }
     if (rnd() < 0.5) marker(Math.max(0, keyCol - Math.floor(rnd() * 2) * 2))
@@ -41,7 +42,8 @@ for (let d = 0; d < N; d++) {
   const entries = 1 + Math.floor(rnd() * 3)
   for (let e = 0; e < entries; e++) {
     const shape = rnd()
-    if (shape < 0.4) block(0, `k${e}:`)
+    if (shape < 0.15) { lines.push(`q${e}:`); const items = 1 + Math.floor(rnd() * 2); for (let it = 0; it < items; it++) block(2, `  -`) } // entries whose value is the header
+    else if (shape < 0.4) block(0, `k${e}:`)
     else if (shape < 0.7) { lines.push(`s${e}:`); const items = 1 + Math.floor(rnd() * 2); for (let it = 0; it < items; it++) block(4, `  - run${it}:`) }
     else { lines.push(`n${e}:`); block(2, `  inner${e}:`) }
     if (rnd() < 0.3) marker(0)
