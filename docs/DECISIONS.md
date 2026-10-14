@@ -10720,3 +10720,76 @@ building it:
 Guards: `scripts/test-beta-lighttable.ts`, `scripts/test-beta-lighttable-browser.mjs`,
 and upstream's `scripts/test-slides-multiselect.ts`, now in the `beta` job.
 
+## 2026-10-13 — BETA FORK: a grant lasts seven days, and people publish by pairing
+
+Supersedes the eight-hour figure in the 2026-09-16 entry above; everything
+else in that entry stands. Plan:
+`docs/plans/2026-10-13-2236-feat-upstream-merge-and-live-scenes-plan.md`, U6
+and U7.
+
+**A grant lasts 7 days, fixed.** `GRANT_TTL_S` in
+`server/deck-store/src/grant.js` is the one number; the approval page derives
+whole days from it, and `scripts/test-beta-skill.mjs` cross-checks the skill,
+`docs/agents.md`, the store README and `CONCEPTS.md` against it. Eight hours
+meant an approval a day, and the splice tool's answer to a person with no
+approval was to name the service token, which sent every person who updated a
+deck to a password manager for a credential the product was built never to
+ask of them. Seven days means a working week asks once and a lost laptop
+stops publishing within the week with nothing to clean up. Chosen over 14
+days with an admin revoke-all route.
+
+**Fixed, not sliding.** A self-renewing grant needs a refresh route, token
+rotation, a grace window and an audit record, on a store where KV allows one
+write per key per second and revocation lags by about a minute. Reopen this
+only for a lifetime measured in months.
+
+**Pairing is how people get in; the token is for machines.** With no
+credential the splice tool starts the pairing itself and prints the link. The
+service token is used only when its two variables are set, and then always. A
+run with `CI` set and no credential refuses and starts no pairing. `CI`, not a
+TTY test: an agent's shell has no TTY while a person is there to click. "Set"
+is read literally (any value, even empty), so a machine run is never taken for
+a person because of the value it chose. The
+grant file lives in the home directory or at `SLIDES_GRANT_FILE`, never beside
+the deck, because a week-long grant in a project folder travels with the
+folder.
+
+**The pairing lives in the process that started it; it is not remembered on
+disk.** The tool waits up to ten minutes for the click, and an agent's shell
+kills a foreground command long before that, taking the only handle that can
+collect the grant with it. The answer is an instruction, in the skill: run the
+pairing in the background and read the link from its output. Remembering the
+pairing in a file beside the grant, so the next run could resume it, was built
+and removed in the same pull request. An independent tester broke it in three
+consecutive rounds, each time in one of two ways: something read back from the
+file reached the output (the handle is a bearer until collected), or two runs
+sharing one pairing raced for the grant and asked the person to click twice. A
+lock between runs fixed the race and brought races of its own. Evidence that
+would reopen it: people losing clicks in practice despite the instruction, and
+a store-side way to collect an approved pairing without a client-held secret.
+
+**Accepted, with reason:**
+
+- Revocation stays eventually consistent (about a minute) and per person, from
+  inside their own login. Offboarding therefore revokes a person's grants
+  before removing them from Access (`server/deck-store/README.md`,
+  "Offboarding"). No admin revoke-all exists; a grant that slips through ends
+  within the week.
+- A grant CREATE is still not shell-pinned, and a longer lifetime grows the
+  pool of people holding a live grant at any moment. Accepted on the same
+  ground as before (a service token could already do the same, and
+  `form-action 'none'` removed the escalation that made it urgent); the open
+  options in the 2026-09-16 entries are unchanged.
+- The tool makes no wait and no request that outlives a pairing's deadline, so
+  it stops polling about a second before it. A click in that last second of
+  the ten minutes is accepted by the store and not collected; the run says the
+  pairing lapsed and to run again, and the stray grant shows on the person's
+  Agent access list until it ends or they revoke it. Pinned by the splice rig.
+- `SLIDES_GRANT_FILE` is used as given. "Never beside the deck" is the
+  tool's default and its refusal when there is no home; a caller who points
+  the variable into the deck folder has chosen that, and nothing checks the
+  path. Two security reviews raised it. Not settled by the plan or by the
+  maintainer: reopen it if a grant file ever turns up in a project folder.
+- The label on the Agent access list comes from `SLIDES_GRANT_LABEL`, a string
+  the caller chooses. It tells a person's own agents apart; it is not an
+  identity and nothing trusts it.

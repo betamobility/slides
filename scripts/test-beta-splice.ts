@@ -29,7 +29,7 @@
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, statSync, chmodSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -212,6 +212,29 @@ let autoApprove = true
 // `pollGone` answers the tool's poll 410 without forwarding: what the tool
 // sees when nobody clicked and the code lapsed (F4), without a ten-minute wait.
 let pollGone = false
+// Break-round probes: transport failures and a shortened server deadline.
+let pollUnavailable = false
+let pollStatus = 0
+let pairingLifetimeMs = 0
+// Break round 2: stall the poll that starts after the deadline.
+let hangPollAfter = 0
+let pollSeenAt: number[] = []
+let revokeBeforePublishPut = false
+let lastPairingHandle = ''
+// Break round 5: fail at distinct boundaries, including after consent was spent.
+// `refuseGrant` plays an edge that refuses a grant outright (403).
+let refuseGrant = false
+let startStatus = 0
+let truncateApprovedPoll = false
+let revokeBeforeAsset = false
+// Break round 6: lose a consumed delivery before headers, and expire a server-side
+// grant without altering the caller's private file.
+let dropApprovedDelivery = false
+let expireBeforeCreate = false
+let delayedApprovalMs = 0
+let delayedApproval: Promise<void> | undefined
+let advertisedDeadline = 0
+let lateApprovalAt = 0
 /** How many of the tool's next polls get no answer at all (a dropped connection). */
 let pollDrops = 0
 const approvals: string[] = []
@@ -239,6 +262,8 @@ async function robertSaves(id: string) {
   if (w.status !== 200) throw new Error(`robert's save failed: ${w.status}`)
 }
 
+// The body of every pairing start, so a case can read the label the tool sent.
+const startBodies: string[] = []
 const proxy = createServer(async (req, res) => {
   try {
     const chunks: Buffer[] = []
@@ -262,11 +287,51 @@ const proxy = createServer(async (req, res) => {
     const service = headers['cf-access-client-id'] === CLIENT_ID && headers['cf-access-client-secret'] === CLIENT_SECRET
     delete headers['cf-access-client-id']; delete headers['cf-access-client-secret']
     if (service) headers['cf-access-jwt-assertion'] = serviceToken
+    if (expireBeforeCreate && method === 'POST' && path === '/api/publish/decks') {
+      expireBeforeCreate = false
+      const kv = await mf.getKVNamespace('GRANTS')
+      for (const k of (await kv.list({ prefix: 'grant:' })).keys) {
+        const record = await kv.get(k.name, 'json') as Record<string, unknown>
+        await kv.put(k.name, JSON.stringify({ ...record, exp: Math.floor(Date.now() / 1000) - 1 }))
+      }
+    }
+    if (refuseGrant && path.startsWith('/api/publish/')) {
+      log.push({ method, path, status: 403, service })
+      res.writeHead(403); res.end(); return
+    }
+    if (startStatus && method === 'POST' && path === '/api/link/start') {
+      log.push({ method, path, status: startStatus, service })
+      res.writeHead(startStatus); res.end(); return
+    }
+    if (revokeBeforeAsset && method === 'PUT' && /^\/api\/publish\/decks\/[^/]+\/assets\//.test(path)) {
+      revokeBeforeAsset = false
+      const kv = await mf.getKVNamespace('GRANTS')
+      for (const k of (await kv.list({ prefix: 'grant:' })).keys) await kv.delete(k.name)
+    }
+    if (method === 'GET' && /^\/api\/link\//.test(path)) {
+      pollSeenAt.push(Date.now())
+      if (hangPollAfter && pollSeenAt.length > hangPollAfter) {
+        log.push({ method, path, status: 0, service: false }); hung.push(res); return
+      }
+    }
     if (pollDrops > 0 && method === 'GET' && /^\/api\/link\//.test(path) && path !== '/api/link/start') {
       pollDrops--
       log.push({ method, path, status: 0, service: false })
       res.destroy()   // a dropped connection mid-poll, not an answer
       return
+    }
+    if (pollStatus && method === 'GET' && /^\/api\/link\//.test(path)) {
+      log.push({ method, path, status: pollStatus, service: false })
+      res.writeHead(pollStatus, { location: `https://other.invalid/${lastPairingHandle}` }); res.end(); return
+    }
+    if (pollUnavailable && method === 'GET' && /^\/api\/link\//.test(path)) {
+      log.push({ method, path, status: 503, service: false })
+      res.writeHead(503); res.end(); return
+    }
+    if (revokeBeforePublishPut && method === 'PUT' && /^\/api\/publish\/decks\/[^/]+$/.test(path)) {
+      revokeBeforePublishPut = false
+      const kv = await mf.getKVNamespace('GRANTS')
+      for (const k of (await kv.list({ prefix: 'grant:' })).keys) await kv.delete(k.name)
     }
     if (pollGone && method === 'GET' && /^\/api\/link\//.test(path)) {
       log.push({ method, path, status: 410, service: false })
@@ -277,9 +342,35 @@ const proxy = createServer(async (req, res) => {
     const deckPut = /^\/api\/harness\/decks\/([0-9A-Za-z]{10})$/.exec(path)
     if (service && method === 'PUT' && deckPut && bumps > 0) { bumps--; await robertSaves(deckPut[1]) }
     if (service && method === 'PUT' && /\/assets\//.test(path) && hangAssets > 0) { hangAssets--; log.push({ method, path, status: 0, service }); hung.push(res); return }
+    if (method === 'POST' && path === '/api/link/start') startBodies.push(body ? body.toString() : '')
     const r = await mf.dispatchFetch(ORIGIN + path, { method, headers, body, redirect: 'manual' })
     log.push({ method, path, status: r.status, service })
     let out = Buffer.from(await r.arrayBuffer())
+    if (dropApprovedDelivery && method === 'GET' && /^\/api\/link\//.test(path) && r.status === 200) {
+      dropApprovedDelivery = false
+      res.destroy(); return // the real worker has already consumed the approval
+    }
+    if (truncateApprovedPoll && method === 'GET' && /^\/api\/link\//.test(path) && r.status === 200) {
+      // The worker has delivered (and cannot repeat) the bearer. Let headers
+      // and a partial JSON body arrive, then stall until the client's timeout.
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': String(out.length) })
+      res.write('{'); hung.push(res); return
+    }
+    if (method === 'POST' && path === '/api/link/start' && r.status === 200) {
+      const started = JSON.parse(out.toString())
+      lastPairingHandle = started.handle
+      if (delayedApprovalMs) {
+        delayedApproval = new Promise<void>((resolve, reject) => setTimeout(() => {
+          lateApprovalAt = Date.now()
+          approveAsRobert(started.code).then(resolve, reject)
+        }, delayedApprovalMs))
+      }
+      if (pairingLifetimeMs) {
+        advertisedDeadline = Date.now() + pairingLifetimeMs
+        started.expires = new Date(advertisedDeadline).toISOString()
+        out = Buffer.from(JSON.stringify(started))
+      }
+    }
     // A person approves, between the start answer and the tool's first poll.
     if (autoApprove && method === 'POST' && path === '/api/link/start' && r.status === 200) {
       try {
@@ -304,13 +395,20 @@ const STORE_URL = `http://127.0.0.1:${(proxy.address() as { port: number }).port
 // have a real ~/.bento/slides-grant.json, and without this every existing
 // case would quietly gain a second credential.
 const GRANT_FILE = join(mkdtempSync(join(tmpdir(), 'beta-grant-')), 'slides-grant.json')
+// A person's shell: no service token at all.
+const noCredential = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
 temps.push(dirname(GRANT_FILE))
 
-function runTool(args: string[], { tool = TOOL, env = {} as Record<string, string | undefined> } = {}): Promise<{ code: number; out: string; err: string }> {
+function toolEnv(env: Record<string, string | undefined>) {
   const e: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL' && k !== 'SLIDES_GRANT_FILE') e[k] = v
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('CF_ACCESS_') && k !== 'SLIDES_STORE_URL' && k !== 'SLIDES_GRANT_FILE' && k !== 'SLIDES_GRANT_LABEL' && k !== 'CI') e[k] = v
   Object.assign(e, { CF_ACCESS_CLIENT_ID: CLIENT_ID, CF_ACCESS_CLIENT_SECRET: CLIENT_SECRET, SLIDES_STORE_URL: STORE_URL, SLIDES_GRANT_FILE: GRANT_FILE })
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete e[k]; else e[k] = v }
+  return e
+}
+
+function runTool(args: string[], { tool = TOOL, env = {} as Record<string, string | undefined> } = {}): Promise<{ code: number; out: string; err: string }> {
+  const e = toolEnv(env)
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [tool, ...args], { env: e, cwd: tmpdir() })
     let out = '', err = ''
@@ -491,6 +589,7 @@ try {
     log = []
     const nocreds = await runTool([id, project({ map: {} })], { env: { CF_ACCESS_CLIENT_SECRET: undefined } })
     ok(nocreds.code !== 0 && /CF_ACCESS_CLIENT_SECRET/.test(nocreds.err), 'missing credentials: exits non-zero naming the variable')
+    ok(!/1Password/i.test(nocreds.err), 'missing credentials: nobody is sent to a password manager')
     eq(log.length, 0, 'missing credentials: no request made')
   }
 
@@ -837,6 +936,19 @@ try {
       const skipped = await runTool([id, withUrl('/deny'), '--skip-url-check'], { env: tls })
       eq(skipped.code, 0, `--skip-url-check bypasses the check${skipped.code ? `: ${skipped.err}` : ''}`)
       eq(hits.length, 0, '--skip-url-check sends no request to the page')
+      // A refusal the tool can make by itself comes before anyone is asked to
+      // click (upstream-merge plan U6): no pairing, no approval, no grant.
+      rmSync(GRANT_FILE, { force: true })
+      const clicks = approvals.length
+      for (const args of [
+        [id, withUrl('/deny')],
+        ['--create', project({ map: { manifest: { steps: 1, props: [], url: base + '/deny' } } }, { title: 'Rammet', slides: [{ id: 'cover', elements: [] }] })],
+      ]) {
+        log = []
+        const r = await runTool(args, { env: { ...tls, CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+        ok(r.code !== 0 && /X-Frame-Options/.test(r.err) && !log.some((l) => l.path === '/api/link/start') && approvals.length === clicks && !existsSync(GRANT_FILE),
+          `a framing refusal on ${args[0] === '--create' ? '--create' : 'an update'} with no credential costs no click`)
+      }
       const dry = await runTool([id, withUrl('/deny'), '--dry-run'], { env: tls })
       ok(dry.code !== 0 && /scene "map"[^\n]*X-Frame-Options/.test(dry.err), 'the check runs on --dry-run too')
       https.close()
@@ -849,8 +961,7 @@ try {
     rmSync(GRANT_FILE, { force: true })
     log = []
     // No service token at all: this is Cowork, where there is none to have.
-    const noToken = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
-    const linked = await runTool(['--link'], { env: noToken })
+    const linked = await runTool(['--link'], { env: noCredential })
     eq(linked.code, 0, `--link exits 0${linked.code ? `: ${linked.err}` : ''}`)
     ok(/\/link\/[0-9A-Za-z]{10}/.test(linked.out), 'it prints the approval URL for the person to open')
     ok(/Approve/i.test(linked.out), 'with one line telling them what to do')
@@ -870,7 +981,7 @@ try {
     const approvalsAfterLink = approvals.length
     log = []
     const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Fra Cowork', slides: [{ id: 'cover', elements: [] }] })
-    const made = await runTool(['--create', dir], { env: noToken })
+    const made = await runTool(['--create', dir], { env: noCredential })
     eq(made.code, 0, `--create with a grant exits 0${made.code ? `: ${made.err}` : ''}`)
     const id = (/\/d\/([0-9A-Za-z]{10})/.exec(made.out) || [])[1]
     ok(!!id, 'and prints the deck link')
@@ -891,7 +1002,7 @@ try {
     if (nativeSlide) nativeSlide.elements = [{ id: 't-01', type: 'text', x: 10, y: 10, w: 100, h: 20, html: 'før' }]
     await store('PUT', `/api/decks/${id}`, { as: 'robert', body: deckHtml(readBack) })
     writeFileSync(edits, JSON.stringify([{ slideId: 'cover', elementId: 't-01', html: 'etter' }]))
-    const changed = await runTool([id, '--edits', edits], { env: noToken })
+    const changed = await runTool([id, '--edits', edits], { env: noCredential })
     eq(changed.code, 0, `an edit through the same grant exits 0${changed.code ? `: ${changed.err}` : ''}`)
     eq(docOf(await (await store('GET', `/api/harness/decks/${id}`)).text()).slides.find((sl: { id: string }) => sl.id === 'cover').elements[0].html,
       'etter', 'and the change landed')
@@ -918,7 +1029,7 @@ try {
     const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
     writeFileSync(GRANT_FILE, JSON.stringify({ ...saved, store: 'https://decks.betamobility.ai' }), { mode: 0o600 })
     const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+      env: noCredential,
     })
     ok(r.code !== 0, 'the run is refused')
     ok(/decks\.betamobility\.ai/.test(r.err) || /another store/i.test(r.err), 'saying the grant belongs to another store')
@@ -933,7 +1044,7 @@ try {
     for (const k of (await kv.list({})).keys) await kv.delete(k.name)
     log = []
     const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+      env: noCredential,
     })
     ok(r.code !== 0, 'the run stops')
     ok(/--link/.test(r.err), 'and tells the agent to run --link again')
@@ -947,7 +1058,7 @@ try {
     rmSync(GRANT_FILE, { force: true })
     autoApprove = false
     pollGone = true
-    const r = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    const r = await runTool(['--link'], { env: noCredential })
     autoApprove = true
     pollGone = false
     ok(r.code !== 0, 'the tool exits non-zero when the pairing lapses')
@@ -955,15 +1066,102 @@ try {
     ok(!existsSync(GRANT_FILE), 'and writes no grant file')
   }
 
-  console.log('\nneither credential: the refusal names both ways in (U5)')
+  console.log('\nno credential, a person at the keyboard: the run pairs by itself (upstream-merge plan U6, R5/AE2)')
   {
     rmSync(GRANT_FILE, { force: true })
-    const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
-    })
+    log = []
+    startBodies.length = 0
+    const before = approvals.length
+    const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Uten nøkkel', slides: [{ id: 'cover', elements: [] }] })
+    // Piped standard streams and no CI variable: what Claude Code's shell is.
+    const r = await runTool(['--create', dir], { env: noCredential })
+    eq(r.code, 0, `--create with no credential exits 0${r.code ? `: ${r.err}` : ''}`)
+    ok(/\/link\/[0-9A-Za-z]{10}/.test(r.out), 'it prints the approval link')
+    eq(approvals.length, before + 1, 'one approval was asked for')
+    ok(/\/d\/[0-9A-Za-z]{10}/.test(r.out), 'and the run carries on to publish the deck')
+    ok(log.some((l) => l.method === 'POST' && l.path === '/api/publish/decks' && l.status === 201), 'through the publish path, as the person who approved')
+    ok(!/1Password|token|CF_ACCESS/i.test(r.out + r.err), 'no output mentions 1Password or a token')
+    ok(!/[A-Za-z0-9_-]{43}/.test(r.out + r.err), 'and no grant material is printed')
+    ok(existsSync(GRANT_FILE), 'the grant is remembered for the next run')
+    eq(JSON.parse(startBodies[0] || '{}').label, 'Claude (Cowork)', 'the label defaults to the Cowork one')
+
+    // The next command in the same week asks nobody.
+    const again = await runTool(['--create', dir], { env: noCredential })
+    eq(again.code, 0, 'a second run exits 0')
+    eq(approvals.length, before + 1, 'without a second approval')
+    ok(!/\/link\//.test(again.out), 'and prints no approval link')
+  }
+
+  console.log('\nthe label on the Agent access list says which agent holds the grant (U6, R8)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    startBodies.length = 0
+    const r = await runTool(['--link'], { env: { ...noCredential, SLIDES_GRANT_LABEL: 'Claude Code' } })
+    eq(r.code, 0, `--link with a label exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(JSON.parse(startBodies[0] || '{}').label, 'Claude Code', 'SLIDES_GRANT_LABEL is the label the store is given')
+    const index = await (await store('GET', '/', { as: 'robert' })).text()
+    ok(index.includes('&quot;Claude Code&quot;'), "and it is what the person's Agent access list shows")
+  }
+
+  console.log('\nno credential and CI set: refuse, name --link, start no pairing (U6, R6/AE3)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    const r = await runTool([await seed(), project({ map: {} })], { env: { ...noCredential, CI: 'true' } })
     ok(r.code !== 0, 'the run is refused')
     ok(/--link/.test(r.err), 'and names --link')
-    ok(/CF_ACCESS_CLIENT_ID/.test(r.err), 'as well as the service token, for a terminal run')
+    ok(!/1Password/i.test(r.err), 'never 1Password')
+    ok(!log.some((l) => l.path === '/api/link/start'), 'no pairing was started')
+    ok(!log.some((l) => l.method !== 'GET' && !l.service), 'and the tool wrote nothing')
+    ok(!existsSync(GRANT_FILE), 'no grant file appears')
+    // --link itself is the person's own explicit act and still works there.
+    const explicit = await runTool(['--link'], { env: { ...noCredential, CI: 'true' } })
+    eq(explicit.code, 0, 'an explicit --link still pairs with CI set')
+  }
+
+  console.log('\nno credential and nobody approves: the run ends saying how to retry (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false
+    pollGone = true
+    log = []
+    const r = await runTool(['--create', project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Ingen klikker', slides: [{ id: 'cover', elements: [] }] })], { env: noCredential })
+    autoApprove = true
+    pollGone = false
+    ok(r.code !== 0, 'the run exits non-zero')
+    ok(/\/link\/[0-9A-Za-z]{10}/.test(r.out), 'after printing the link')
+    ok(/same command again|run .* again/i.test(r.err), 'and says to run the command again')
+    ok(!existsSync(GRANT_FILE), 'no grant file is written')
+    ok(!log.some((l) => l.path.startsWith('/api/publish/')), 'and nothing was published')
+  }
+
+  console.log('\nno home directory: the grant is never written beside the deck (U6)')
+  {
+    log = []
+    const cwdGrant = join(tmpdir(), '.bento-grant.json')
+    rmSync(cwdGrant, { force: true })
+    const r = await runTool(['--create', project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Uten hjem', slides: [{ id: 'cover', elements: [] }] })], {
+      env: { ...noCredential, SLIDES_GRANT_FILE: undefined, HOME: undefined, USERPROFILE: undefined },
+    })
+    ok(r.code !== 0, 'the run is refused')
+    ok(/SLIDES_GRANT_FILE/.test(r.err), 'naming the variable that says where to keep the approval')
+    ok(!log.some((l) => l.path === '/api/link/start'), 'before any pairing is started')
+    ok(!existsSync(cwdGrant), 'and nothing is written in the working directory')
+  }
+
+  console.log('\nthe service token wins over a grant file, and the output names it (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    ok(existsSync(GRANT_FILE), 'a grant file is on disk')
+    log = []
+    const id = await seed()
+    const outFile = join(mkdtempSync(join(tmpdir(), 'beta-read-')), 'current.bento.html')
+    temps.push(dirname(outFile))
+    const r = await runTool(['--read', id, '--out', outFile])
+    eq(r.code, 0, `--read exits 0${r.code ? `: ${r.err}` : ''}`)
+    ok(/service token/.test(r.out), 'the output names the service token')
+    ok(log.every((l) => !l.path.startsWith('/api/publish/')) && log.some((l) => l.service), 'and every request used it')
   }
 
   console.log('\n--read: the ids an edit needs, through whichever credential is live (U5)')
@@ -986,10 +1184,9 @@ try {
 
     // The same command, in a paired session, with no token at all.
     rmSync(GRANT_FILE, { force: true })
-    const noToken = { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined }
-    await runTool(['--link'], { env: noToken })
+    await runTool(['--link'], { env: noCredential })
     log = []
-    const withGrant = await runTool(['--read', id, '--out', outFile], { env: noToken })
+    const withGrant = await runTool(['--read', id, '--out', outFile], { env: noCredential })
     eq(withGrant.code, 0, `--read with a grant exits 0${withGrant.code ? `: ${withGrant.err}` : ''}`)
     ok(/t-04/.test(withGrant.out), 'and prints the same ids')
     ok(log.some((l) => l.path === `/api/publish/decks/${id}`), 'through the publish path this time')
@@ -999,9 +1196,9 @@ try {
   console.log('\n--link twice does not cost a second click (U5)')
   {
     // An agent that re-runs --link defensively must not ask the person again:
-    // one approval covers eight hours and any number of decks.
+    // one approval covers seven days and any number of decks.
     const before = approvals.length
-    const again = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    const again = await runTool(['--link'], { env: noCredential })
     eq(again.code, 0, 'the second --link exits 0')
     eq(approvals.length, before, 'without a second approval')
     ok(/[Aa]lready approved/.test(again.out), 'saying the approval it already holds is still good')
@@ -1012,7 +1209,7 @@ try {
   {
     rmSync(GRANT_FILE, { force: true })
     pollDrops = 1   // the first poll gets no answer at all
-    const r = await runTool(['--link'], { env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined } })
+    const r = await runTool(['--link'], { env: noCredential })
     pollDrops = 0
     eq(r.code, 0, `--link survives a dropped poll and still collects the grant${r.code ? `: ${r.err}` : ''}`)
     ok(existsSync(GRANT_FILE), 'the grant is remembered')
@@ -1024,13 +1221,418 @@ try {
     const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
     delete saved.expires
     writeFileSync(GRANT_FILE, JSON.stringify(saved), { mode: 0o600 })
+    const undated = readFileSync(GRANT_FILE, 'utf8')
     log = []
     const r = await runTool([await seed(), project({ map: {} })], {
-      env: { CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined },
+      env: { ...noCredential, CI: 'true' },
     })
-    ok(r.code !== 0, 'the run is refused')
+    ok(r.code !== 0, 'a machine run is refused')
     ok(/--link/.test(r.err), 'and names --link rather than letting the store answer 401')
-    eq(log.length, 0, 'no request was made with a grant that cannot be dated')
+    ok(!log.some((l) => !l.service), 'no request was made with a grant that cannot be dated')
+    // With a person there, the same dead file is simply replaced by a new approval.
+    writeFileSync(GRANT_FILE, undated, { mode: 0o600 })
+    const before = approvals.length
+    const paired = await runTool([await seed(), project({ map: {} })], { env: noCredential })
+    eq(paired.code, 0, `a person's run pairs again instead${paired.code ? `: ${paired.err}` : ''}`)
+    eq(approvals.length, before + 1, 'with one new approval')
+    ok(typeof JSON.parse(readFileSync(GRANT_FILE, 'utf8')).expires === 'string', 'and the file now holds a dated grant')
+  }
+
+
+  console.log('\nedge cases from the independent break round (U6, U7)')
+  {
+    const id = await seed()
+    const args = [id, '--title', 'Independent probe']
+    for (const ci of ['', 'false']) {
+      rmSync(GRANT_FILE, { force: true }); log = []
+      const r = await runTool(args, { env: { ...noCredential, CI: ci } })
+      ok(r.code !== 0 && /--link/.test(r.err) && !log.some(l => l.path === '/api/link/start') && !existsSync(GRANT_FILE),
+        `CI=${JSON.stringify(ci)} is set: refuse before pairing (exit ${r.code}, starts ${log.filter(l => l.path === '/api/link/start').length})`)
+    }
+    for (const missing of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
+      // Even with a valid cached approval, half a machine credential must refuse.
+      rmSync(GRANT_FILE, { force: true })
+      await runTool(['--link'], { env: noCredential })
+      log = []
+      const r = await runTool(args, { env: { [missing]: '' } })
+      ok(r.code !== 0 && r.err.includes(missing) && log.length === 0 && !r.err.includes(CLIENT_SECRET),
+        `empty ${missing} with its partner set refuses without fallback or secret output`)
+    }
+    rmSync(GRANT_FILE, { force: true }); log = []
+    const noHome = await runTool(args, { env: { ...noCredential, HOME: '', USERPROFILE: '', SLIDES_GRANT_FILE: '' } })
+    ok(noHome.code !== 0 && /SLIDES_GRANT_FILE/.test(noHome.err) && log.length === 0,
+      'empty home and grant-path variables refuse before pairing')
+
+    // A real 202/pending response exercises the local clock, not the existing
+    // rig's synthetic 410. A 250 ms server window must not incur a 7 s sleep.
+    autoApprove = false; pairingLifetimeMs = 250; log = []
+    const started = Date.now()
+    const unpublished = project({}, { title: 'Never assembled', slides: [{ id: 'cover', elements: [] }] })
+    const timed = await runTool(['--create', unpublished], { env: noCredential })
+    const elapsed = Date.now() - started
+    autoApprove = true; pairingLifetimeMs = 0
+    ok(timed.code !== 0 && /run .* again/i.test(timed.err) && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/')),
+      'pending pairing reaches local timeout with retry advice and no grant or publish')
+    ok(!/file on disk is a complete deck/i.test(timed.err),
+      'create timeout does not claim a nonexistent standalone HTML deck')
+    ok(elapsed < 2500, `pairing respects server lifetime without an extra polling interval (elapsed ${elapsed} ms)`)
+
+    autoApprove = false; pollUnavailable = true
+    const unavailable = await runTool(args, { env: noCredential })
+    autoApprove = true; pollUnavailable = false
+    ok(unavailable.code !== 0 && !!lastPairingHandle && !(unavailable.out + unavailable.err).includes(lastPairingHandle),
+      'poll 503 never prints the secret collection handle to stdout/stderr')
+    // Demonstrate the consequence without printing either capability: after
+    // the user clicks, the leaked handle can collect a working bearer.
+    const code = /\/link\/([0-9A-Za-z]{10})/.exec(unavailable.out)?.[1]
+    if (code) await approveAsRobert(code)
+    const collected = await mf.dispatchFetch(ORIGIN + `/api/link/${lastPairingHandle}`)
+    const stolen = await collected.json() as { grant?: string }
+    const stolenRead = stolen.grant && await mf.dispatchFetch(ORIGIN + `/api/publish/decks/${id}`, {
+      headers: { authorization: `Bearer ${stolen.grant}` },
+    })
+    ok(!(unavailable.out + unavailable.err).includes(lastPairingHandle) || stolenRead?.status !== 200,
+      'a transcript reader cannot exchange a leaked poll handle for deck access')
+
+    const home = mkdtempSync(join(tmpdir(), 'beta-readonly-home-')); temps.push(home)
+    chmodSync(home, 0o500); log = []
+    try {
+      const r = await runTool(args, { env: { ...noCredential, SLIDES_GRANT_FILE: undefined, HOME: home, USERPROFILE: undefined } })
+      ok(r.code !== 0 && !existsSync(join(home, '.bento', 'slides-grant.json')) && !log.some(l => l.path === '/api/link/start'),
+        `unwritable HOME refuses before wasting approval (starts ${log.filter(l => l.path === '/api/link/start').length})`)
+    } finally { chmodSync(home, 0o700) }
+
+    const nested = join(home, 'missing', 'nested', 'grant.json')
+    const nestedRun = await runTool(args, { env: { ...noCredential, SLIDES_GRANT_FILE: nested } })
+    ok(nestedRun.code === 0 && existsSync(nested) && (statSync(nested).mode & 0o777) === 0o600,
+      'missing grant parent directories are created privately and publishing continues')
+
+    for (const label of ['', 'L'.repeat(81)]) {
+      rmSync(GRANT_FILE, { force: true })
+      const r = await runTool(['--link'], { env: { ...noCredential, SLIDES_GRANT_LABEL: label } })
+      const index = await (await store('GET', '/', { as: 'robert' })).text()
+      ok(label ? r.code !== 0 && /label/i.test(r.err) && !existsSync(GRANT_FILE)
+        : r.code === 0 && index.includes('Claude (Cowork)'),
+        `${label ? '81-character label refuses with label diagnostic and no grant' : 'empty label uses Cowork default on access list'}`)
+    }
+
+    rmSync(GRANT_FILE, { force: true }); log = []
+    const original = (await readDeck(id)).html
+    revokeBeforePublishPut = true
+    const revoked = await runTool(args, { env: noCredential })
+    revokeBeforePublishPut = false
+    ok(revoked.code !== 0 && /approval is no longer valid/.test(revoked.err) && /--link/.test(revoked.err) && !existsSync(GRANT_FILE) && (await readDeck(id)).html === original,
+      'revocation after auto-pairing and read refuses PUT, deletes grant, preserves deck')
+
+    // Exercise the local expiry independently of the server record's clock.
+    for (const day of [6, 8]) {
+      rmSync(GRANT_FILE, { force: true })
+      await runTool(['--link'], { env: noCredential })
+      const saved = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+      saved.expires = new Date(Date.now() + (7 - day) * 86400_000).toISOString()
+      writeFileSync(GRANT_FILE, JSON.stringify(saved))
+      log = []
+      const r = await runTool(args, { env: { ...noCredential, CI: 'true' } })
+      ok(day === 6 ? r.code === 0 && log.some(l => l.method === 'PUT' && l.status === 200)
+        : r.code !== 0 && /approval expired/.test(r.err) && !existsSync(GRANT_FILE) && log.length === 0,
+        `local day ${day} grant ${day === 6 ? 'still writes without approval' : 'refuses and removes stale file in CI'}`)
+    }
+
+    // Dry runs may need read access, but must never mutate the stored deck.
+    rmSync(GRANT_FILE, { force: true }); log = []
+    const beforeDry = (await readDeck(id)).html
+    const dry = await runTool([...args, '--dry-run'], { env: noCredential })
+    ok(dry.code === 0 && !log.some(l => l.path.startsWith('/api/publish/') && l.method !== 'GET') && (await readDeck(id)).html === beforeDry,
+      'credential-free dry run pairs but leaves deck and assets untouched')
+
+    rmSync(GRANT_FILE, { force: true })
+    const concurrent = await Promise.all([runTool(['--link'], { env: noCredential }), runTool(['--link'], { env: noCredential })])
+    let cached: any
+    try { cached = JSON.parse(readFileSync(GRANT_FILE, 'utf8')) } catch {}
+    const usable = cached && await mf.dispatchFetch(ORIGIN + `/api/publish/decks/${id}`, { headers: { authorization: `Bearer ${cached.grant}` } })
+    ok(concurrent.every(r => r.code === 0) && usable?.status === 200 && concurrent.every(r => !(r.out + r.err).includes(cached.grant)),
+      'concurrent pairing runs leave a usable private grant without printing it')
+  }
+
+  console.log('\na command killed while it waited leaves nothing behind (U6)')
+  {
+    // What an agent's shell does to a command that waits too long. The pairing
+    // lived in that process: nothing of it, least of all the handle, is on
+    // disk afterwards, and the next run simply asks again.
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false
+    log = []
+    const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Avbrutt', slides: [{ id: 'cover', elements: [] }] })
+    const child = spawn(process.execPath, [TOOL, '--create', dir], { env: toolEnv(noCredential), cwd: tmpdir() })
+    let seen = ''
+    child.stdout.on('data', (d) => { seen += d })
+    child.stderr.on('data', (d) => { seen += d })
+    const shown = await new Promise<boolean>((resolve) => {
+      const t = setInterval(() => { if (/\/link\/[0-9A-Za-z]{10}/.test(seen)) { clearInterval(t); clearTimeout(giveUp); resolve(true) } }, 50)
+      const giveUp = setTimeout(() => { clearInterval(t); resolve(false) }, 20_000)
+    })
+    child.kill('SIGKILL')
+    await new Promise((r) => child.on('close', r))
+    autoApprove = true
+    ok(shown, 'the link is printed at once, before any waiting, so a background run can relay it')
+    ok(!seen.includes(lastPairingHandle), 'and the handle was never printed')
+    eq(readdirSync(dirname(GRANT_FILE)).length, 0, 'nothing is left beside where the grant would go')
+    const before = approvals.length
+    const again = await runTool(['--create', dir], { env: noCredential })
+    eq(again.code, 0, `the same command again exits 0${again.code ? `: ${again.err}` : ''}`)
+    eq(approvals.length, before + 1, 'with a new approval of its own')
+  }
+
+
+  console.log('\na run that is going to refuse, and a dry run, never cost a click (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    const before = approvals.length
+    const dir = project({ map: { manifest: { steps: 2, props: [] } } }, { title: 'Bare en prøve', slides: [{ id: 'cover', elements: [] }] })
+    const dry = await runTool(['--create', dir, '--dry-run'], { env: noCredential })
+    eq(dry.code, 0, `--create --dry-run with no credential exits 0${dry.code ? `: ${dry.err}` : ''}`)
+    ok(/nothing was written/.test(dry.out), 'and prints the plan')
+    ok(!log.some((l) => l.path === '/api/link/start') && approvals.length === before && !existsSync(GRANT_FILE), 'without pairing: no link, no approval, no grant')
+  }
+
+  console.log('\na grant file someone else could read is replaced, not reused (U6)')
+  {
+    rmSync(GRANT_FILE, { force: true })
+    writeFileSync(GRANT_FILE, '{}', { mode: 0o644 })
+    const r = await runTool(['--link'], { env: noCredential })
+    eq(r.code, 0, `--link exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(statSync(GRANT_FILE).mode & 0o777, 0o600, 'the grant lands in a file only its owner can read')
+  }
+
+  console.log('\nthe deadline, and a grant path that cannot hold a file (U6, break round 2)')
+  {
+    // The round-1 clock check used fast 202 replies. A slow reply exposes the
+    // extra request made after the last sleep has already spent the lifetime.
+    rmSync(GRANT_FILE, { force: true })
+    autoApprove = false; pairingLifetimeMs = 250; hangPollAfter = 1; pollSeenAt = []
+    const began = Date.now()
+    const deadlineRun = await runTool(['--link'], { env: { ...noCredential, SPLICE_TIMEOUT_MS: '1500' } })
+    const elapsed = Date.now() - began
+    autoApprove = true; pairingLifetimeMs = 0; hangPollAfter = 0
+    ok(deadlineRun.code !== 0 && pollSeenAt.length === 1 && elapsed < 1200,
+      `deadline stops before another poll (polls ${pollSeenAt.length}, elapsed ${elapsed} ms)`)
+
+    // Parent W_OK is not enough: an existing directory cannot be replaced by
+    // writePrivate's non-recursive rm. No consent should be spent discovering it.
+    const home = mkdtempSync(join(tmpdir(), 'beta-r2-destination-')); temps.push(home)
+    const directoryGrant = join(home, '.bento', 'slides-grant.json')
+    mkdirSync(directoryGrant, { recursive: true })
+    log = []; const approvalsBefore = approvals.length
+    const destination = await runTool(['--link'], { env: { ...noCredential, HOME: home, USERPROFILE: undefined, SLIDES_GRANT_FILE: undefined } })
+    ok(destination.code !== 0 && approvals.length === approvalsBefore && !log.some(l => l.path === '/api/link/start'),
+      `grant destination directory refuses before consent (approvals spent ${approvals.length - approvalsBefore})`)
+
+    // A dropped poll near expiry must not invent a standalone create result.
+    rmSync(GRANT_FILE, { force: true }); autoApprove = false; pairingLifetimeMs = 200; pollDrops = 1
+    const draft = project({}, { title: 'Only a project', slides: [{ id: 'cover', elements: [] }] })
+    const createDrop = await runTool(['--create', draft], { env: noCredential })
+    autoApprove = true; pairingLifetimeMs = 0; pollDrops = 0
+    ok(createDrop.code !== 0 && /run .* again/i.test(createDrop.err)
+      && !/complete deck|file on disk/i.test(createDrop.out + createDrop.err)
+      && !existsSync(GRANT_FILE),
+      'create with dropped poll times out without claiming an HTML file')
+
+  }
+
+  console.log('\nCI is a presence test, and a poll that misbehaves stays inside the deadline (U6, break round 3)')
+  {
+    // CI is a presence test, whatever its value.
+    const proof = await seed()
+    for (const ci of ['false', '0']) {
+      rmSync(GRANT_FILE, { force: true }); log = []
+      const r = await runTool([proof, '--title', 'unattended'], { env: { ...noCredential, CI: ci } })
+      ok(r.code !== 0 && /--link/.test(r.err) && log.length === 0, `CI=${ci} refuses without pairing`)
+    }
+    const badHome = mkdtempSync(join(tmpdir(), 'beta-r3-home-')); temps.push(badHome)
+    writeFileSync(join(badHome, '.bento'), 'a file, not a directory')
+    log = []
+    const homeResult = await runTool(['--link'], { env: { ...noCredential, HOME: badHome, USERPROFILE: undefined, SLIDES_GRANT_FILE: undefined } })
+    ok(homeResult.code !== 0 && !log.length, 'home with file at .bento refuses before pairing')
+
+    // Different transport failure (redirect) and throttling must not expose
+    // the handle, extend the deadline, or invent an HTML output for --create.
+    for (const status of [302, 429]) {
+      rmSync(GRANT_FILE, { force: true })
+      autoApprove = false; pairingLifetimeMs = 1800; pollSeenAt = []; pollStatus = status
+      const draft = project({}, { title: 'Round 3 draft', slides: [{ id: 'cover', elements: [] }] })
+      const startedAt = Date.now()
+      const r = await runTool(['--create', draft], { env: noCredential })
+      const elapsed = Date.now() - startedAt
+      pollStatus = 0; autoApprove = true; pairingLifetimeMs = 0
+      ok(r.code !== 0 && elapsed < 2600 && pollSeenAt.length <= 2
+        && /run .* again/i.test(r.err) && !(r.out + r.err).includes(lastPairingHandle)
+        && !/complete deck|file on disk/i.test(r.out + r.err)
+        && !existsSync(GRANT_FILE),
+        `create poll ${status} respects deadline, hides handle and claims no HTML file`)
+    }
+  }
+
+  console.log('\npairing start, delivery and revoked-write failures (U6, U7, break round 5)')
+  {
+    rmSync(GRANT_FILE, { force: true }); log = []
+    const draft = project({}, { title: 'Round 5', slides: [{ id: 'cover', elements: [] }] })
+    const before = readFileSync(join(draft, 'deck.json'), 'utf8')
+    startStatus = 429
+    let throttled
+    try { throttled = await runTool(['--create', draft], { env: noCredential }) }
+    finally { startStatus = 0 }
+    ok(throttled.code !== 0 && /wait a minute.*same command again/i.test(throttled.err)
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && readFileSync(join(draft, 'deck.json'), 'utf8') === before,
+      'automatic create gives retry advice and leaves project unpublished')
+
+    log = []; truncateApprovedPoll = true; pairingLifetimeMs = 1800
+    const deliveryBegan = Date.now()
+    let truncated
+    try { truncated = await runTool(['--create', draft], { env: { ...noCredential, SPLICE_TIMEOUT_MS: '3000' } }) }
+    finally { truncateApprovedPoll = false; pairingLifetimeMs = 0 }
+    ok(truncated.code !== 0 && /run .* again/i.test(truncated.err)
+      && Date.now() - deliveryBegan < 2800
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && !(truncated.out + truncated.err).includes(lastPairingHandle),
+      `partial approval response gives retry advice without secrets (${truncated.err.trim()})`)
+
+    // Unlike the earlier PUT refusal case, --create has already made a deck
+    // when its first asset discovers revocation. Retrying must target that id.
+    log = []; revokeBeforeAsset = true
+    const scene = project({ live: { manifest: { steps: 0, props: [], assets: ['pts.json'] }, assets: { 'pts.json': '[1]' } } },
+      { title: 'Round 5 revoked asset', slides: [] })
+    let revoked
+    try { revoked = await runTool(['--create', scene], { env: noCredential }) }
+    finally { revokeBeforeAsset = false }
+    const made = /created deck ([0-9A-Za-z]{10}):/.exec(revoked.out)?.[1]
+    ok(revoked.code !== 0 && !!made && /approval is no longer valid/.test(revoked.err)
+      && revoked.err.includes(`splice.mjs ${made} `) && /do not run --create a second time/.test(revoked.err)
+      && !existsSync(GRANT_FILE) && log.filter(l => l.method === 'POST' && l.path === '/api/publish/decks').length === 1
+      && (await store('GET', `/api/harness/decks/${made}`)).status === 200,
+      'retains created deck id, forgets grant and gives nonduplicating recovery')
+
+    // A half-set machine credential must win even over a foreign approval;
+    // no read, deletion, fallback pairing or credential disclosure is allowed.
+    await runTool(['--link'], { env: noCredential })
+    const foreign = JSON.parse(readFileSync(GRANT_FILE, 'utf8'))
+    foreign.store = 'https://other.invalid'
+    writeFileSync(GRANT_FILE, JSON.stringify(foreign))
+    const saved = readFileSync(GRANT_FILE, 'utf8')
+    log = []
+    const half = await runTool(['--read', await seed()], { env: { CF_ACCESS_CLIENT_ID: undefined } })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_ID is not set/.test(half.err) && log.length === 0
+      && readFileSync(GRANT_FILE, 'utf8') === saved && !(half.out + half.err).includes(CLIENT_SECRET),
+      'missing token variable refuses before consulting foreign grant')
+    rmSync(GRANT_FILE, { force: true })
+  }
+
+  console.log('\ncases the second review asked for (U6)')
+  {
+    // A 403 under a grant: the advice it gives must be advice that works.
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    const id = await seed()
+    refuseGrant = true
+    const refused = await runTool(['--read', id], { env: noCredential })
+    refuseGrant = false
+    ok(refused.code !== 0 && /--link/.test(refused.err) && !/CF_ACCESS|token/i.test(refused.err), 'a 403 under an approval names --link and never a token')
+    ok(!existsSync(GRANT_FILE), 'and forgets the approval, so --link is not answered with "already approved"')
+    const before = approvals.length
+    const relinked = await runTool(['--link'], { env: noCredential })
+    ok(relinked.code === 0 && approvals.length === before + 1 && !/Already approved/.test(relinked.out), 'the --link it names then really pairs')
+
+    // The machine case: a token with CI set is exactly what a CI job has.
+    rmSync(GRANT_FILE, { force: true })
+    log = []
+    const machine = await runTool(['--read', id], { env: { CI: 'true' } })
+    eq(machine.code, 0, `the service token with CI set reads the deck${machine.code ? `: ${machine.err}` : ''}`)
+    ok(log.some((l) => l.service && l.path === `/api/harness/decks/${id}`) && !log.some((l) => l.path === '/api/link/start'), 'through the harness path, with no pairing')
+
+    const half = await runTool(['--create', project({}, { title: 'Halv', slides: [{ id: 'cover', elements: [] }] }), '--dry-run'], { env: { CF_ACCESS_CLIENT_SECRET: undefined } })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_SECRET is not set/.test(half.err), 'a half-set token refuses a --create dry run too, as it will the real run')
+
+    // A poll that hangs is cut off at the pairing's deadline, not at the request timeout (30 s).
+    autoApprove = false; pairingLifetimeMs = 2500; hangPollAfter = 1; pollSeenAt = []
+    const began = Date.now()
+    const hungRun = await runTool(['--link'], { env: noCredential })
+    const took = Date.now() - began
+    autoApprove = true; pairingLifetimeMs = 0; hangPollAfter = 0
+    ok(hungRun.code !== 0 && pollSeenAt.length === 2 && took < 6000, `a hung poll ends with the pairing (polls ${pollSeenAt.length}, ${took} ms)`)
+    ok(/nobody approved/.test(hungRun.err), 'and a pairing the store answered at least once says nobody approved')
+
+    // The other message: the store never got a word in.
+    autoApprove = false; pairingLifetimeMs = 1500; pollDrops = 99
+    const silent = await runTool(['--link'], { env: noCredential })
+    autoApprove = true; pairingLifetimeMs = 0; pollDrops = 0
+    ok(silent.code !== 0 && /without the store ever answering/.test(silent.err) && !/nobody approved/.test(silent.err), 'a pairing the store never answered says so, and does not blame the person')
+  }
+
+  console.log('\nrefusal boundaries and a lost approval delivery (U6, U7, break round 6)')
+  {
+    const draft = project({}, { title: 'Round 6', slides: [{ id: 'cover', elements: [] }] })
+    // An empty value on the missing side must not defeat the half-pair guard,
+    // even with CI set and a valid browser approval available.
+    rmSync(GRANT_FILE, { force: true })
+    await runTool(['--link'], { env: noCredential })
+    const saved = readFileSync(GRANT_FILE, 'utf8')
+    log = []
+    const half = await runTool(['--create', draft, '--dry-run'], {
+      env: { CF_ACCESS_CLIENT_ID: '', CI: '' },
+    })
+    ok(half.code !== 0 && /CF_ACCESS_CLIENT_ID is not set/.test(half.err)
+      && log.length === 0 && readFileSync(GRANT_FILE, 'utf8') === saved
+      && !(half.out + half.err).includes(CLIENT_SECRET),
+      'empty client id refuses create dry run before network or grant fallback')
+
+    // Local expiry can still look current when the store has ended access.
+    // Exercise create's 401 (not read's or an asset upload's) against real KV.
+    log = []; expireBeforeCreate = true
+    let expired
+    try { expired = await runTool(['--create', draft], { env: noCredential }) }
+    finally { expireBeforeCreate = false }
+    ok(expired.code !== 0 && /approval is no longer valid/.test(expired.err)
+      && /--link/.test(expired.err) && !existsSync(GRANT_FILE)
+      && log.some(l => l.method === 'POST' && l.path === '/api/publish/decks' && l.status === 401)
+      && !log.some(l => l.method === 'POST' && l.status === 201),
+      'server-expired approval refuses create and deletes the cached grant')
+
+    // No headers reach the client, unlike round 5's partial-body case. Its
+    // next poll must report the worker's consumed approval, not blame the user.
+    log = []; dropApprovedDelivery = true; autoApprove = false; delayedApprovalMs = 250
+    const clicks = approvals.length
+    let lost
+    try {
+      lost = await runTool(['--create', draft], { env: noCredential })
+      await delayedApproval
+    } finally {
+      dropApprovedDelivery = false; autoApprove = true; delayedApprovalMs = 0
+      delayedApproval = undefined
+    }
+    ok(lost.code !== 0 && approvals.length === clicks + 1
+      && /run .* again/i.test(lost.err) && !/nobody approved/i.test(lost.err)
+      && !existsSync(GRANT_FILE) && !log.some(l => l.path.startsWith('/api/publish/'))
+      && !(lost.out + lost.err).includes(lastPairingHandle),
+      `consumed delivery lost before headers does not blame the approver (${lost.err.trim()})`)
+
+    // THE ACCEPTED EDGE, pinned so it cannot change unnoticed: the tool makes
+    // no request in the pairing's last second (nothing may outlive the
+    // deadline), so a click that late is not collected. The store accepted it;
+    // the run says the pairing lapsed and to run again. docs/DECISIONS.md.
+    rmSync(GRANT_FILE, { force: true }); log = []
+    autoApprove = false; pairingLifetimeMs = 3500; delayedApprovalMs = 2750
+    let late
+    try {
+      late = await runTool(['--link'], { env: noCredential })
+      await delayedApproval
+    } finally {
+      autoApprove = true; pairingLifetimeMs = 0; delayedApprovalMs = 0
+      delayedApproval = undefined
+    }
+    ok(lateApprovalAt < advertisedDeadline && advertisedDeadline - lateApprovalAt < 1000
+      && late.code !== 0 && /again/.test(late.err) && !existsSync(GRANT_FILE),
+      `a click in the pairing's final second is not collected, and the run says to run again (remaining ${advertisedDeadline - lateApprovalAt} ms, exit ${late.code})`)
   }
 
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')

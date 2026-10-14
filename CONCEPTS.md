@@ -51,7 +51,7 @@ A live tab already holds a colleague's save before the store reports it, so a pe
 The exchange by which an agent that can hold no credential asks a signed-in person, once, for permission to publish as them.
 
 ### Grant
-The short-lived permission a pairing produces. It lets an agent create decks and read or change a deck whose link it has, acting as the person who approved it; it cannot list the store or delete, and the person can end it early.
+The permission a pairing produces, good for 7 days and never renewed. It lets an agent create decks and read or change a deck whose link it has, acting as the person who approved it; it cannot list the store or delete, and the person can end it early.
 
 A write made with a grant is a service write.
 

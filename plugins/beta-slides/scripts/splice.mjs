@@ -19,18 +19,25 @@
 // at document level.
 //
 // TWO WAYS IN, and the tool never asks anyone to handle a secret
-// (docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md, U5):
+// (docs/plans/2026-09-15-001-feat-one-click-publish-pairing-plan.md, U5;
+// docs/plans/2026-10-13-2236-feat-upstream-merge-and-live-scenes-plan.md, U6):
 //
-//   · A SERVICE TOKEN, for a terminal that has one: CF_ACCESS_CLIENT_ID and
+//   · AN APPROVAL, for people. A run with no credential starts a pairing by
+//     itself, prints a link for the person to click, and remembers the grant
+//     it collects in ~/.bento/slides-grant.json (or SLIDES_GRANT_FILE), mode
+//     0600; `--link` does the pairing alone. Every request then goes to
+//     /api/publish/ as the person who approved. SLIDES_GRANT_LABEL is what
+//     the approval page and the person's Agent access list call this agent.
+//   · A SERVICE TOKEN, for machines: CF_ACCESS_CLIENT_ID and
 //     CF_ACCESS_CLIENT_SECRET, sent as the two headers Access expects. Used
-//     whenever it is present, because it is the higher-capability credential
-//     and a leftover grant file must never reroute a run away from it.
-//   · AN APPROVAL, for a sandbox that can hold no credential at all (Cowork).
-//     `--link` starts a pairing, prints a link for the person to click, and
-//     remembers the short-lived grant it collects in ~/.bento/slides-grant.json
-//     (or ./.bento-grant.json, or SLIDES_GRANT_FILE), mode 0600. Every request
-//     then goes to /api/publish/ as the person who approved. When the approval
-//     lapses the tool says so and names --link; it never asks for a token.
+//     only when they are set, and then always, because a leftover grant file
+//     must never reroute a machine run away from it.
+//
+// With CI set (to anything, even empty) and no credential the tool refuses and
+// starts no pairing: there is nobody to click. The grant is never written
+// beside the deck, so a shell with no writable home needs SLIDES_GRANT_FILE.
+// The pairing lives in the process that started it: a command killed while it
+// waits loses it, so the skill runs the pairing where it can wait ten minutes.
 //
 // SLIDES_STORE_URL (default https://slides.betamobility.ai) is the store, and
 // a grant is only ever sent to the store it was approved for.
@@ -78,7 +85,7 @@
 
 import {
   readFileSync, existsSync, statSync, readdirSync, realpathSync,
-  writeFileSync, mkdirSync, chmodSync, rmSync,
+  writeFileSync, mkdirSync, chmodSync, rmSync, accessSync, constants as fsConstants,
 } from 'node:fs'
 import { join, extname, dirname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -93,8 +100,11 @@ export const ASSET_BUDGET = 16 * 1024 * 1024
 const MAX_ATTEMPTS = 4 // one write and three re-derived retries (R19)
 // The pairing flow (one-click publish plan, U5/KTD10). `--link` asks the store
 // to start a pairing, prints the link the person clicks, and remembers the
-// grant it collects. The label is what the approval page shows them, in quotes.
+// grant it collects. The label is what the approval page shows them, in quotes,
+// and what tells one agent's grant from another's on their Agent access list:
+// Cowork's unless SLIDES_GRANT_LABEL names another.
 const GRANT_FILE_ENV = 'SLIDES_GRANT_FILE'
+const LABEL_ENV = 'SLIDES_GRANT_LABEL'
 const LINK_LABEL = 'Claude (Cowork)'
 // Seven seconds, not two. The store's pairing limiter is 10 requests per
 // minute per address and the pairing START route shares that budget, so a
@@ -102,6 +112,8 @@ const LINK_LABEL = 'Claude (Cowork)'
 // out the next pairing's start. The first poll still goes out immediately, so
 // a click that has already happened is collected at once.
 const POLL_MS = 7000
+// Room kept before a pairing's deadline for the last poll's answer.
+const LAST_POLL_MS = 1000
 const TIMEOUT = { store: 30_000, asset: 120_000, url: 10_000 }
 // The origin a url scene is framed by (the store host people open decks on),
 // fixed rather than taken from SLIDES_STORE_URL: that one can be a test proxy.
@@ -457,49 +469,69 @@ export function checkOwnership(read, out, { scenes, edits, inserted = new Set(),
 // ---- the store -----------------------------------------------------------------------
 
 /**
- * Where a grant is remembered, in order of preference.
+ * Where a grant is remembered, or null when there is nowhere.
  *
- * The home directory first, because a Cowork sandbox's working directory is
- * whatever folder the deck is being built in and the next run may start
- * somewhere else. `SLIDES_GRANT_FILE` overrides both, which is how the rigs
- * keep a developer's real grant out of a test run.
+ * The home directory, never the working directory: that is whatever folder the
+ * deck is being built in, and a grant left there travels with the folder for
+ * as long as it lives. `SLIDES_GRANT_FILE` overrides it, which is how the rigs
+ * keep a developer's real grant out of a test run and how a shell with no home
+ * directory says where to keep one.
  */
-function grantPaths(env) {
-  if (env[GRANT_FILE_ENV]) return [env[GRANT_FILE_ENV]]
+function grantPath(env) {
+  if (env[GRANT_FILE_ENV]) return env[GRANT_FILE_ENV]
   const home = env.HOME || env.USERPROFILE
-  const paths = []
-  if (home) paths.push(join(home, '.bento', 'slides-grant.json'))
-  paths.push(join(env.PWD || process.cwd(), '.bento-grant.json'))
-  return paths
+  return home ? join(home, '.bento', 'slides-grant.json') : null
 }
 
 /** The remembered grant, or null. Never throws: an unreadable file is no grant. */
 function readGrant(env) {
-  for (const path of grantPaths(env)) {
-    if (!existsSync(path)) continue
-    try {
-      const g = JSON.parse(readFileSync(path, 'utf8'))
-      if (g && typeof g.grant === 'string' && g.grant && typeof g.store === 'string') return { ...g, path }
-    } catch { /* a corrupt file is the same as no file */ }
-  }
+  const path = grantPath(env)
+  if (!path || !existsSync(path)) return null
+  try {
+    const g = JSON.parse(readFileSync(path, 'utf8'))
+    if (g && typeof g.grant === 'string' && g.grant && typeof g.store === 'string') return { ...g, path }
+  } catch { /* a corrupt file is the same as no file */ }
   return null
+}
+
+/** Write `record` where only its owner can read it, whatever was there before. */
+function writePrivate(path, record) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  // Removed first: `mode` applies only when the file is created, and a secret
+  // must never spend a moment in a file someone else could already read.
+  rmSync(path, { force: true })
+  // 'wx': something put at this path since the line above is not written into.
+  writeFileSync(path, JSON.stringify(record, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
+  chmodSync(path, 0o600)
 }
 
 /** Remember a grant, readable by nobody else. Returns the path it landed in. */
 function writeGrant(env, record) {
-  const body = JSON.stringify(record, null, 2) + '\n'
-  let lastErr
-  for (const path of grantPaths(env)) {
-    try {
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-      writeFileSync(path, body, { mode: 0o600 })
-      // `mode` on writeFileSync applies only when the file is created, so an
-      // existing world-readable file would keep its permissions.
-      chmodSync(path, 0o600)
-      return path
-    } catch (e) { lastErr = e }
+  const path = grantPath(env)
+  try {
+    writePrivate(path, record)
+    return path
+  } catch (e) {
+    throw new Error(`the approval could not be saved in ${path} (${e.message}); set ${GRANT_FILE_ENV} to a file this shell can write, outside the deck folder`)
   }
-  throw new Error(`the approval could not be saved (${lastErr?.message || 'no writable location'})`)
+}
+
+/**
+ * Refuse BEFORE the person is asked for anything when the approval could not
+ * be kept: a click whose grant cannot be saved is a click wasted, and the
+ * grant it minted stays live on their list with nothing holding it.
+ */
+function grantPlace(env, again) {
+  const path = grantPath(env)
+  if (!path) throw new Refusal(`this shell has no home directory to keep an approval in, and the tool does not write one beside the deck. Set ${GRANT_FILE_ENV} to a file outside the deck folder and run ${again} again.`)
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    accessSync(dirname(path), fsConstants.W_OK)
+    if (existsSync(path) && !statSync(path).isFile()) throw new Error(`${path} is not a file`)
+  } catch (e) {
+    throw new Refusal(`the approval could not be kept in ${path} (${e.message}). Set ${GRANT_FILE_ENV} to a file this shell can write, outside the deck folder, and run ${again} again.`)
+  }
+  return path
 }
 
 /** Forget a grant that the store has stopped accepting. */
@@ -536,23 +568,34 @@ function storeEnv(env) {
 /**
  * Which credential this run uses, and therefore which API it talks to.
  *
- * THE SERVICE TOKEN WINS when it is present. It is the higher-capability
- * credential and it belongs to a developer machine, so a grant file left over
- * from a pairing must never quietly reroute a terminal run — and a HALF-SET
- * pair is still the old refusal naming the missing variable, rather than a
- * silent fall-through to a weaker credential.
+ * THE SERVICE TOKEN WINS when its variables are set. It belongs to a machine,
+ * so a grant file left over from a pairing must never quietly reroute that run
+ * — and a HALF-SET pair is a refusal naming the missing variable, rather than
+ * a silent fall-through to a weaker credential.
  *
  * A grant is used only while it is unexpired and belongs to the store this run
  * is talking to: `harness()` already refuses to follow a redirect off-origin,
  * and this stops a stale file from sending a bearer to a different host at all.
+ *
+ * WITH NEITHER, THE RUN PAIRS: it prints the approval link, waits for the
+ * click and carries on (upstream-merge plan, U6/KTD6). Nobody is told to fetch
+ * a token. The one exception is a run with `CI` set (to any value), where
+ * nobody is there to click: that refuses and starts no pairing. `CI` and not a TTY test, because
+ * an agent's shell has no TTY while a person is very much there.
  */
-function config(env) {
+/** Is this a machine run? A half-set token pair is refused, never read as "no token". */
+function hasToken(env) {
+  if (!env.CF_ACCESS_CLIENT_ID && !env.CF_ACCESS_CLIENT_SECRET) return false
+  for (const k of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
+    if (!env[k]) throw new Refusal(`${k} is not set; a machine run needs both CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET. Unset both to publish with a browser approval instead`)
+  }
+  return true
+}
+
+async function access(env, log) {
   const { store, timeout } = storeEnv(env)
 
-  if (env.CF_ACCESS_CLIENT_ID || env.CF_ACCESS_CLIENT_SECRET) {
-    for (const k of ['CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
-      if (!env[k]) throw new Refusal(`${k} is not set; the splice tool needs the deck store service token (1Password, Development)`)
-    }
+  if (hasToken(env)) {
     return {
       store, api: `${store}/api/harness`, timeout,
       auth: { 'CF-Access-Client-Id': env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': env.CF_ACCESS_CLIENT_SECRET },
@@ -560,23 +603,26 @@ function config(env) {
     }
   }
 
-  const grant = readGrant(env)
-  if (grant) {
-    if (grant.store.replace(/\/+$/, '') !== store) {
-      throw new Refusal(`the saved approval is for another store (${grant.store}, this run talks to ${store}); run splice.mjs --link against this one`)
-    }
-    if (expiredGrant(grant)) {
-      forgetGrant(grant.path)
-      throw new Refusal('the approval expired; run splice.mjs --link and ask the person to approve again')
-    }
-    return {
-      store, api: `${store}/api/publish`, timeout,
-      auth: { authorization: `Bearer ${grant.grant}` },
-      credential: 'the approval', grantPath: grant.path, owner: grant.owner,
-    }
+  let grant = readGrant(env)
+  if (grant && grant.store.replace(/\/+$/, '') !== store) {
+    throw new Refusal(`the saved approval is for another store (${grant.store}, this run talks to ${store}); run splice.mjs --link against this one`)
   }
-
-  throw new Refusal('no way in to the deck store: run splice.mjs --link to have someone approve publishing (Cowork, a browser at hand), or set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (a terminal with the service token from 1Password, Development)')
+  if (!grant || expiredGrant(grant)) {
+    if (grant) forgetGrant(grant.path)
+    // Set at all, even to "" or "false": the plan's one signal, read literally,
+    // so a machine run can never be mistaken for a person by its value.
+    if (env.CI !== undefined) {
+      throw new Refusal(grant
+        ? 'the approval expired, and CI is set, so no new approval link was started; run splice.mjs --link where a person can open a browser'
+        : 'no way in to the deck store, and CI is set, so no approval link was started: run splice.mjs --link where a person can open a browser, or set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET for a machine run')
+    }
+    grant = await link({ env, log, again: 'the same command' })
+  }
+  return {
+    store, api: `${store}/api/publish`, timeout,
+    auth: { authorization: `Bearer ${grant.grant}` },
+    credential: 'the approval', grantPath: grant.path, owner: grant.owner,
+  }
 }
 
 const secs = (ms) => ms >= 1000 ? `${ms / 1000} s` : `${ms} ms`
@@ -632,7 +678,15 @@ async function failed(res, what, cfg) {
     forgetGrant(cfg.grantPath)
     return new Refusal(`${what}: the approval is no longer valid; run splice.mjs --link and ask the person to approve publishing again`)
   }
-  if (res.status === 401 || res.status === 403) return new Error(`${what}: ${res.status}; the service token was not accepted (check CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET)`)
+  // Only a run that SENT the token is told to check it: a person holding an
+  // approval, or nothing at all, must never be sent after one.
+  if ((res.status === 401 || res.status === 403) && cfg && !cfg.grantPath) return new Error(`${what}: ${res.status}; the service token was not accepted (check CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET)`)
+  if (res.status === 403 && cfg?.grantPath) {
+    // Forgotten, as on a 401: with the file in place the `--link` this names
+    // would answer "already approved" and the next run would be refused again.
+    forgetGrant(cfg.grantPath)
+    return new Refusal(`${what}: the store refused this approval (403); run splice.mjs --link and ask the person to approve again, and tell the maintainer if it repeats`)
+  }
   return new Error(`${what}: the store answered ${res.status}${body ? ` (${body})` : ''}`)
 }
 
@@ -727,6 +781,11 @@ async function checkUrls(scenes, cfg, warn) {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/** A pairing that ended with no grant: whether anyone was asked, and what to run again. */
+const lapsed = (answered, again) => answered
+  ? `nobody approved the pairing before it expired. Nothing was published and nothing in the store was changed; what is on disk is untouched. Run ${again} again when someone is at a browser.`
+  : `the pairing expired without the store ever answering this run. Nothing was published and nothing in the store was changed; what is on disk is untouched. Run ${again} again.`
+
 /**
  * `--link`: pair with the store, so an agent with no credential can publish
  * as the person who approves (one-click publish plan, U5; R1, R14, R16).
@@ -738,37 +797,49 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms))
  *
  * The deadline comes from the store's own `expires`, not a number here: the
  * pairing's lifetime is the store's to decide and to change.
+ *
+ * `again` is what a failed pairing tells the reader to run once more: `--link`
+ * when that was the command, "the same command" when a deck run paired by
+ * itself. Returns the grant as `readGrant` would, for that second caller.
+ *
+ * The pairing lives in this process and nowhere else. Remembering it on disk
+ * so a killed run could be resumed was built and removed (docs/DECISIONS.md,
+ * 2026-10-13): it needed a lock between runs and kept failing review.
  */
-export async function link({ env = process.env, log = console.log, force = false } = {}) {
+export async function link({ env = process.env, log = console.log, force = false, again = '--link' } = {}) {
   const { store, timeout } = storeEnv(env)
   const ms = timeout('store')
 
   // An agent that re-runs --link defensively must not cost the person another
-  // click: one approval covers eight hours and any number of decks, so say so
-  // and stop rather than starting a second pairing.
+  // click: one approval covers a week and any number of decks, so say so and
+  // stop rather than starting a second pairing.
   const held = readGrant(env)
   if (!force && held && !expiredGrant(held) && held.store.replace(/\/+$/, '') === store) {
     log(`Already approved by ${held.owner}, until ${held.expires}. Nothing to do; publish as usual.`)
-    return
+    return held
   }
+  grantPlace(env, again)
 
   const startUrl = `${store}/api/link/start`
   const res = await harness(startUrl, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label: LINK_LABEL }),
+    body: JSON.stringify({ label: env[LABEL_ENV] || LINK_LABEL }),
   }, ms)
   if (res.status === 503) throw new Error(`${startUrl}: the store cannot start pairings right now (its rate limiter is not configured); tell the maintainer`)
-  if (res.status === 429) throw new Refusal('the store is refusing new pairings for a moment (too many just now); wait a minute and run --link again')
+  if (res.status === 429) throw new Refusal(`the store is refusing new pairings for a moment (too many just now); wait a minute and run ${again} again`)
   if (!res.ok) throw await failed(res, 'starting the pairing')
   let started
   try { started = JSON.parse(await bodyText(res, 'POST', startUrl, ms)) } catch { throw new Error('starting the pairing: the store answered 200 but its body did not parse') }
   const { code, handle, url, expires } = started
   if (typeof handle !== 'string' || !handle) throw new Error('starting the pairing: the store gave no handle to collect the approval with')
 
-  log('Open this link and click Approve; I will carry on as soon as you have.')
+  // Read by an agent as often as by a person, so it says whose click it is.
+  log('Show this link to the person: they open it and click Approve (their click, never yours). This run waits up to ten minutes and carries on as soon as they have; keep it running.')
   log(url || `${store}/link/${code}`)
 
   const deadline = Date.parse(expires) || Date.now() + 10 * 60 * 1000
+  // The handle is a bearer for the grant until it is collected: it is never
+  // printed, so neither is this URL, in any message below.
   const pollUrl = `${store}/api/link/${handle}`
   // `answered` tells a pairing nobody clicked apart from one where the store
   // never got a word in to us. Without it, a run throttled or disconnected for
@@ -777,51 +848,53 @@ export async function link({ env = process.env, log = console.log, force = false
   let answered = false
   let backoff = POLL_MS
   for (let first = true; ; first = false) {
+    let left = deadline - Date.now()
     if (!first) {
-      if (Date.now() >= deadline) break
-      await wait(backoff)
+      // Never past the pairing's own lifetime: the last wait is cut short so
+      // the last poll still fits before the deadline, and a pairing with less
+      // than that left is over.
+      if (left <= LAST_POLL_MS) break
+      await wait(Math.min(backoff, left - LAST_POLL_MS))
+      left = deadline - Date.now()
     }
     let poll
     try {
-      poll = await harness(pollUrl, {}, ms)
-    } catch (e) {
+      poll = await harness(pollUrl, {}, Math.max(1, Math.min(ms, left)))
+    } catch {
       // A dropped connection must not end the pairing: the person may be about
       // to click, or may already have, and this handle is the only thing that
       // can collect the grant. Back off and keep asking until the deadline.
       backoff = Math.min(backoff * 2, 15_000)
-      if (first) log(`  (the store did not answer: ${e.message.split('.')[0]}; still waiting)`)
+      if (first) log('  (the store did not answer just now; still waiting)')
       continue
     }
     if (poll.status === 202) { answered = true; backoff = POLL_MS; continue } // nobody has clicked yet
     // The limiter, not the person. Back off so the polling stops competing
     // with its own budget, and keep waiting.
     if (poll.status === 429) { backoff = Math.min(backoff * 2, 15_000); continue }
-    if (poll.status === 410) {
-      throw new Refusal(answered
-        ? 'nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.'
-        : 'the pairing expired without the store ever answering this run. The deck is not published; the file on disk is a complete deck on its own. Run --link again.')
-    }
-    if (poll.status === 503) throw new Error(`${pollUrl}: the store cannot answer pairings right now (its rate limiter is not configured); tell the maintainer`)
+    if (poll.status === 410) throw new Refusal(lapsed(answered, again))
+    if (poll.status === 503) throw new Error('waiting for the approval: the store cannot answer pairings right now (its rate limiter is not configured); tell the maintainer')
     // NOT `failed()`: this route takes no credential, so its wording about
     // CF_ACCESS_* would send the reader after the wrong thing entirely.
     if (!poll.ok) throw new Error(`waiting for the approval: the store answered ${poll.status} on a route that needs no credential`)
     answered = true
-    let body
-    try { body = JSON.parse(await bodyText(poll, 'GET', pollUrl, ms)) } catch { throw new Error('waiting for the approval: the store answered 200 but its body did not parse') }
-    if (!body.grant) {
+    // A 200 is the store handing the grant over, once. An answer that stalls or
+    // arrives broken is that one delivery lost, the same as an empty one.
+    let body = null
+    try { body = JSON.parse(await poll.text()) } catch { /* lost in transit */ }
+    if (!body?.grant) {
       // The store minted a grant and handed it to whoever held this handle —
       // which is this tool, so our own answer was lost in transit. It cannot
       // be repeated: the store keeps only a hash of it.
-      throw new Refusal('the approval went through, but the answer carrying it was lost. Run --link again; the person will have to approve once more.')
+      throw new Refusal(`the approval went through, but the answer carrying it was lost. Run ${again} again; the person will have to approve once more.`)
     }
-    const path = writeGrant(env, { grant: body.grant, owner: body.owner, expires: body.expires, store })
+    const grant = { grant: body.grant, owner: body.owner, expires: body.expires, store }
+    const path = writeGrant(env, grant)
     log(`Approved by ${body.owner}. I can publish as them until ${body.expires}.`)
     log(`(kept in ${path}, readable only by you; nothing else was written)`)
-    return
+    return { ...grant, path }
   }
-  throw new Refusal(answered
-    ? 'nobody approved the pairing before it expired. The deck is not published; the file on disk is a complete deck on its own. Run --link again when someone is at a browser.'
-    : 'the pairing expired without the store ever answering this run. The deck is not published; the file on disk is a complete deck on its own. Run --link again.')
+  throw new Refusal(lapsed(answered, again))
 }
 
 // ---- read ---------------------------------------------------------------------------------
@@ -843,7 +916,7 @@ export async function link({ env = process.env, log = console.log, force = false
  */
 export async function read(id, { out, env = process.env, log = console.log } = {}) {
   if (!/^[0-9A-Za-z]{10}$/.test(id)) throw new Refusal(`"${id}" is not a deck id (ten letters and digits, the end of /d/<id>)`)
-  const cfg = config(env)
+  const cfg = await access(env, log)
   const ms = cfg.timeout('store')
   const url = `${cfg.api}/decks/${id}`
   const res = await harness(url, { headers: cfg.auth }, ms)
@@ -879,8 +952,9 @@ export async function update(id, dir, { edits: editsFile, title, dryRun = false,
   if (!project.scenes.length && !edits.length && title === undefined) {
     throw new Refusal(`nothing to do: ${dir ? `no scene folders in ${join(dir, 'scenes')}` : 'no project folder'}, no edits and no --title`)
   }
-  const cfg = config(env)
-  if (!skipUrlCheck) await checkUrls(project.scenes, cfg, warn)
+  // Before the way in: a run that is going to refuse must not cost a click.
+  if (!skipUrlCheck) await checkUrls(project.scenes, storeEnv(env), warn)
+  const cfg = await access(env, log)
   const ms = cfg.timeout('store')
   const deckUrl = `${cfg.api}/decks/${id}`
   let uploadsDone = false
@@ -945,11 +1019,15 @@ export async function update(id, dir, { edits: editsFile, title, dryRun = false,
 
 export async function create(dir, { dryRun = false, skipUrlCheck = false, env = process.env, log = console.log, warn = console.error } = {}) {
   const project = readProject(dir, { create: true })
-  const cfg = config(env)
-  if (!skipUrlCheck) await checkUrls(project.scenes, cfg, warn)
-  const ms = cfg.timeout('store')
+  // The way in is asked for last, just before the one request that needs it:
+  // the framing check, the public template and a dry run all come first, so
+  // neither a refusal nor a dry run ever costs the person a click.
+  const { store, timeout } = storeEnv(env)
+  hasToken(env) // a half-set token refuses now, as it will at the real run
+  if (!skipUrlCheck) await checkUrls(project.scenes, { timeout }, warn)
+  const ms = timeout('store')
   // Public path; the same template GET /new/blank mints from.
-  const templateUrl = `${cfg.store}/templates/blank.bento.html`
+  const templateUrl = `${store}/templates/blank.bento.html`
   let res
   try {
     res = await fetch(templateUrl, { redirect: 'follow', signal: AbortSignal.timeout(ms) })
@@ -984,6 +1062,7 @@ export async function create(dir, { dryRun = false, skipUrlCheck = false, env = 
     log('nothing was written')
     return
   }
+  const cfg = await access(env, log)
   const postUrl = `${cfg.api}/decks`
   const post = await harness(postUrl, {
     method: 'POST', headers: { ...cfg.auth, 'content-type': 'text/html; charset=utf-8' }, body: writeBlock(html, doc),

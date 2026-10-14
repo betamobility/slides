@@ -57,12 +57,12 @@ Whichever kind, where the deck lives decides how you write it:
 
 - **A file on disk** (not in the store): edit the `#bento-doc` JSON directly.
   Add, remove and reorder slides and elements freely.
-- **A new deck for the store**: build it locally, then create it with the
-  `curl` recipe (no live scenes) or `splice.mjs --create` (any live scene).
-  Both need a way in to the store: the service token where you have one, or
-  `splice.mjs --link` — one click from the user in a browser they are already
-  signed into — where you do not (Cowork, say). See "Publishing without a
-  service token" below; never ask for a pasted token.
+- **A new deck for the store**: build it as a project folder, then create it
+  with `splice.mjs --create` (with or without live scenes).
+  Both need a way in to the store, and the way in is one click from the user
+  in a browser they are already signed into, which the tool asks for by
+  itself. See "Publishing: one click in a browser" below; never ask for a
+  token.
 - **A deck already in the store**: only `splice.mjs`, under the ownership
   rule. You change content by element id and replace or add live scenes; you
   never add, move or reorder native slides or elements.
@@ -234,31 +234,21 @@ that moved travel to their new place and new tokens fade in.
 6. Write back the `#bento-doc` block, or return the replacement JSON.
 7. **Offer to publish it**, if the user wants a link rather than a file. The
    deck store lives on the same host as everything else above, behind Beta's
-   login, and a harness publishes through the service-token routes with
-   `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` in the environment
-   (they are in 1Password, Development; never put them in a file):
+   login, and publishing needs no secret: the tool asks the user for one
+   click in a browser (see "Publishing: one click in a browser" below).
 
    ```bash
-   # create a deck with no runtime slides → 201 {"id":"<id>","url":"https://slides.betamobility.ai/d/<id>"}
-   curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-             -H 'content-type: text/html; charset=utf-8' \
-             --data-binary "@<Topic>.bento.html" \
-             https://slides.betamobility.ai/api/harness/decks
+   # the slides in <projectDir>/deck.json → prints https://slides.betamobility.ai/d/<id>
+   node splice.mjs --create <projectDir>
    ```
 
-   A deck with runtime slides is created with `splice.mjs --create` instead
-   (see Runtime slides below). **A deck that is already in the store is
-   changed only with `splice.mjs`.** There is no hand-written replace: the
-   tool reads the deck, keeps what people arranged, and writes back only if
-   nobody saved in between.
+   A deck that exists only as a finished file is saved by the user instead:
+   they open it and pick **Share → Save to Beta**. **A deck that is already
+   in the store is changed only with `splice.mjs`.** There is no hand-written
+   replace: the tool reads the deck, keeps what people arranged, and writes
+   back only if nobody saved in between.
 
-   Give the user the `url` from the reply. The token may create, read a deck
-   whose id it already has, and replace it; it cannot list decks, so a leaked
-   token cannot enumerate anyone's work, and there is no harness way to
-   discover an id you were not given. A read hands over the whole file,
-   including the deck's live-session owner keys, so treat a downloaded deck
-   like the token itself. Anyone signed in at
+   Give the user the link the tool prints. Anyone signed in at
    `https://slides.betamobility.ai/` sees the deck in the list and can edit
    it; the link is the invitation.
 
@@ -542,11 +532,18 @@ inside this skill's own folder (the Beta toolkit installs it there); then
 `scripts/splice.mjs` next to the plugin's `skills/` folder (the standalone
 beta-slides plugin); then `plugins/beta-slides/scripts/splice.mjs` in a
 checkout of betamobility/slides. It needs Node 18 or newer and
-nothing else. It reads `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`
-from the environment (1Password, Development; never put them in a file) and,
-optionally, `SLIDES_STORE_URL` (default `https://slides.betamobility.ai`).
+nothing else, and no credential from you: the first command that reaches the
+store prints an approval link for the user (next section). It reads
+`SLIDES_STORE_URL` from the environment when set (default
+`https://slides.betamobility.ai`).
 
 ```bash
+# the approval alone, before any work (next section)
+node splice.mjs --link
+
+# a stored deck as it is now, and the ids an edit needs
+node splice.mjs --read <deckId> [--out current.bento.html]
+
 # a new deck: the published blank template, deck.json's slides, then the scenes
 node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
 
@@ -619,51 +616,81 @@ upload then fails, the error carries the deck id, and you finish with
   a live session while the tool writes is unsupported: collaborators are not
   told the store copy changed.
 
-### Publishing without a service token: ask for one click (Cowork)
+### Publishing: one click in a browser
 
-**Cowork cannot hold the store's service token, and it does not need one.** A
-cloud session runs in a temporary sandbox with only session-scoped
-credentials, and connector tokens are handled server-side and never reach the
-shell. Pair instead: the store hands you a short-lived grant that acts as the
-person who approves it.
-
-**Never ask the user to paste `CF_ACCESS_CLIENT_ID` or
-`CF_ACCESS_CLIENT_SECRET` into the conversation.** The token runs for a year,
-and a deck read with it hands over that deck's live-session keys as well. The
-pairing below exists so nobody has to handle a secret.
+**Nobody handles a secret to publish.** The first `splice.mjs` command that
+reaches the store with no approval on this machine starts a pairing by
+itself: it prints one instruction and one URL ending in `/link/<code>`, waits
+for the user to approve, and then carries on with what you asked for.
 
 ```bash
-node splice.mjs --link          # prints a link; relay it and wait
-node splice.mjs --create <projectDir>   # then publish, as them
+SLIDES_GRANT_LABEL="Claude Code" node splice.mjs --create <projectDir>
 ```
 
-1. Run `--link`. It prints one instruction and one URL ending in
-   `/link/<code>`.
+1. Run the command you need **in the background**, or with the longest
+   command timeout your shell allows: it prints the link at once and then
+   waits up to ten minutes for the click, and a shell that shows output only
+   when a command returns would hide the link until it is too late. Read the
+   link from the command's output while it runs.
 2. Give the user that URL, as a link, and wait. Do not run anything else
-   meanwhile.
+   meanwhile. **Never open or approve the link yourself**, with a browser
+   tool or any other way: the click is the user's consent and nobody else's.
 3. They open it in a browser where they are already signed in, see what is
-   being granted ("publish decks as you", for 8 hours, when the pairing
+   being granted ("publish decks as you", for 7 days, when the pairing
    started, and what you called yourself), and click **Approve** once.
-4. `--link` returns, saying who approved and until when. Every later
-   `splice.mjs` command in that session publishes as them, with no second
-   approval.
+4. The command continues, saying who approved and until when. Every later
+   `splice.mjs` command publishes as them, with no second approval.
+5. When it exits, read its last lines. Exit 0 ends with the deck's link:
+   give it to the user. Any other exit is a refusal that says what to run
+   next: report it, do not guess.
 
-The grant lasts **8 hours**, so one approval covers a whole working session and
-any number of decks. It can create decks, and read and change any deck by its
-link; it cannot list the store, delete a deck, or read a deck's live-session
-keys. The user can end it at any time from the deck list at
-`slides.betamobility.ai`, under **Agent access**.
+**A command your shell kills while it waits takes the pairing with it**: a
+click made afterwards approves nothing you can use, and the next run prints a
+new link. That is why the pairing runs in the background. If it happened
+anyway, tell the user the first link is dead and ask for one click on the new
+one. `node splice.mjs --link` does the pairing alone, for when you want the
+approval in place before the work starts.
 
-**When an approval lapses**, the tool says so and names `--link` again. Run it
-and ask for one more click. Do not fall back to a hand-written `curl` replace,
-and do not ask for a token.
+`--create --dry-run` needs no approval. A dry run of a change to a stored
+deck does, because it reads the deck.
+
+**Say who you are.** `SLIDES_GRANT_LABEL` is the name the approval page shows
+and the name on the user's Agent access list. In Claude Code set
+`SLIDES_GRANT_LABEL="Claude Code"` on the command that pairs, as above; left
+unset, the label is "Claude (Cowork)".
+
+The approval lasts **7 days**, so a week of work and any number of decks ask
+once. It can create decks, and read and change any deck by its link; it
+cannot list the store, delete a deck, or read a deck's live-session keys. The
+user can end it at any time from the deck list at `slides.betamobility.ai`,
+under **Agent access**.
+
+The approval is kept in `~/.bento/slides-grant.json`, readable only by the
+user, and never beside the deck. **Cowork may not keep `~/.bento` between
+sessions**, so there a new session can mean one new click; that is expected,
+not a fault. A shell whose home directory is missing or cannot be written is
+refused before anyone is asked to click; set `SLIDES_GRANT_FILE` to a file
+outside the deck folder and run again.
+
+**Never ask the user for a token, a secret or anything to paste.** If a
+command refuses and says `CI` is set, the shell is marked as a machine run
+(the variable counts when set to anything, even empty). With a user present,
+run `node splice.mjs --link` there, in the background as above; it pairs
+regardless. Then repeat the command. In a real unattended job, stop and say so; do not pair.
+
+**When an approval lapses**, the next command asks for one more click the
+same way. If the store ends it mid-run (the user revoked it), the tool says
+so and names `--link`. Do not fall back to a hand-written `curl` replace.
 
 **When nobody clicks**, the pairing expires after ten minutes and the tool
-says the deck is not published. The file on disk is a complete deck on its own
-— say that, rather than reporting the work as lost.
+says nothing was published. Nothing in the store changed and the project
+folder is untouched. Say that, rather than reporting the work as lost, and
+run the same command again when the user is at a browser.
 
-**When the sandbox cannot run `node` or reach the store at all**, fall back to
-handing the file over:
+**When the sandbox cannot run `node` or reach the store at all**, a new deck
+can still be handed over as a file (below). A deck already in the store
+cannot be changed from there: the user edits it in the editor, or you change
+it from a shell that has `node`.
 
 > Open the file (download it and double-click, or drag it into Chrome), then
 > **Share → Save to Beta**. A store tab opens, you sign in, and you get back a
@@ -675,6 +702,39 @@ store origin, and it needs a valid `@betamobility.io` identity. Anyone else
 gets the login page and keeps the file, which is a complete deck with the
 editor and Export PPTX already in it. Say that plainly rather than reporting
 the deck as unfinished.
+
+### Machines and CI: the service token
+
+This section is for unattended runs only: a CI job, a scheduled pipeline. A
+person never needs it, and you never ask a person for what it uses.
+
+A machine run sets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` from
+its own secret store, never from a file in the repo. When both are set the
+tool uses them, through `/api/harness/`, and ignores any saved approval. A
+run with `CI` set (to anything, even empty) and no token refuses instead of
+pairing, because nobody is there to click.
+
+The token may create a deck, read a deck whose id it already has, and replace
+it; it cannot list decks, so a leaked token cannot enumerate anyone's work. A
+read with it hands over the whole file, including the deck's live-session
+owner keys, so treat a deck downloaded this way like the token itself.
+
+For a machine with the token and no `node`, the two routes the tool uses:
+
+```bash
+# create a deck with no runtime slides → 201 {"id":"<id>","url":"https://slides.betamobility.ai/d/<id>"}
+curl -fsS -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+          -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+          -H 'content-type: text/html; charset=utf-8' \
+          --data-binary "@<Topic>.bento.html" \
+          https://slides.betamobility.ai/api/harness/decks
+
+# read a deck as it is now
+curl -fsS -o current.bento.html \
+     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+     https://slides.betamobility.ai/api/harness/decks/<id>
+```
 
 ### The ownership rule (hard rule)
 
@@ -705,18 +765,8 @@ node splice.mjs --read <deckId> [--out current.bento.html]
 
 It writes the deck to a file and prints the inventory an `edits.json` is built
 from: every slide, which ones are runtime slides you replace wholesale, and
-every native element with the one key an edit may change. **Use this whichever
-way you got in** — it goes through the service token when you have one and
-through an approval when you do not, and it never puts a credential in a
-command. The `curl` below is the equivalent for a shell that has the service
-token and no `node`:
-
-```bash
-curl -fsS -o current.bento.html \
-     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-     https://slides.betamobility.ai/api/harness/decks/<id>
-```
+every native element with the one key an edit may change. It goes through the
+same approval as every other command and never puts a credential in a command.
 
 Take slide and element ids from that file, then change it with `splice.mjs`.
 
