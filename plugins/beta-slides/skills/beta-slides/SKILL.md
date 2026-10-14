@@ -851,4 +851,4 @@ run the command again. Never work around it.
       `morph` on every step after the first, and no line clipped at the box?
 - [ ] PPTX exported and its degrade report reported to the user?
 
-For new decks use the general v1.3.1 template: 25 editable layout examples, embedded Geist, no eyebrows, white/sage/peach/deep surfaces and the standard bottom-left logo. Older template URLs remain compatibility assets. The general template becomes publicly available when the maintainer publishes the template release.
+For new decks use the general template (design system v1.5.0): 35 editable layouts, embedded Geist, no eyebrows, white/sage/peach/deep surfaces and the standard bottom-left logo. Since release 2026.10.11 the blank, client-pitch, insight-brief and workshop templates are built on the same layouts and theme.

@@ -16,7 +16,7 @@ const html=readFileSync('beta/templates/general.bento.html','utf8')
 const doc=JSON.parse(html.match(/<script type="application\/bento\+json" id="bento-doc">([\s\S]*?)<\/script>/)![1])
 assert.equal(doc.slides.length,35);assert.equal(doc.layouts.length,35)
 assert.equal(doc.template,true);assert.ok(!doc.docId&&!doc.collab)
-assert.equal(doc.beta.tokens,'1.4.0');assert.equal(doc.theme.background,'#FFFFFF')
+assert.equal(doc.beta.tokens,'3.1.0');assert.equal(doc.theme.background,'#FFFFFF')
 const findings=validateDoc(doc).findings;const errors=findings.filter((f:any)=>f.severity==='error');assert.deepEqual(errors,[])
 for(const slide of [...doc.slides,...doc.layouts]){
  const ids=new Set();for(const e of slide.elements){assert.ok(!ids.has(e.id));ids.add(e.id);assert.ok(e.x>=0&&e.y>=0&&e.x+e.w<=1280.01&&e.y+e.h<=720.01,slide.id+':'+e.id);assert.notEqual(e.role,'kicker');assert.notEqual(e.id,'page');if(e.type==='image')assert.ok(doc.assets[e.src.slice(6)])}

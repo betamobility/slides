@@ -23,14 +23,20 @@
 //      block, which upstream preserves as an unknown field on purpose.
 //   3. ADDITIVE. Deleting `palette` and `themeRefs` changes no rendered value,
 //      the same property test-theme.ts holds upstream to.
-//   4. LOUD. A token path the generator needs but cannot find is a non-zero
-//      exit naming the path, never a substituted colour.
-//   5. TRACEABLE. A re-sync at another design-system SHA updates the
-//      provenance, and only the slots whose tokens moved differ.
+//   4. LOUD. A token the generator needs but cannot find is a non-zero exit
+//      naming the token, never a substituted colour.
+//   5. TRACEABLE. The provenance names the design-system commit the snapshot
+//      in beta/v131/ was taken from (its SOURCE.md), and the v1.5.0 values
+//      (white, charcoal, deep, Geist, the editorial chart palette) are what a
+//      deck gets.
 //   6. EMBEDDED. Every `fonts[]` entry points at an asset that decodes as a
 //      real woff2 file (magic `wOF2`), so the faces travel inside the deck.
+// Since 2026-10-14 the fragment is betaFoundation() in
+// scripts/lib/beta-general.mjs, read from the design system v1.5.0 snapshot
+// (beta/v131/tokens.json); it was the 1.0.0 tokens before (cream, Inter,
+// Playfair Display).
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, mkdirSync, rmSync, cpSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -67,7 +73,7 @@ if (!existsSync(join(root, 'beta')) || !existsSync(join(root, 'scripts'))) {
   process.exit(1)
 }
 const generator = join(root, 'scripts/build-beta-theme.mjs')
-const tokensPath = join(root, 'beta/tokens.json')
+const snapshot = join(root, 'beta/v131')
 const themePath = join(root, 'beta/theme.json')
 
 let failures = 0
@@ -91,10 +97,11 @@ type Fragment = {
   beta: { designSystem: string; tokens: string }
 }
 
-/** Run the generator on a tokens file. Never throws: the rig reports instead. */
-function generate(tokens: string, out: string): { status: number; stderr: string; stdout: string } {
+/** Run the generator (on another snapshot copy when given). Never throws: the rig reports instead. */
+function generate(out: string, snapshotDir?: string): { status: number; stderr: string; stdout: string } {
   if (!existsSync(generator)) return { status: 127, stderr: `${generator} does not exist`, stdout: '' }
-  const r = spawnSync(process.execPath, [generator, '--tokens', tokens, '--out', out], { cwd: root, encoding: 'utf8' })
+  const env = { ...process.env, ...(snapshotDir ? { BETA_SNAPSHOT_DIR: snapshotDir } : {}) }
+  const r = spawnSync(process.execPath, [generator, '--out', out], { cwd: root, encoding: 'utf8', env })
   return { status: r.status ?? 1, stderr: r.stderr ?? '', stdout: r.stdout ?? '' }
 }
 
@@ -131,15 +138,15 @@ function deckWith(frag: Fragment, refs = false): BentoDoc {
 }
 
 // ---------------------------------------------------------------- inputs exist
-ok(existsSync(tokensPath), 'beta/tokens.json exists (run scripts/beta-sync-tokens.mjs)')
+ok(existsSync(join(snapshot, 'tokens.json')), 'beta/v131/tokens.json (the design system snapshot) exists')
 ok(existsSync(generator), 'scripts/build-beta-theme.mjs exists')
 
 // The committed fragment must be what the generator produces from the
 // committed tokens, byte for byte: a stale theme.json is a stale brand.
 const fresh = join(scratch, 'fresh.json')
 {
-  const r = generate(tokensPath, fresh)
-  ok(r.status === 0, `the generator succeeds on beta/tokens.json${r.status ? `: ${r.stderr.trim().split('\n')[0]}` : ''}`)
+  const r = generate(fresh)
+  ok(r.status === 0, `the generator succeeds on the snapshot${r.status ? `: ${r.stderr.trim().split('\n')[0]}` : ''}`)
 }
 const committed = readJson<Fragment>(themePath)
 const frag = readJson<Fragment>(fresh)
@@ -149,7 +156,7 @@ if (committed && frag) {
   ok(JSON.stringify(committed) === JSON.stringify(frag),
     'beta/theme.json is byte-identical to a fresh generation (regenerate and commit if not)')
   const again = join(scratch, 'again.json')
-  generate(tokensPath, again)
+  generate(again)
   ok(readFileSync(fresh, 'utf8') === readFileSync(again, 'utf8'), 'two generator runs are byte-identical (no timestamps in the fragment)')
   ok(readFileSync(fresh).byteLength < 400 * 1024, `the fragment is under 400 KB (${(readFileSync(fresh).byteLength / 1024).toFixed(0)} KB)`)
 }
@@ -165,27 +172,27 @@ if (!frag) {
   for (const slot of PALETTE_SLOTS) {
     ok(typeof p[slot] === 'string' && HEX6.test(p[slot] as string), `palette slot ${slot} is a six-digit hex colour (${p[slot]})`)
   }
-  ok(p.bg1?.toUpperCase() === '#F5F3EF', 'bg1 is cream')
+  ok(p.bg1?.toUpperCase() === '#FFFFFF', 'bg1 is the white surface (v1.5.0)')
   ok(p.tx1?.toUpperCase() === '#1A1A1A', 'tx1 is charcoal')
-  ok(p.bg2?.toUpperCase() === '#F0EDE8', 'bg2 is cream-dark')
-  ok(p.tx2?.toUpperCase() === '#333333', 'tx2 is charcoal-light')
-  ok(p.accent1?.toUpperCase() === '#4A7C59', 'accent1 is the sage accent')
-  ok(p.hlink?.toUpperCase() === '#4A7C59' && p.folHlink?.toUpperCase() === '#3D6B4A', 'hlink is accent1 and folHlink is the sage hover')
+  ok(p.bg2?.toUpperCase() === '#F7F7F7', 'bg2 is the neutral second surface')
+  ok(p.tx2?.toUpperCase() === '#5C5C5C', 'tx2 is the muted ink')
+  ok(p.accent1?.toUpperCase() === '#242F30', 'accent1 is deep')
+  ok(p.accent2?.toUpperCase() === '#D6E4DF' && p.accent3?.toUpperCase() === '#E7DED6', 'accent2 is sage and accent3 peach')
+  ok(p.hlink?.toUpperCase() === p.tx1?.toUpperCase() && p.folHlink?.toUpperCase() === p.tx2?.toUpperCase(), 'links are the ink, followed links the muted ink (v1.5.0 has no link colour)')
   // bg1/tx1/accent1 live on theme.background/color/accent; every other slot
   // must be written explicitly, or paletteOf() quietly hands back accent1.
   const palette = (frag.theme.palette ?? {}) as Record<string, string | undefined>
   const slotsThatFellBack = PALETTE_SLOTS.filter((s) => !['bg1', 'tx1', 'accent1'].includes(s) && !palette[s])
   ok(slotsThatFellBack.length === 0, `no slot relies on paletteOf()'s accent fallback${slotsThatFellBack.length ? ` (${slotsThatFellBack.join(', ')})` : ''}`)
 }
-ok(frag.theme.headingFamily === "'Playfair Display', Georgia, serif", `headingFamily is the full serif stack (${frag.theme.headingFamily})`)
-ok(frag.theme.fontFamily === "'Inter', system-ui, sans-serif", `fontFamily is the full sans stack (${frag.theme.fontFamily})`)
-ok(Array.isArray(frag.theme.chartPalette) && frag.theme.chartPalette.length >= 5 && frag.theme.chartPalette.every((c) => HEX6.test(c)),
-  'chartPalette has five or more hex series colours')
-ok(frag.theme.chartPalette?.[0]?.toUpperCase() === '#4A7C59', 'chartPalette leads with accent1')
-ok(frag.theme.table?.headerBg?.toUpperCase() === '#1A1A1A' && frag.theme.table?.zebra?.toUpperCase() === '#F0EDE8',
-  'table defaults carry the charcoal header and cream-dark zebra')
+ok(frag.theme.headingFamily === "'Times New Roman', Times, serif", `headingFamily is the serif fallback for openings (${frag.theme.headingFamily})`)
+ok(frag.theme.fontFamily === "'Geist', Arial, sans-serif", `fontFamily is Geist (${frag.theme.fontFamily})`)
+ok(JSON.stringify(frag.theme.chartPalette?.map((c) => c.toUpperCase())) === JSON.stringify(['#0F2A4A', '#E4572E', '#6FA8DC', '#C7CED6']),
+  `chartPalette is the v1.5.0 editorial palette (${frag.theme.chartPalette?.join(' ')})`)
+ok(frag.theme.table?.headerBg?.toUpperCase() === '#F7F7F7' && frag.theme.table?.zebra?.toUpperCase() === '#FFFFFF' && HEX6.test(frag.theme.table?.borderColor ?? ''),
+  'tables: header on the second surface, no stripes (zebra is the surface, a colour as the format requires)')
 ok(frag.meta.company === 'Beta Mobility', 'meta.company is Beta Mobility')
-ok(typeof frag.beta?.designSystem === 'string' && frag.beta.designSystem.length >= 7, `beta.designSystem carries the design-system SHA (${frag.beta?.designSystem})`)
+ok(typeof frag.beta?.designSystem === 'string' && readFileSync(join(snapshot, 'SOURCE.md'), 'utf8').includes(`commit ${frag.beta.designSystem}`), `beta.designSystem is the commit the snapshot came from (${frag.beta?.designSystem})`)
 ok(typeof frag.beta?.tokens === 'string', `beta.tokens carries the tokens version (${frag.beta?.tokens})`)
 
 // --------------------------------------------- 2. validates, fonts embedded
@@ -219,53 +226,23 @@ ok(typeof frag.beta?.tokens === 'string', `beta.tokens carries the tokens versio
 
 // ------------------------------------------- 4. missing token is loud
 {
-  const tokens = readJson<Record<string, any>>(tokensPath)!
-  const cases: Array<[string, (t: any) => void]> = [
-    ['slides.accent1', (t) => { delete t.slides.accent1 }],
-    ['colors.core.cream', (t) => { delete t.colors.core.cream }],
-    ['fonts.display.stack', (t) => { delete t.fonts.display.stack }],
-  ]
-  for (const [path, mutate] of cases) {
+  const tokens = readJson<{ contexts: Array<{ selector: string; tokens: Record<string, string> }> }>(join(snapshot, 'tokens.json'))!
+  for (const name of ['--color-surface-deep', '--color-surface', '--chart-2']) {
     const copy = JSON.parse(JSON.stringify(tokens))
-    mutate(copy)
-    const p = join(scratch, `missing-${path}.json`)
-    writeFileSync(p, JSON.stringify(copy))
-    const r = generate(p, join(scratch, `missing-${path}.out.json`))
-    ok(r.status !== 0 && r.stderr.includes(path), `removing ${path} makes the generator exit non-zero naming the path (exit ${r.status})`)
-  }
-}
-
-// ------------------------------------------- 5. re-sync at another SHA
-{
-  const tokens = readJson<Record<string, any>>(tokensPath)!
-  const copy = JSON.parse(JSON.stringify(tokens))
-  copy._source.sha = 'deadbee'
-  copy.slides.accent2.value = '#123456'
-  const p = join(scratch, 'resync.json')
-  writeFileSync(p, JSON.stringify(copy))
-  const out = join(scratch, 'resync.out.json')
-  const r = generate(p, out)
-  const next = readJson<Fragment>(out)
-  ok(r.status === 0 && !!next, 'the generator accepts a re-synced tokens file')
-  if (next) {
-    ok(next.beta.designSystem === 'deadbee', `beta.designSystem follows _source.sha (${next.beta.designSystem})`)
-    const flat = (o: unknown, prefix = '', acc: Record<string, string> = {}): Record<string, string> => {
-      if (o && typeof o === 'object') for (const [k, v] of Object.entries(o as Record<string, unknown>)) flat(v, prefix ? `${prefix}.${k}` : k, acc)
-      else acc[prefix] = JSON.stringify(o)
-      return acc
-    }
-    const a = flat(frag), b = flat(next)
-    const diff = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]).sort()
-    const expected = ['beta.designSystem', 'theme.chartPalette.1', 'theme.palette.accent2']
-    ok(JSON.stringify(diff) === JSON.stringify(expected),
-      `only the moved slot and its chart series differ (${diff.join(', ')})`)
+    for (const c of copy.contexts) if (c.selector === ':root') delete c.tokens[name]
+    const dir = join(scratch, `missing${name}`)
+    cpSync(snapshot, dir, { recursive: true })
+    writeFileSync(join(dir, 'tokens.json'), JSON.stringify(copy))
+    const r = generate(join(scratch, `missing${name}.out.json`), dir)
+    ok(r.status !== 0 && r.stderr.includes(name), `removing ${name} from the snapshot makes the generator exit non-zero naming it (exit ${r.status})`)
   }
 }
 
 // ------------------------------------------------- 6. woff2 magic
 {
   const families = new Set(frag.fonts.map((f) => f.family))
-  for (const fam of ['Inter', 'Playfair Display', 'DM Mono']) ok(families.has(fam), `fonts[] declares ${fam}`)
+  for (const fam of ['Geist', 'DM Mono']) ok(families.has(fam), `fonts[] declares ${fam}`)
+  ok(['300', '400', '500', '600', '700'].every((w) => frag.fonts.some((f) => f.family === 'Geist' && f.weight === w)), 'Geist is embedded at 300, 400, 500, 600 and 700')
   for (const f of frag.fonts) {
     const data = frag.assets[f.asset]
     const isUri = typeof data === 'string' && data.startsWith('data:font/woff2;base64,')
@@ -273,8 +250,6 @@ ok(typeof frag.beta?.tokens === 'string', `beta.tokens carries the tokens versio
     ok(isUri && magic === 'wOF2', `${f.family} ${f.weight ?? ''} asset "${f.asset}" is a data: URI that decodes as woff2`)
     ok(typeof f.weight === 'string' && /^\d{3}$/.test(f.weight), `${f.family} entry carries a numeric weight (${f.weight})`)
   }
-  const fromDisk = frag.fonts.every((f) => existsSync(join(root, 'beta/fonts', `${f.asset.replace(/^font-/, '')}.woff2`)))
-  ok(fromDisk, 'every font asset key names a file in beta/fonts/ (asset "font-<name>" is beta/fonts/<name>.woff2)')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -276,11 +276,11 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
   if (doc.meta?.company) pptx.company = doc.meta.company
   if (doc.meta?.subject) pptx.subject = doc.meta.subject
 
-  const bodyFace = fontFace(doc.theme?.fontFamily, 'Inter')
+  const bodyFace = fontFace(doc.theme?.fontFamily, 'Geist') // BETA FORK: design system v1.5.0's working face
   const headingFace = fontFace(doc.theme?.headingFamily, bodyFace)
   const themeColour = hexOr(doc.theme?.color, '1A1A1A')
   const themeBg = hexOr(doc.theme?.background, 'FFFFFF')
-  const chartColours = (doc.theme?.chartPalette ?? [doc.theme?.accent ?? '#4A7C59']).map((c) => hexOr(c, '4A7C59'))
+  const chartColours = (doc.theme?.chartPalette ?? [doc.theme?.accent ?? '#0F2A4A']).map((c) => hexOr(c, '0F2A4A')) // BETA FORK: v1.5.0 --chart-1
 
   const today = new Date()
   const fields: Record<string, string> = {

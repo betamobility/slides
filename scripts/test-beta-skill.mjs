@@ -13,7 +13,7 @@
 //   2. The plugin and marketplace manifests agree, and the plugin installs
 //      as beta-slides@beta-slides.
 //   3. The skill carries the inherited collab warning and the Beta rules
-//      (palette slots via themeRefs, the as-of kicker, Export PPTX, the
+//      (palette slots via themeRefs, the as-of source line, Export PPTX, the
 //      visual check).
 //   4. AE3, statically: a deck built per the rules carries a kicker-role
 //      "Data as of <ISO date>" beside its refreshed figure, and every colour
@@ -113,19 +113,19 @@ console.log('\nAE3, statically')
 const fragment = JSON.parse(read('beta/theme.json'))
 const deck = betaTemplates(fragment)['insight-brief']
 const slide = deck.slides.find((s) => s.elements.some((e) => e.type === 'chart'))
-const asOf = slide.elements.find((e) => e.role === 'kicker' && /Data as of/.test(e.placeholder ?? e.html ?? ''))
-ok(!!asOf, 'the chart slide of insight-brief carries a Data as of kicker (role kicker)')
+const asOf = slide.elements.find((e) => e.role === 'source' && /Data as of/.test(e.placeholder ?? e.html ?? ''))
+ok(!!asOf, 'the chart slide of insight-brief carries a Data as of line (role source, below the figure)')
 // the SHIPPED templates and starter never carry a live token in the as-of slot:
 // '{{date}}' would re-date itself on every open, which is the opposite of a
 // fetch date. Checked on the unmodified library output, before any rewrite.
 const { betaStarter } = await import('./lib/beta-layouts.mjs')
 const shipped = [...Object.values(betaTemplates(fragment)), betaStarter(fragment)]
-const liveAsOf = shipped.flatMap((d) => d.slides.flatMap((s) => s.elements)).filter((e) => e.id === 'beta-asof' && /\{\{/.test(e.html ?? ''))
+const liveAsOf = shipped.flatMap((d) => d.slides.flatMap((s) => s.elements)).filter((e) => e.role === 'source' && /Data as of/.test(e.placeholder ?? '') && /\{\{/.test(e.html ?? ''))
 ok(liveAsOf.length === 0, `no shipped as-of kicker carries a live token (placeholder stays a placeholder)${liveAsOf.length ? ': ' + liveAsOf.length : ''}`)
 // a deck per the rules: fill the kicker with an ISO date and check the shape
 const filled = JSON.parse(JSON.stringify(deck))
-for (const s of filled.slides) for (const e of s.elements) if (e.id === 'beta-asof') { e.html = 'Data as of 2026-09-03'; delete e.placeholder }
-const stamped = filled.slides.flatMap((s) => s.elements).filter((e) => e.role === 'kicker' && /^Data as of \d{4}-\d{2}-\d{2}$/.test(e.html ?? ''))
+for (const s of filled.slides) for (const e of s.elements) if (e.role === 'source' && /Data as of/.test(e.placeholder ?? '')) { e.html = 'Data as of 2026-09-03'; delete e.placeholder }
+const stamped = filled.slides.flatMap((s) => s.elements).filter((e) => e.role === 'source' && /^Data as of \d{4}-\d{2}-\d{2}$/.test(e.html ?? ''))
 ok(stamped.length >= 1, 'a refreshed figure is stamped "Data as of <ISO date>" on its slide')
 const literalNoRef = filled.slides.flatMap((s) => s.elements).filter((e) => {
   const paints = ['color', 'fill', 'stroke'].filter((k) => typeof e[k] === 'string' && /^#/.test(e[k]))

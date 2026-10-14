@@ -485,28 +485,31 @@ points here.
 
 ### Design system through the deck's own keys
 
-- A Beta deck carries the design system in `theme`, `fonts`, `assets` and
-  `layouts`, generated from `Tools/design-system` tokens (`beta/theme.json`
-  in the fork). Cream `bg1`, charcoal `tx1`, sage `accent1`, teal `accent2`,
-  greys `accent3..5`, cream-dark `accent6`; Playfair Display as
-  `theme.headingFamily`, Inter as `theme.fontFamily`, DM Mono embedded for
-  kickers, numbers and tags. All three faces are in `doc.assets` as woff2.
+- A Beta deck carries the design system (v1.5.0) in `theme`, `fonts`,
+  `assets` and `layouts`, generated from `Tools/design-system` tokens
+  (`beta/theme.json` in the fork). White `bg1`, ink `tx1`, deep `accent1`,
+  subtle surface `bg2`, muted ink `tx2`, sage tint `accent2`, peach tint
+  `accent3`, grey and ink steps `accent4..6`; Geist as `theme.fontFamily` for
+  working titles and body, a Times serif (`theme.headingFamily`) for cover,
+  chapter, statement and closing titles, DM Mono for sources, numbers and tags. Both faces are in
+  `doc.assets` as woff2 (the serif is a system face).
 - **Colours are palette slots, never hex in content.** Every painted property
   on an element records its slot in `themeRefs` (`{ "color": "tx1" }`,
   `{ "fill": "accent1" }`, `{ "fill": "accent1 -20%" }`) and the literal is
   filled from `theme`. Re-pointing one slot restyles the deck. The slot names
   are the ones this guide lists under Layouts and `role`.
-- Six layouts ship in every Beta template's `doc.layouts`: `beta-title`,
-  `beta-section`, `beta-two-col`, `beta-chart-text`, `beta-hero`,
-  `beta-closing`. Each text element has a `role` and a `placeholder`; footer
-  chrome shares ids so it morphs. Start from a template at
+- The general template's 35 layouts ship in every Beta deck's
+  `doc.layouts` (`title`, `chapter`, `two-columns`, `chart`, `statement`,
+  `thank-you` and the rest; read `doc.layouts` for the full list). Each text
+  element has a `role` and a `placeholder`; the wordmark shares one id so it
+  holds still. No labels above titles and no slide numbers. Start from
+  `/templates/general.bento.html`, or a shaped one:
   `/templates/client-pitch.bento.html`, `/templates/insight-brief.bento.html`
   or `/templates/workshop.bento.html`. `/templates/blank.bento.html` is the
   same design system with one empty cover slide; it is what
-  `slides.betamobility.ai/new` clones, and it is the right start only when the
-  three shaped templates all fit badly.
-- `meta.company` is `Beta Mobility`; set `meta.author`. Title slides and
-  footers use `{{company}}`, `{{author}}`, `{{date}}`, `{{page:2}}`.
+  `slides.betamobility.ai/new` clones.
+- `meta.company` is `Beta Mobility`; set `meta.author`. Title slides may use
+  `{{company}}`, `{{author}}`, `{{date}}`.
 - A deck records the design-system version it was generated from in a
   top-level `beta: { designSystem, tokens }` key. `validate()` reports it as
   an unknown key; that one warning is expected.
@@ -514,9 +517,9 @@ points here.
 ### Data refreshed at edit time
 
 A deck opened on stage never fetches anything. When a figure comes from a
-Beta source, write the value into the document and add a `kicker`-role text
-element on that slide reading `Data as of YYYY-MM-DD` (the ISO date it was
-fetched). `beta-chart-text` carries a placeholder for it (`beta-asof`).
+Beta source, write the value into the document and fill the slide's
+`source`-role line below the content with `Data as of YYYY-MM-DD · source`
+(the ISO date it was fetched). The `chart` layouts carry a placeholder for it.
 
 ### Export PPTX and its report
 
@@ -538,7 +541,7 @@ browser console:
 | `image-remote` | an image not embedded in the file became a placeholder |
 | `chart`, `chart-mixed` | a series type the mapper cannot draw |
 | `motion` (once per deck) | morph, effects, hover and state interactions do not exist in PowerPoint |
-| `fonts` (once per deck) | faces are referenced by name; install Inter, Playfair Display and DM Mono |
+| `fonts` (once per deck) | faces are referenced by name; install Geist and DM Mono |
 
 Read the report to the person before they send the file. The session
 (`collab`) never enters the export.
