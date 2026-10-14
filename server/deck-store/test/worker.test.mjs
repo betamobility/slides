@@ -2143,6 +2143,44 @@ export async function run(Miniflare) {
           'round5: not-yet-valid person and service assertions cannot read, revalidate or replace the manifest')
       }
 
+      // Round 6: raw Access headers and a cookie are not a verified identity.
+      // A grant alongside them must still be restricted to its own prefix.
+      {
+        const spoof = { 'cf-access-client-id': 'deadbeef.access',
+          'cf-access-client-secret': 'synthetic-round6-secret',
+          cookie: 'CF_Authorization=synthetic-round6-cookie',
+          'cf-access-authenticated-user-email': 'alice@betamobility.io' }
+        let gated = true
+        for (const extra of [{}, asGrant(aliceTok)]) {
+          for (const [method, path] of [['GET', '/library/library.json'],
+            ['GET', '/api/harness/library.json'], ['PUT', '/api/harness/library.json']]) {
+            const response = await call(method, path + '?round=6', {
+              headers: { ...spoof, ...extra, ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}),
+            })
+            if (response.status !== 401 || await response.text() !== '' || response.headers.has('etag')) gated = false
+          }
+        }
+        const denied = await call('GET', '/api/publish/library.json', { headers: spoof })
+        const granted = await call('GET', '/api/publish/library.json', { headers: { ...spoof, ...asGrant(aliceTok) } })
+        const unchanged = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && denied.status === 401 && await denied.text() === '' &&
+          granted.status === 200 && await granted.text() === lib && await unchanged.text() === lib,
+          'round6: spoofed Access headers and cookie cannot upgrade a grant or authorize a library read or write')
+
+        let rejected = true
+        for (const url of ['https://ｄｅｓｉｇｎ.betamobility.ai.evil.test/scene',
+          'https://design.betamobility.ai:00444/scene',
+          'https://design.betamobility.ai@slides.betamobility.ai@evil.test/scene']) {
+          const response = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (response.status !== 400 || await response.text() !== 'shape') rejected = false
+        }
+        const after = await call('GET', '/library/library.json', { as: 'alice' })
+        ok(rejected && await after.text() === lib,
+          'round6: worker refuses fullwidth off-list host, padded nondefault port and repeated userinfo without replacing the manifest')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })

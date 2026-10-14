@@ -482,6 +482,42 @@ console.log('\nround 5: independent boundary and CSS cases')
     'round5: CSS-escaped external paint and cursor URLs cannot pass as plain stills')
 }
 
+// Round 6: write the refusal expectations before running the unchanged build.
+console.log('\nround 6: independent boundary cases')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'beta-library-r6-astral-'))
+  mkdirSync(join(dir, 'sample'))
+  const base = SVG.replace('</svg>', '<text></text></svg>')
+  const room = lib.STILL_BUDGET - Buffer.byteLength(base)
+  const exact = base.replace('<text>', '<text>' + '🚌'.repeat(Math.floor(room / 4)) + 'x'.repeat(room % 4))
+  for (const [name, content] of Object.entries(files({ 'still.svg': exact }))) writeFileSync(join(dir, 'sample', name), content)
+  const atLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  writeFileSync(join(dir, 'sample', 'still.svg'), exact.replace('</text>', '🚌</text>'))
+  const overLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && atLimit.status === 0 && overLimit.status === 1 &&
+    overLimit.stderr.includes('sample/still.svg') && overLimit.stderr.includes('64 KB'),
+    'round6: supplementary-plane still at 65536 bytes builds; one extra code point fails naming its file')
+
+  // WHATWG folds fullwidth ASCII and treats the final @ as the authority
+  // delimiter. Test both a legitimate normalization and hostile near-misses.
+  const good = 'https://ｄｅｓｉｇｎ.betamobility.ai:00443/scene'
+  const urls = ['https://ｄｅｓｉｇｎ.betamobility.ai.evil.test/scene',
+    'https://design.betamobility.ai:00444/scene',
+    'https://design.betamobility.ai@slides.betamobility.ai@evil.test/scene']
+  const web = (url: string) => files({ 'index.html': undefined }, { kind: 'web', url })
+  ok(lib.validateScene('sample', web(good)).url === 'https://design.betamobility.ai/scene' &&
+    urls.every((url) => refused(web(url), 'sample/scene.json', new URL(url).host) &&
+      !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
+    'round6: fullwidth hostname, padded ports and repeated userinfo use the normalized authority')
+
+  // XML character references are decoded before the CSS policy is applied:
+  // refusing a literal backslash alone would leave these spellings open.
+  const stills = ['&#92;', '&#x5c;', '&#0000092;'].map((slash) =>
+    SVG.replace('fill="#fff"', `fill="u${slash}72l(//evil.test/paint.svg#g)"`))
+  ok(stills.every((still) => refused(files({ 'still.svg': still }), 'sample/still.svg')),
+    'round6: XML-encoded CSS escapes cannot load an external paint server')
+}
+
 console.log('\nwhere the library goes')
 {
   const src = readFileSync(script, 'utf8') + readFileSync(join(root, 'scripts/lib/beta-library.mjs'), 'utf8')
