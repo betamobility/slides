@@ -360,7 +360,10 @@ export class LightTable {
   }
 
   private isSlideDrag(ev: DragEvent): boolean {
-    return this.on && !!ev.dataTransfer && [...ev.dataTransfer.types].includes(PAYLOAD)
+    if (!this.on || !ev.dataTransfer) return false
+    const types = [...ev.dataTransfer.types]
+    // a drag that carries a file is the document's to open, whatever else it advertises
+    return types.includes(PAYLOAD) && !types.includes('Files')
   }
 
   private picked(ev: DragEvent): void {

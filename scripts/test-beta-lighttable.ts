@@ -279,6 +279,98 @@ console.log('\nround 2: keyboard, state identity, and undo (no browser required)
     return { store, editor, table, key }
   }
 
+  console.log('\nround 5: history and changing units during a captured drag')
+  const capturedDrop = (h: ReturnType<typeof harness>, payload: string) => {
+    const event = { dataTransfer: { types: ['text/bento-slide'], getData: () => payload },
+      preventDefault() {}, stopPropagation() {} }
+    h.table.picked(event)
+    h.table.boxes = () => grid(h.store.doc.slides.length, 3)
+    h.table.clearBar = () => {}
+    return (before: number) => {
+      const r = h.table.boxes()[before]
+      h.table.point = () => r ? { x: r.left - 5, y: r.top + 20 } : { x: 900, y: 900 }
+      h.table.dropped(event)
+    }
+  }
+  {
+    // The captured slides survive undo, but their indices do not. Undo clears
+    // selection too. The drop must resolve identities against the restored deck.
+    const h = harness(plain(8), [1, 4], 1)
+    h.key('ArrowRight', true)
+    const finish = capturedDrop(h, '[4,5]') // slides 2 and 5 after the move
+    h.store.undo()
+    finish(7)
+    const moved = ids(h.store.doc.slides)
+    h.store.undo()
+    ok(moved === '1,3,4,6,7,2,5,8' && ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8',
+      `R5 AE9 captured drag across undo moves the original identities and undoes: got ${moved}`)
+  }
+  {
+    // Undo removes a slide created before pickup. A cancelled drop must not
+    // create a new history branch that destroys the redo of its creation.
+    const h = harness(plain(3), [1], 1)
+    h.store.commit(() => { h.store.doc.slides.push({ id: 'new', elements: [] }) }, 'slides')
+    h.editor.thumbSel = [1, 3]
+    const finish = capturedDrop(h, '[1,3]')
+    h.store.undo()
+    finish(3)
+    const cancelled = ids(h.store.doc.slides)
+    h.store.redo()
+    ok(cancelled === '1,2,3' && ids(h.store.doc.slides) === '1,2,3,new',
+      'R5 undo removing a captured member cancels the move and preserves redo')
+  }
+  {
+    // A collaborator adds a hidden state after pickup, away from its parent.
+    // The unit at drop time must travel intact and undo must retain the edit.
+    const h = harness(plain(8), [1, 4], 1)
+    const finish = capturedDrop(h, '[1,4]')
+    h.store.doc.slides.push({ id: '2a', stateOf: '2', hidden: true, elements: [] })
+    h.store.emit('slides')
+    const before = JSON.stringify(h.store.doc.slides)
+    finish(7)
+    const moved = ids(h.store.doc.slides)
+    const hidden = h.store.doc.slides.find((s: any) => s.id === '2a')?.hidden
+    h.store.undo()
+    ok(moved === '1,3,4,6,7,2,2a,5,8' && hidden === true && JSON.stringify(h.store.doc.slides) === before,
+      `R5 captured multi-drag carries a newly added hidden state and undo retains it: got ${moved}`)
+  }
+  {
+    // Both directional boundaries, then all selected: no-op commands must
+    // not add undo entries or change the selection Escape will use.
+    const h = harness(plain(4), [0, 1], 1)
+    h.key('ArrowRight', true) // 3,1,2,4, the one real change
+    h.editor.thumbSel = [0, 1]
+    h.key('ArrowLeft', true)
+    h.editor.thumbSel = [2, 3]
+    h.key('ArrowRight', true)
+    h.editor.thumbSel = [0, 1, 2, 3]
+    h.key('ArrowLeft', true)
+    h.key('ArrowRight', true)
+    const beforeUndo = ids(h.store.doc.slides)
+    h.store.undo()
+    h.key('Escape')
+    ok(beforeUndo === '3,1,2,4' && ids(h.store.doc.slides) === '1,2,3,4' &&
+      !h.table.on && h.editor.thumbSel.length === 0,
+      'R5 boundary and all-selected keyboard no-ops preserve the single undo and Escape fallback')
+  }
+  {
+    // While the grid is on, upstream still owns the file route. An external
+    // producer can supply a file and an empty custom slide MIME entry together;
+    // that unusable entry must not swallow the file before the deck loader.
+    const h = harness(plain(8), [1, 4], 1)
+    let taken = 0
+    h.table.boxes = () => grid(8, 3)
+    h.table.point = () => ({ x: 900, y: 900 })
+    h.table.clearBar = () => {}
+    const file = { dataTransfer: { types: ['Files', 'text/bento-slide'],
+      items: [{ kind: 'file', type: 'text/html' }],
+      files: [{ name: 'deck.bento.html', type: 'text/html' }], getData: () => '' },
+      preventDefault() { taken++ }, stopPropagation() { taken++ } }
+    h.table.dropped(file)
+    ok(taken === 0 && ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8',
+      `R5 file drop with an empty slide MIME entry reaches the deck loader: intercepted ${taken} times`)
+  }
+
   // A normal imported deck may contain a cyclic pair (the shape gate accepts
   // both stateOf strings). Moving a slide must NEVER remove another identity,
   // even when its relationship is malformed. Round 1's repeated parents()
