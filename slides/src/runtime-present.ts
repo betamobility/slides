@@ -601,7 +601,9 @@ export function createRuntimeShow(
       // Reveal fires no slidechanged for the slide already showing, so a
       // click on it resets here; any other target resets on its entry.
       const h = scene()
-      if (currentId !== null && sid(idx) === currentId) { if (h) { stepNow = 0; h.scene!.channel.step(0) } }
+      // (the step is reset even with no scene to tell: one that failed and is
+      // mounted again later must open on the step the click asked for)
+      if (currentId !== null && sid(idx) === currentId) { stepNow = 0; h?.scene!.channel.step(0) }
       else jumpTo = idx
     },
     setReduceMotion: (reduce) => scene()?.scene!.channel.motion(reduce),

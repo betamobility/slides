@@ -1201,6 +1201,91 @@ console.log('\npresent: the frame owner')
         `U13 round5: literal and generated slide keys cannot alias the current scene (frames=${t.live()}, navigation=${t.moved}, neighbour messages=${neighbour ? t.types(neighbour) : 'none'})`)
       t.show.dispose()
     }
+    // Round 6: contract-first failure probes. These expectations are written
+    // before running them; leave product code untouched if they expose a bug.
+    // Timeout: the rail's same-slide replay must reset the pending step even
+    // while the still is showing, so a repaired scene starts at the beginning.
+    {
+      const t = build([sceneSlide('r6-timeout-replay', 4)])
+      t.show.enter(0, true)
+      const old = t.framesOn(0)[0]
+      const followed = t.show.follow(0, 3)
+      tick(10_001)
+      const failed = !old.isConnected && t.show.step() === null
+      t.show.jump(0) // exactly the rail's call; Reveal emits no slidechanged here
+      t.doc.assets.sc = '<p>repaired scene</p>'
+      t.rebuild(0); t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      const fresh = t.framesOn(0)[0]
+      if (fresh) t.say(fresh, { type: 'bento:ready' })
+      const opening = (fresh?.contentWindow.posted[0] as { step?: number } | undefined)?.step
+      ok(followed && failed && fresh !== old && opening === 0,
+        `U13 round6: same-slide replay after timeout survives scene repair (opening step=${opening}, expected 0)`)
+      t.show.dispose()
+    }
+    // Error: changing only a scene's configured values is a new definition,
+    // even with identical HTML, steps, props and host. Retry it at the pending
+    // step and read the new values; the failed frame's callbacks remain inert.
+    {
+      const slide = sceneSlide('r6-error-values', 4)
+      slide.runtime!.props = [{ key: 'label', label: 'Label', kind: 'text', default: 'default' }]
+      slide.runtime!.values = { label: 'old' }
+      const t = build([slide])
+      t.show.enter(0, true)
+      const old = t.framesOn(0)[0]
+      t.show.follow(0, 2)
+      old.fire('error')
+      t.show.refresh(0)
+      const stayedFailed = t.framesOn(0).length === 0
+      slide.runtime!.values = { label: 'corrected' }
+      t.show.refresh(0)
+      const fresh = t.framesOn(0)[0]
+      tick(6_000)
+      old.fire('load'); old.fire('error')
+      t.say(old, { type: 'bento:ready' }); t.say(old, { type: 'bento:navigate', dir: 'exit' })
+      const stillCovered = fresh?.isConnected && fresh.style.visibility === 'hidden'
+      if (fresh) t.say(fresh, { type: 'bento:ready' })
+      tick(4_001)
+      const init = fresh?.contentWindow.posted[0] as { step?: number; props?: Record<string, unknown> } | undefined
+      ok(stayedFailed && !!stillCovered && fresh !== old && fresh?.isConnected
+        && init?.step === 2 && init?.props?.label === 'corrected'
+        && t.moved.length === 0 && t.types(old).length === 0,
+        'U13 round6: values-only repair retries an errored scene at the followed step')
+      t.show.dispose()
+    }
+    // Refused source: the current hosted scene moves index while offline and
+    // the deck shrinks. Restoring connectivity must use the surviving slide's
+    // identity and followed step, without reviving the removed neighbour.
+    {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+      const hosted = sceneSlide('r6-offline-move', 4)
+      hosted.runtime = { url: 'https://example.com/scene', steps: 4, props: [] }
+      const t = build([sceneSlide('r6-removed'), hosted])
+      try {
+        Object.defineProperty(globalThis, 'navigator', { value: { onLine: false }, configurable: true })
+        t.show.enter(1, false)
+        const refused = t.framesOn(1).length === 0 && t.show.step() === null
+        for (let i = 0; i < t.slidesEl.children.length; i++) for (const f of t.framesOn(i)) f.remove()
+        t.doc.slides.shift()
+        t.slidesEl.children = t.doc.slides.map(t.section)
+        t.show.rebuilt(() => 0)
+        await new Promise<void>((r) => queueMicrotask(r))
+        Object.defineProperty(globalThis, 'navigator', { value: { onLine: true }, configurable: true })
+        t.show.refresh(0)
+        const fresh = t.framesOn(0)[0]
+        const followed = t.show.follow(0, 2)
+        if (fresh) { fresh.fire('load'); t.say(fresh, { type: 'bento:ready' }) }
+        tick(10_001)
+        ok(refused && followed && t.live().join() === '1' && fresh?.isConnected
+          && fresh.src === 'https://example.com/scene' && t.show.step() === 2
+          && (fresh.contentWindow.posted[0] as { step?: number } | undefined)?.step === 2,
+          'U13 round6: offline scene survives index move and deck shrink before reconnecting')
+      } finally {
+        t.show.dispose()
+        if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor)
+        else delete g.navigator
+      }
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
