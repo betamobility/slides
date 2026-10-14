@@ -24,6 +24,8 @@ export interface RenderOpts {
   /** media (video/audio) accepts pointer input — PRESENT only. On the editor
    *  canvas it stays inert so its native controls don't swallow selection. */
   liveMedia?: boolean
+  /** BETA FORK: the caller mounts live embed frames itself (present mode's frame owner, runtime-present.ts) */
+  ownedFrames?: boolean
   /** dynamic-field values ({{page}} etc.) for this slide; auto-filled by renderSlide */
   fields?: FieldContext
   /** EDITOR CANVAS only: mark a formula that did not render (dotted
@@ -1285,7 +1287,7 @@ export function renderElement(el: SlideElement, doc: BentoDoc, opts: RenderOpts 
       // ...and only on a LIVE surface (present mode passes liveMedia). The
       // editor canvas re-renders on every edit; a frame there would navigate
       // to the author's URL on each repaint, inert or not.
-      if (!opts.svgAsImage && opts.liveMedia && liveFrameAllowed(el)) node.appendChild(liveFrame(el, opts))
+      if (!opts.svgAsImage && opts.liveMedia && !opts.ownedFrames && liveFrameAllowed(el)) node.appendChild(liveFrame(el, opts)) // BETA FORK: ownedFrames
       break
     }
     case 'code': {

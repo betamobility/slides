@@ -361,5 +361,299 @@ try { rp = await import('../slides/src/runtime-present.ts') } catch (e) { consol
   } else ok(false, 'fetchAssets is exported')
 }
 
+// ------------------------------------------------ 9. present: the live window
+// One owner holds every live frame in a show (2026-10-13-2236 plan, U13,
+// KTD11). Which slides may hold one, what uncovers a frame, and that a scene
+// mounted ahead of the show is told nothing until the show enters it, are pure
+// and pinned here; the frame count itself is scripts/test-beta-liveness.mjs.
+console.log('\npresent: the live window')
+{
+  const rp: Partial<PresentModule> = await import('../slides/src/runtime-present.ts')
+  const same = (a: number[] | undefined, b: number[]) => !!a && a.length === b.length && a.every((v, i) => v === b[i])
+  const all = (n: number) => Array.from({ length: n }, () => true)
+  ok(rp.LIVE_WINDOW === 1, `the window is one slide either side (${rp.LIVE_WINDOW})`)
+  if (rp.liveWindow) {
+    const w = rp.liveWindow
+    ok(same(w(all(6), 2, 2), [1, 2, 3]), `six scenes, on the third: slides two, three and four are live (${w(all(6), 2, 2)})`)
+    ok(same(w(all(6), 0, 2), [0, 1]), 'on the first slide: it and the second')
+    ok(same(w(all(6), 5, 2), [4, 5]), 'on the last slide: it and the one before')
+    ok(same(w(all(1), 0, 2), [0]), 'a one-slide deck: that slide')
+    // a state slide is skipped by the arrows, so it is nobody's neighbour
+    const withState = [true, true, false, true]
+    ok(same(w(withState, 3, 2), [3]), `the linear neighbour behind a state slide is two sections away, which Reveal does not lay out (${w(withState, 3, 2)})`)
+    ok(same(w(withState, 3, 3), [1, 3]), 'a wider view distance reaches it, and still skips the state slide')
+    ok(same(w(withState, 1, 2), [0, 1]), 'forward over a state slide: the next linear slide is out of reach at view distance 2')
+    ok(same(w(withState, 2, 2), [1, 2, 3]), 'standing ON a state slide: it is live, with the linear slides either side')
+    ok(same(w(all(6), 2, 1), [2]), 'view distance 1 lays out no neighbour: only the current slide')
+    ok(same(w(all(6), 2, 9), [1, 2, 3]), 'a large view distance does not widen the window past LIVE_WINDOW')
+    ok(same(w(all(6), 2, 9, 2), [0, 1, 2, 3, 4]), 'the span is a parameter (a rig can ask for two)')
+    ok(same(w(all(6), -1, 2), []) && same(w(all(6), 6, 2), []) && same(w(all(6), 1.5, 2), []), 'no current slide, no window')
+    ok(same(w([], 0, 2), []), 'an empty deck has no window')
+  } else ok(false, 'liveWindow is exported')
+  ok(rp.windowFits?.(2) === true && rp.windowFits?.(1) === false && rp.windowFits?.(Number.NaN) === false,
+    'LIVE_WINDOW must stay below Reveal\'s viewDistance')
+  ok(rp.uncovers?.('scene', 'ready') === true && rp.uncovers?.('scene', 'load') === true,
+    'a scene is uncovered by bento:ready, or by load for a page that never says it')
+  ok(rp.uncovers?.('embed', 'load') === true && rp.uncovers?.('embed', 'ready') === false,
+    'a web embed is uncovered by load alone: it has no channel to say ready on')
+
+  if (rp.SceneChannel) {
+    const init = { type: 'bento:init' as const, step: 2, steps: 4, props: {}, reduceMotion: false }
+    const blob = new Blob(['x'])
+    // mounted ahead of the show: ready first, entry later
+    let sent: unknown[] = []
+    let ch = new rp.SceneChannel((m) => sent.push(m), () => init, false)
+    ch.ready()
+    ch.step(1); ch.props({ a: 1 }); ch.motion(true); ch.assets({ 'a.svg': blob })
+    ok(sent.length === 0 && ch.live === false, `a scene mounted ahead of the show is told nothing, even after it says ready (${sent.length} messages)`)
+    ch.enter()
+    ok(sent.length === 2 && (sent[0] as { type: string }).type === 'bento:init' && (sent[1] as { type: string }).type === 'bento:assets' && ch.live === true,
+      `entry sends init first, then the assets that were held (${sent.map((m) => (m as { type: string }).type).join(',')})`)
+    ch.enter()
+    ok(sent.length === 2, 'entering twice sends nothing twice')
+    ch.step(3)
+    ok(sent.length === 3 && (sent[2] as { type: string }).type === 'bento:step', 'once entered and ready, steps go through')
+    // entered before the scene has loaded: init waits for ready
+    sent = []
+    ch = new rp.SceneChannel((m) => sent.push(m), () => init, false)
+    ch.enter()
+    ok(sent.length === 0 && ch.live === false, 'entered but not ready: nothing is posted into a frame that is not listening')
+    ch.ready()
+    ok(sent.length === 1 && (sent[0] as { type: string }).type === 'bento:init' && ch.live === true, 'ready after entry: init goes then')
+    ch.ready()
+    ok(sent.length === 2 && (sent[1] as { type: string }).type === 'bento:init', 'a second ready (the scene reloaded itself) replays init')
+    // the default is the show's own slide: entered from the start
+    sent = []
+    ch = new rp.SceneChannel((m) => sent.push(m), () => init)
+    ch.ready()
+    ok(sent.length === 1, 'without the flag a channel is entered from the start, as before')
+  } else ok(false, 'SceneChannel is exported')
+}
+
+// ------------------------------------------------ 10. present: the frame owner
+// createRuntimeShow against a stand-in DOM and a clock the rig turns by hand.
+// The browser rig counts real frames; what it cannot do cheaply is wait out a
+// timeout twice, rebuild a section under the show, or move a slide to another
+// index, so those are pinned here.
+console.log('\npresent: the frame owner')
+{
+  const rp: Partial<PresentModule> = await import('../slides/src/runtime-present.ts')
+  type Listener = (ev: unknown) => void
+  interface FakeFrame {
+    tag: string; className: string; title: string; referrerPolicy: string; style: Record<string, string>
+    attrs: Record<string, string>; isConnected: boolean; parent: FakeHost | null; contentWindow: { posted: unknown[]; postMessage(m: unknown): void }
+    on: Record<string, Listener[]>
+    setAttribute(k: string, v: string): void; getAttribute(k: string): string | null; removeAttribute(k: string): void
+    addEventListener(t: string, fn: Listener): void; remove(): void; fire(t: string): void
+    srcdoc: string; src: string
+  }
+  interface FakeHost { frames: FakeFrame[]; appendChild(f: FakeFrame): void; hosts: Record<string, FakeHost>; querySelector(sel: string): FakeHost | null }
+  const made: FakeFrame[] = []
+  const mkFrame = (): FakeFrame => {
+    const f: FakeFrame = {
+      tag: 'iframe', className: '', title: '', referrerPolicy: '', style: {}, attrs: {}, isConnected: false, parent: null, on: {},
+      contentWindow: { posted: [], postMessage(m) { this.posted.push(m) } },
+      setAttribute(k, v) { this.attrs[k] = v }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null }, removeAttribute(k) { delete this.attrs[k] },
+      addEventListener(t, fn) { (this.on[t] ??= []).push(fn) },
+      remove() { if (this.parent) this.parent.frames = this.parent.frames.filter((x) => x !== this); this.parent = null; this.isConnected = false },
+      fire(t) { for (const fn of this.on[t] ?? []) fn({}) },
+      get srcdoc() { return this.attrs.srcdoc ?? '' }, set srcdoc(v: string) { this.attrs.srcdoc = v },
+      get src() { return this.attrs.src ?? '' }, set src(v: string) { this.attrs.src = v },
+    }
+    made.push(f)
+    return f
+  }
+  const mkHost = (): FakeHost => ({
+    frames: [], hosts: {},
+    appendChild(f) { f.parent = this; f.isConnected = true; this.frames.push(f) },
+    querySelector(sel) { const m = /data-el-id="([^"]+)"/.exec(sel); return m ? this.hosts[m[1]] ?? null : null },
+  })
+  // a clock turned by hand
+  let now = 0
+  let timers: { id: number; at: number; fn: () => void }[] = []
+  let nextId = 1
+  const tick = (ms: number) => {
+    now += ms
+    for (const t of timers.filter((x) => x.at <= now)) { timers = timers.filter((x) => x !== t); t.fn() }
+  }
+  let onMessage: Listener | null = null
+  const g = globalThis as Record<string, unknown>
+  const saved = { window: g.window, document: g.document, CSS: g.CSS }
+  g.window = {
+    addEventListener: (t: string, fn: Listener) => { if (t === 'message') onMessage = fn },
+    removeEventListener: (t: string) => { if (t === 'message') onMessage = null },
+    setTimeout: (fn: () => void, ms: number) => { const id = nextId++; timers.push({ id, at: now + ms, fn }); return id },
+    focus: () => {},
+  }
+  g.clearTimeout = ((id: number) => { timers = timers.filter((t) => t.id !== id) }) as unknown
+  g.document = { createElement: () => mkFrame(), activeElement: null }
+  g.CSS = { escape: (v: string) => v }
+
+  const sceneSlide = (id: string, steps = 3): Slide => ({ id, elements: [], runtime: { src: 'asset:sc', steps, props: [] } } as unknown as Slide)
+  const embedSlide = (id: string, ...els: string[]): Slide => ({
+    id, elements: els.map((e) => ({ type: 'embed', id: e, x: 0, y: 0, w: 10, h: 10, rotation: 0, app: 'web', url: 'https://example.com/' + e, live: true })),
+  } as unknown as Slide)
+  const build = (slides: Slide[]) => {
+    const doc = newDoc()
+    doc.assets = { sc: '<p>scene</p>' }
+    doc.slides = slides
+    const surfaces: FakeHost[] = []
+    const section = (slide: Slide) => {
+      const surface = mkHost()
+      for (const el of slide.elements ?? []) surface.hosts[el.id] = mkHost()
+      surfaces.push(surface)
+      return { surface, querySelector: () => surface }
+    }
+    const slidesEl = { children: slides.map(section) }
+    const moved: string[] = []
+    const show = rp.createRuntimeShow!(doc, slidesEl as unknown as HTMLElement, null, {
+      goNext: () => moved.push('next'), goPrev: () => moved.push('prev'), exit: () => moved.push('exit'),
+      reduceMotion: () => false, viewDistance: () => 2,
+    })
+    const framesOn = (i: number): FakeFrame[] => {
+      const s = (slidesEl.children[i] as { surface: FakeHost }).surface
+      return [...s.frames, ...Object.values(s.hosts).flatMap((h) => h.frames)]
+    }
+    const live = () => slidesEl.children.map((_, i) => framesOn(i).length)
+    const say = (f: FakeFrame, data: unknown) => onMessage?.({ source: f.contentWindow, data })
+    const types = (f: FakeFrame) => f.contentWindow.posted.map((m) => (m as { type: string }).type)
+    const rebuild = (i: number) => { for (const f of framesOn(i)) { f.isConnected = false; f.parent = null }; slidesEl.children[i] = section(doc.slides[i]) }
+    return { doc, show, slidesEl, framesOn, live, say, types, moved, rebuild, section }
+  }
+
+  if (rp.createRuntimeShow) {
+    // --- the window follows the show
+    {
+      const t = build(['a', 'b', 'c', 'd', 'e', 'f'].map((id) => sceneSlide(id)))
+      t.show.enter(2, true)
+      ok(t.live().join('') === '011100', `on the third of six scenes, slides two to four hold one frame each (${t.live().join('')})`)
+      const [b] = t.framesOn(1); const [c] = t.framesOn(2); const [d] = t.framesOn(3)
+      ok(c.attrs.sandbox === 'allow-scripts allow-forms' && c.referrerPolicy === 'no-referrer' && c.attrs.srcdoc === '<p>scene</p>', 'a scene frame is sandboxed without same-origin and carries the scene')
+      ok(c.style.visibility === 'hidden', 'covered until it reports')
+      t.say(b, { type: 'bento:ready' }); t.say(c, { type: 'bento:ready' })
+      ok(t.types(b).length === 0 && b.style.visibility === '', 'a neighbour that says ready is uncovered and told nothing')
+      ok(t.types(c).join() === 'bento:init' && (c.contentWindow.posted[0] as { step: number }).step === 0, 'the scene showing gets bento:init, step 0')
+      t.say(b, { type: 'bento:navigate', dir: 'next' }); t.say(d, { type: 'bento:navigate', dir: 'exit' })
+      ok(t.moved.length === 0, 'navigate from either neighbour moves nothing')
+      t.say(c, { type: 'bento:navigate', dir: 'next' })
+      ok(t.moved.join() === 'next', 'navigate from the scene showing moves the show')
+      onMessage?.({ source: {}, data: { type: 'bento:navigate', dir: 'exit' } })
+      ok(t.moved.join() === 'next', 'a message from no frame of ours is ignored')
+      ok(t.show.next() === true && t.show.step() === 1 && t.types(c).join() === 'bento:init,bento:step', 'an arrow walks the scene showing')
+      // present.ts calls leave(from) then enter(to)
+      t.show.leave(2); t.show.enter(3, true)
+      ok(t.live().join('') === '001110', `one slide on, the window moves with it (${t.live().join('')})`)
+      ok(!b.isConnected && !('srcdoc' in b.attrs) && !('src' in b.attrs), 'the frame that left the window is detached with src and srcdoc cleared')
+      ok(!c.isConnected && t.framesOn(2)[0] !== c && t.types(t.framesOn(2)[0]).length === 0, 'the scene the show left is replaced by a fresh, silent frame')
+      ok(t.framesOn(3)[0] === d, 'the neighbour the show entered keeps the frame that was mounted ahead')
+      t.say(d, { type: 'bento:ready' })
+      ok(t.types(d).join() === 'bento:init', 'and hears bento:init now')
+      t.say(c, { type: 'bento:ready' }); t.say(c, { type: 'bento:navigate', dir: 'next' })
+      ok(t.moved.join() === 'next', 'a frame that was dropped cannot move the show')
+      // backward, without a leave() first (the show's first slide, a presenter's early nav)
+      t.show.enter(2, false)
+      const c2 = t.framesOn(2)[0]
+      t.say(c2, { type: 'bento:ready' })
+      ok((c2.contentWindow.posted[0] as { step: number }).step === 2, 'entered backward, the scene opens on its last step')
+      ok(t.framesOn(3)[0] !== d, 'enter() alone retires the scene that was showing')
+      t.show.jump(4); t.show.enter(4, false)
+      t.say(t.framesOn(4)[0], { type: 'bento:ready' })
+      ok((t.framesOn(4)[0].contentWindow.posted[0] as { step: number }).step === 0, 'a rail jump opens on step 0 whatever the direction')
+      ok(t.show.follow(4, 9) === true && t.show.step() === 2 && t.show.follow(3, 1) === false, 'follow clamps to the scene showing and refuses another slide')
+      t.show.dispose()
+      ok(t.live().join('') === '000000' && onMessage === null, 'dispose clears every frame and stops listening')
+    }
+    // --- a frame that never reports
+    {
+      const t = build([sceneSlide('a'), sceneSlide('b'), sceneSlide('c'), sceneSlide('d')])
+      t.show.enter(0, true)
+      const b = t.framesOn(1)[0]
+      t.framesOn(0)[0].fire('load')
+      tick(10_001)
+      ok(t.live().join('') === '1000' && !b.isConnected, 'a frame that reported nothing in time is removed; one that loaded stays')
+      t.show.enter(0, true)
+      ok(t.live().join('') === '1000', 'it is not mounted again while its slide stays in the window')
+      t.show.leave(0); t.show.enter(1, true)
+      ok(t.live().join('') === '1110', 'walking onto its slide is one more try')
+      const b2 = t.framesOn(1)[0]
+      tick(10_001)
+      ok(t.live().join('') === '0000' && t.show.step() === null && t.show.next() === false, 'a scene that never loads is its still: no step to walk, arrows change slide')
+      t.show.leave(1); t.show.enter(3, true); t.show.leave(3); t.show.enter(2, true)
+      ok(t.live()[1] === 1 && t.framesOn(1)[0] !== b2, 'having left the window and come back, it is tried again')
+      t.show.dispose()
+    }
+    // --- web embeds: a frame, no channel
+    {
+      const t = build([embedSlide('p', 'e1', 'e2'), embedSlide('q', 'e3'), sceneSlide('r')])
+      t.show.enter(0, true)
+      ok(t.live().join('') === '210', `each embed in the window gets its own frame (${t.live().join('')})`)
+      const [e1, e2] = t.framesOn(0)
+      ok(e1.attrs.src === 'https://example.com/e1' && e1.attrs.sandbox === 'allow-scripts allow-forms' && e1.style.visibility === 'hidden', 'sandboxed, covered until load')
+      t.say(e1, { type: 'bento:ready' })
+      ok(e1.style.visibility === 'hidden' && e1.contentWindow.posted.length === 0, 'bento:ready from an embedded page uncovers nothing and is answered with nothing')
+      t.say(e1, { type: 'bento:navigate', dir: 'exit' })
+      ok(t.moved.length === 0, 'bento:navigate from an embedded page on the slide showing moves nothing')
+      e1.fire('load')
+      ok(e1.style.visibility === '', 'load uncovers it')
+      tick(10_001)
+      ok(e1.isConnected && !e2.isConnected, 'the embed that never loaded is removed; its neighbour on the same slide stays')
+      t.show.setReduceMotion(true); t.show.jump(0)
+      ok(t.show.step() === null && t.show.next() === false && e1.contentWindow.posted.length === 0, 'an embed slide has no steps and its frame is never posted to')
+      t.show.leave(0); t.show.enter(1, true); t.show.leave(1); t.show.enter(0, false)
+      ok(t.framesOn(0)[0] === e1, 'an embed keeps its frame while it stays in the window (it is not a scene to restart)')
+      t.show.dispose()
+      ok(!e1.isConnected && !('src' in e1.attrs), 'dispose clears embeds too')
+    }
+    // --- state slides, and a section rebuilt under the show
+    {
+      const state = { ...sceneSlide('b1'), stateOf: 'b' } as unknown as Slide
+      const t = build([sceneSlide('a'), sceneSlide('b'), state, sceneSlide('c')])
+      t.show.enter(1, true)
+      ok(t.live().join('') === '1100', `a state slide is nobody's neighbour, and the slide past it is not laid out (${t.live().join('')})`)
+      t.say(t.framesOn(1)[0], { type: 'bento:ready' })
+      t.show.next(); t.show.next()
+      ok(t.show.step() === 2, 'the scene is on its third step')
+      t.rebuild(1)
+      ok(t.show.step() === null, 'a rebuilt section has lost its frame: no scene to step')
+      t.show.refresh(1)
+      const b2 = t.framesOn(1)[0]
+      ok(!!b2 && t.live().join('') === '1100', 'refresh mounts it again')
+      t.say(b2, { type: 'bento:ready' })
+      ok((b2.contentWindow.posted[0] as { type: string; step: number }).type === 'bento:init' && (b2.contentWindow.posted[0] as { step: number }).step === 2,
+        'and the new scene opens on the step the audience was on')
+      // an insert before it moved the slide to another index: still the same slide
+      t.doc.slides.unshift(sceneSlide('new'))
+      for (let i = 0; i < t.slidesEl.children.length; i++) for (const f of t.framesOn(i)) { f.isConnected = false; f.parent = null } // replaceChildren detaches them
+      t.slidesEl.children = t.doc.slides.map(t.section)
+      t.show.refresh(2)
+      const b3 = t.framesOn(2)[0]
+      t.say(b3, { type: 'bento:ready' })
+      ok((b3?.contentWindow.posted[0] as { step: number } | undefined)?.step === 2, 'moved to another index by an insert before it, it is the same slide on the same step')
+      ok(t.live().join('') === '01100', `and the window is counted from where it is now (${t.live().join('')})`)
+      // rebuilt(): many sections in one go, one refresh, after the caller is done
+      let asked = 0
+      t.rebuild(2)
+      t.show.rebuilt(() => { asked++; return 2 }); t.show.rebuilt(() => { asked++; return 2 })
+      ok(t.live()[2] === 0 && asked === 0, 'rebuilt() does nothing while the caller is still replacing nodes')
+      await new Promise<void>((r) => queueMicrotask(r))
+      ok(t.live()[2] === 1 && asked === 1, 'a microtask on, one refresh puts the frame back')
+      t.show.rebuilt(() => 2); t.show.dispose()
+      await new Promise<void>((r) => queueMicrotask(r))
+      ok(t.live().join('') === '00000', 'a refresh queued before the show ended mounts nothing after it')
+    }
+    // --- the switches that refuse a frame still refuse it
+    {
+      const hosted = { id: 'h', elements: [], runtime: { url: 'http://example.com/x', steps: 1, props: [] } } as unknown as Slide
+      const dead = { id: 'x', elements: [{ type: 'embed', id: 'e', x: 0, y: 0, w: 1, h: 1, rotation: 0, app: 'web', url: 'https://example.com/', live: false }] } as unknown as Slide
+      const t = build([hosted, dead, sceneSlide('z')])
+      t.show.enter(1, true)
+      ok(t.live().join('') === '001', `a plain-http scene and an embed that is not live get no frame (${t.live().join('')})`)
+      t.show.dispose()
+    }
+  } else ok(false, 'createRuntimeShow is exported')
+  g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
+  ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
