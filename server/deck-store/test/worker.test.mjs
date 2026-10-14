@@ -226,6 +226,13 @@ export async function run(Miniflare) {
       throw new Error(`unexpected outbound fetch: ${req.url}`)
     },
   }
+  // Test-only mutation: route on the complete URL instead of its pathname.
+  // No product file is changed; the round-9 refusal case must catch this.
+  if (process.env.U34_R9_MUTANT === 'worker') {
+    mfOptions.script = readFileSync(mfOptions.scriptPath, 'utf8').replace(
+      "isPublicPath(path) && (m === 'GET' || m === 'HEAD')",
+      "(isPublicPath(path) || url.href.includes('/schema/')) && (m === 'GET' || m === 'HEAD')")
+  }
   const mf = new Miniflare(mfOptions)
 
   // The store's host. OLD_ORIGIN is the retired one, used only by the
@@ -319,6 +326,45 @@ export async function run(Miniflare) {
       eq(await r.text(), pagesBody(p), `GET ${p} returns the origin's exact bytes`)
       eq(proxied.length - before, 1, `GET ${p} made exactly one subrequest`)
       eq(new URL(proxied[proxied.length - 1].url).host, PAGES_ORIGIN, `GET ${p} fetched PAGES_ORIGIN, not its own host`)
+    }
+    // Round 9: suffixes cannot grant access to a private path; URL-normalized
+    // paths that really end up in /schema/ may read only the Pages origin.
+    {
+      const misses = []
+      for (const [path, publicRead] of [
+        ['/api/decks?next=/schema/slides.json', false],
+        ['/api/decks#/schema/slides.json', false],
+        ['/schema/../../api/decks?path=/schema/', false],
+        ['/api/../schema/slides.json', true],
+        ['/schema/slides.json?next=/api/decks', true],
+      ]) for (const method of ['DELETE', 'POST', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        const body = await response.text()
+        const allowed = publicRead && ['GET', 'HEAD'].includes(method)
+        if (response.status !== (allowed ? 200 : 401) || proxied.length - before !== Number(allowed)
+          || (!allowed && body !== '') || (method === 'HEAD' && body !== '')
+          || (allowed && new URL(proxied.at(-1).url).host !== PAGES_ORIGIN)) misses.push(`${method} ${path}`)
+      }
+      ok(!misses.length, 'round 9 schema suffix confusion refuses private routes and writes: ' + misses.join(', '))
+    }
+    // Round 10: WHATWG backslash normalization must not grant private reads;
+    // double-encoded separators remain opaque and may only reach Pages.
+    {
+      const misses = []
+      for (const [path, publicPath] of [
+        ['/schema/..\\api/decks', false], ['/schema\\..\\api/decks', false],
+        ['/schema/%252e%252e%252fapi%252fdecks', true], ['/schema/', true],
+      ]) for (const method of ['PATCH', 'PUT', 'OPTIONS', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        const body = await response.text()
+        const allowed = publicPath && ['GET', 'HEAD'].includes(method)
+        if (response.status !== (allowed ? 200 : 401) || proxied.length - before !== Number(allowed)
+          || ((!allowed || method === 'HEAD') && body !== '')
+          || (allowed && new URL(proxied.at(-1).url).host !== PAGES_ORIGIN)) misses.push(`${method} ${path}: ${response.status}`)
+      }
+      ok(!misses.length, 'round 10 schema backslashes, double escapes, directory and uncommon methods: ' + misses.join(', '))
     }
     // Independent U3 refusal tests: prefix lookalikes, normalized traversal and writes.
     for (const path of ['/schema', '/schemaX/slides.json', '/schema%2Fslides.json',
@@ -420,6 +466,56 @@ export async function run(Miniflare) {
         && (!isStatic || proxied.at(-1).url === `https://${PAGES_ORIGIN}${path}`),
         `schema encoded delimiter stays within routing boundary: ${path}`)
       await response.text()
+    }
+    // Round 7: dot-segment normalization with matrix parameters and empty segments.
+    // Refusal cases first; an encoded separator must remain a static-origin request.
+    {
+      const cases = [
+        ['/schema/..;/../../api/decks', false],
+        ['/schema//../../api/decks', false],
+        ['/schema/../schemaX/slides.json', false],
+        ['/schema/%2e./api/decks', false],
+        ['/schema/%2f..%2fapi%2fdecks', true],
+        ['/schema/slides.json', true],
+      ]
+      let good = true
+      for (const [path, publicRead] of cases) {
+        for (const method of ['DELETE', 'GET', 'HEAD']) {
+          const before = proxied.length
+          const response = await call(method, path)
+          const body = await response.text()
+          const allowed = publicRead && method !== 'DELETE'
+          good &&= response.status === (allowed ? 200 : 401)
+            && proxied.length === before + (allowed ? 1 : 0)
+            && (allowed || body === '')
+            && (method !== 'HEAD' || body === '')
+            && (!allowed || new URL(proxied.at(-1).url).host === PAGES_ORIGIN)
+        }
+      }
+      ok(good, 'round 7 schema matrix/dot/empty-segment routing never selects private data or permits writes')
+    }
+    // Round 8: request rewrite headers and unusual percent escapes cannot
+    // turn the public schema prefix into an authenticated store route.
+    {
+      const misses = []
+      const headers = { 'x-original-url': '/api/decks', 'x-rewrite-url': '/api/decks',
+        'x-http-method-override': 'GET', 'cf-access-jwt-assertion': 'invalid' }
+      for (const [path, publicPath] of [
+        ['/SCHEMA/slides.json', false], ['/schema%00/slides.json', false],
+        ['/schema/../../../api/decks', false], ['/schema/%', true],
+        ['/schema/%00/api/decks', true], ['/schema/slides.json', true],
+      ]) for (const method of ['POST', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path, { headers })
+        const body = await response.text()
+        const allowed = publicPath && method !== 'POST'
+        if (response.status !== (allowed ? 200 : 401)
+          || proxied.length !== before + (allowed ? 1 : 0)
+          || ((!allowed || method === 'HEAD') && body !== '')
+          || (allowed && (new URL(proxied.at(-1).url).host !== PAGES_ORIGIN
+            || proxied.at(-1).method !== method))) misses.push(`${method} ${path}: ${response.status}`)
+      }
+      ok(!misses.length, 'round 8 schema rewrite headers, method override and percent escapes stay on the static origin: ' + misses.join(', '))
     }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')

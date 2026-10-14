@@ -128,16 +128,81 @@ export function markerLines(file: string, text: string): Set<number> {
       if (fences % 2 === 1) inString = !inString
     })
   } else if (['yml', 'yaml'].includes(ext)) {
-    let block = -1 // indent of the key that opened a block scalar, or -1
-    lines.forEach((l, i) => {
-      const indent = l.search(/\S/)
-      if (block >= 0) {
-        if (indent < 0 || indent > block) return // blank, or the scalar's content
-        block = -1
+    // Where a block scalar's text is, by YAML 1.2's own rule (8.1.1.1), not by
+    // guessing (rounds 7, 8 and 9 each found a guess's hole: `|2-`, tags and
+    // anchors, a header on its own line; and the fail-closed guess refused a
+    // real comment between two `- run: |` steps).
+    //   a HEADER is `|` or `>` with up to two indicators (a digit 1-9, `+` or
+    //     `-`, either order), after any tags (`!x`) and anchors (`&x`), ending
+    //     the value of a key, of a sequence item, or a line of its own;
+    //   its OWNER is the node it belongs to: the key (its column; for an item,
+    //     the column after `- `), or, for a header on its own line, the key on
+    //     the nearest earlier structure line with a smaller indent;
+    //   the CONTENT indent is owner + the digit when there is one, else the
+    //     indent of the first non-blank line after the header, which must be
+    //     deeper than the owner (otherwise the scalar is empty);
+    //   the scalar ENDS at the first non-blank line indented less than that.
+    // Every line inside is text; a `#` there is never a marker. A line after
+    // it is structure again, and a `#` comment there counts.
+    // YAML indents with SPACES only: a tab or a non-breaking space starts content (Codex round 10)
+    const indentOf = (l: string) => (/^[ \t]*$/.test(l) ? -1 : l.search(/[^ ]/))
+    const unquoted = (l: string) => l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => '"' + ' '.repeat(Math.max(0, q.length - 2)) + '"')
+    const HEADER = /^(?:(?:![^\s]*|&[^\s]+)\s+)*[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$/
+    /** For a structure line: the column of the node its value belongs to, and whether that value is a block scalar header. */
+    const headerOf = (l: string): { owner: number; digit: number } | null => {
+      const bare = unquoted(l)
+      let col = indentOf(bare)
+      let rest = bare.slice(col)
+      let dash = -1 // the column of the innermost `-` peeled, when the line is a sequence entry
+      // peel `- ` sequence entries (nested `- - x` too)
+      for (let m; (m = /^-(?:\s+|$)/.exec(rest)); ) { dash = col; col += m[0].length; rest = rest.slice(m[0].length) }
+      // a key: `key:` then a space or the end of the line (a header starts with | > ! or &, never a key)
+      const key = /^[|>!&]/.test(rest) ? null : /^[^#:]*?:(?:\s+|$)/.exec(rest)
+      const value = key ? rest.slice(key[0].length) : rest
+      if (!HEADER.test(value.trim())) return null
+      // the indicators, read AFTER the tags and anchors (a verbatim tag `!<…>` holds a `>`)
+      const bareHeader = value.trim().replace(/^(?:(?:![^\s]*|&[^\s]+)\s+)*/, '')
+      const digit = Number(/^[|>]([^\s#]*)/.exec(bareHeader)![1].replace(/[^1-9]/g, '') || 0)
+      // the owner: the key's column; for an entry whose value IS the header (`- |2`), the dash's
+      // column; a header alone on its line is resolved by the caller (-1)
+      return { owner: key ? col : dash >= 0 ? dash : -1, digit }
+    }
+    const isComment = (l: string) => /^\s*#/.test(l)
+    const inText = new Set<number>()
+    for (let i = 0; i < lines.length; i++) {
+      if (isComment(lines[i]) || indentOf(lines[i]) < 0) continue
+      const h = headerOf(lines[i])
+      if (!h) continue
+      let owner = h.owner
+      if (owner < 0) {
+        // a header on its own line belongs to the nearest earlier structure line with a smaller indent
+        const here = indentOf(lines[i])
+        owner = -1
+        for (let j = i - 1; j >= 0; j--) {
+          const ind = indentOf(lines[j])
+          if (ind < 0 || isComment(lines[j]) || ind >= here) continue
+          const b = unquoted(lines[j]).slice(ind)
+          const dash = /^(-\s+)+/.exec(b)
+          owner = ind + (dash ? dash[0].length : 0)
+          break
+        }
+        if (owner < 0) owner = 0
       }
-      if (hashComment(l)) out.add(i + 1)
-      if (/(?::|^\s*-)\s*[|>][+-]?\d*\s*(?:#.*)?$/.test(l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) block = indent
-    })
+      let content = h.digit ? owner + h.digit : -1
+      let j = i + 1
+      for (; j < lines.length; j++) {
+        const ind = indentOf(lines[j])
+        if (ind < 0) { inText.add(j); continue } // blank: part of the scalar while it lasts
+        if (content < 0) {
+          if (ind <= owner) break // an empty scalar
+          content = ind
+        }
+        if (ind < content) break
+        inText.add(j)
+      }
+      i = j - 1
+    }
+    lines.forEach((l, i) => { if (!inText.has(i) && hashComment(l)) out.add(i + 1) })
   }
   return out
 }
@@ -292,6 +357,85 @@ console.log('the rule itself (no git needed)')
   }
 }
 
+// Round 7: both orders of YAML's indentation/chomping indicators are valid.
+// These are BLOCK scalars, not the deliberately unmodelled quoted/flow scalars.
+{
+  const file = '.github/workflows/ci.yml'
+  const missed: string[] = []
+  for (const header of ['|2-', '|2+', '>2-', '>2+', '|-2', '|+2', '>-2', '>+2']) {
+    const lines = ['env:', `  CAPTION: ${header}`, '    # BETA FORK', '    literal data']
+    const diff = `@@ -0,0 +1,4 @@\n${lines.map(l => '+' + l).join('\n')}\n`
+    const hook = hooksOf(file, diff, lines)[0]
+    if (hook.marked || hook.file !== file || hook.line !== 1) missed.push(header)
+  }
+  ok(missed.length === 0, `round 7 YAML block-scalar data cannot mark a forgotten hook at ${file}:1; falsely marked=${missed.join(',')}`)
+  const lines = ['# BETA FORK: actual YAML comment', 'env:', '  CAPTION: |2-', '    literal data']
+  ok(hooksOf(file, '@@ -0,0 +1,4 @@\n' + lines.map(l => '+' + l).join('\n') + '\n', lines)[0].marked,
+    'round 7 YAML block-scalar positive control: an actual heading comment counts')
+}
+
+// Round 8: node properties may precede a YAML block scalar header. The
+// marker-looking line remains scalar DATA, with either indicator order.
+{
+  const file = '.github/workflows/ci.yml'
+  const misses: string[] = []
+  for (const property of ['!!str', '&caption', '!!str &caption', '&caption !!str']) {
+    for (const header of ['|2-', '|-2', '>2+', '>+2']) {
+      const lines = ['env:', `  CAPTION: ${property} ${header}`, '    # BETA FORK', '    literal data']
+      const diff = '@@ -0,0 +1,4 @@\n' + lines.map(l => '+' + l).join('\n') + '\n'
+      const hook = hooksOf(file, diff, lines)[0]
+      if (hook.marked || hook.file !== file || hook.line !== 1) misses.push(`${property} ${header}`)
+      // A real heading comment must still cover this hook.
+      const marked = ['# BETA FORK: real comment', ...lines]
+      if (!hooksOf(file, '@@ -0,0 +1,5 @@\n' + marked.map(l => '+' + l).join('\n') + '\n', marked)[0].marked) misses.push('positive control')
+    }
+  }
+  ok(misses.length === 0, `round 8 tagged/anchored block scalars cannot mark ${file}:1; falsely marked=${misses.join(', ')}`)
+}
+
+// Round 9: a scalar indicator can occupy its own line. Ruby/Psych parses
+// CAPTION as "# BETA FORK\ndata", not as a YAML comment. The content may
+// align with the indicator, or be deeper; neither form marks the new hook.
+{
+  const file = '.github/workflows/ci.yml'
+  const misses: string[] = []
+  for (const header of ['|', '|-', '>', '>-']) for (const pad of ['    ', '      ']) {
+    const lines = ['env:', '  CAPTION:', `    ${header}`, `${pad}# BETA FORK`, `${pad}data`]
+    const h = hooksOf(file, '@@ -0,0 +1,5 @@\n' + lines.map(l => '+' + l).join('\n') + '\n', lines)[0]
+    if (h.marked || h.file !== file || h.line !== 1) misses.push(`${header}/${pad.length}`)
+  }
+  ok(!misses.length, `round 9 separate-line scalar headers cannot mark a forgotten hook at ${file}:1; falsely marked=${misses}`)
+}
+// Round 9: a comment less indented than scalar content terminates that
+// content. This is a real heading comment immediately above the next step.
+{
+  const lines = ['steps:', '  - run: |', '      echo hi', '    # BETA FORK: next step', '  - run: echo next']
+  const h = hooksOf('.github/workflows/ci.yml', '@@ -3,0 +4,2 @@\n+' + lines.slice(3).join('\n+') + '\n', lines)[0]
+  ok(h.marked && h.line === 4, 'round 9 real marker between run steps is accepted after scalar dedent')
+}
+
+// Round 10: Ruby/Psych is the independent oracle for valid BLOCK scalars.
+// Each fixture contains marker text as data; a real comment is then prepended
+// as the positive control. No quoted/flow scalar exceptions are exercised.
+{
+  const cases = [
+    ['sequence scalar owner column', ['- |2', '  # BETA FORK', '  echo next']],
+    ['verbatim tag before explicit indentation', ['run: !<tag:yaml.org,2002:str> |2', '    echo hi', '  # BETA FORK', '  echo next']],
+    ['non-ASCII whitespace is content, not YAML indentation', ['run: |', '  \u00a0echo hi', '  # BETA FORK', '  echo next']],
+  ] as const
+  for (const [name, lines] of cases) {
+    const parsed = JSON.parse(execFileSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.load(STDIN.read))'],
+      { input: lines.join('\n') + '\n', encoding: 'utf8' }))
+    const scalar = Array.isArray(parsed) ? parsed[0] : parsed.run
+    const diff = `@@ -0,0 +1,${lines.length} @@\n` + lines.map(l => '+' + l).join('\n') + '\n'
+    const hook = hooksOf('.github/workflows/ci.yml', diff, [...lines])[0]
+    const real = ['# BETA FORK: actual comment', ...lines]
+    const positive = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${real.length} @@\n` + real.map(l => '+' + l).join('\n') + '\n', real)[0]
+    ok(scalar.includes('# BETA FORK') && !hook.marked && hook.file === '.github/workflows/ci.yml' && hook.line === 1 && positive.marked,
+      `round 10 ${name}: Ruby confirms scalar data; forgotten hook must fail at ${hook.file}:${hook.line} (marked=${hook.marked})`)
+  }
+}
+
 console.log('\nthe upstream this fork tracks')
 const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8')
 const tag = /Upstream base: `(v\d+\.\d+\.\d+)`/.exec(agents)?.[1]
@@ -329,6 +473,30 @@ if (tag) {
     ok(oldMarkers.length === 0, `no hook is still marked with the old spelling "Beta build"${oldMarkers.length ? ': ' + oldMarkers.slice(0, 5).map(([f, n]) => `${f}:${n}`).join(', ') : ''}`)
     for (const [r, why] of EXEMPT) console.log(`    exempt ${r}: ${why}`)
   }
+}
+
+// The YAML rule, swept (after Codex U3+U4 rounds 7 and 8): every header form
+// a block scalar can take, at three depths, with a marker-looking line inside
+// its text must leave a forgotten hook unmarked; a real heading comment beside
+// the same layouts must still count.
+{
+  const props = ['', '!!str ', '&a ', '!!str &a ', '&a !!str ', '!t ']
+  const indicators = ['|', '>', '|-', '|+', '>-', '>+', '|2', '>2', '|2-', '|-2', '>2+', '>+2', '| # c', '>- # c']
+  const missed: string[] = []
+  let negatives = 0, positives = 0
+  for (const p of props) for (const ind of indicators) for (const depth of [0, 1, 2]) {
+    const pad = '  '.repeat(depth)
+    const open = depth === 0 ? `CAPTION: ${p}${ind}` : `${pad}- key: ${p}${ind}`
+    const scalar = [...(depth ? ['env:'] : []), open, `${pad}    # BETA FORK`, `${pad}    text`, `${pad}      # BETA FORK`]
+    const hook = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${scalar.length} @@\n` + scalar.map((l) => '+' + l).join('\n') + '\n', scalar)
+    negatives++
+    if (hook.some((h) => h.marked)) missed.push(`${JSON.stringify(open)}`)
+    const real = ['# BETA FORK: a heading comment', ...scalar]
+    const ok2 = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${real.length} @@\n` + real.map((l) => '+' + l).join('\n') + '\n', real)
+    positives++
+    if (!ok2.every((h) => h.marked)) missed.push(`positive ${JSON.stringify(open)}`)
+  }
+  ok(missed.length === 0, `YAML sweep: ${negatives} block-scalar layouts never mark a hook from their text, and ${positives} real heading comments still do (${missed.slice(0, 4).join('; ') || 'none wrong'})`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

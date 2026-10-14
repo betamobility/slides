@@ -214,6 +214,27 @@ ok(read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages schema/
 console.log('\na runtime slide validates; a broken one does not\n')
 {
   const rt = (defs.slide.properties as Record<string, J>).runtime
+  // BETA FORK round 9: reject unknown slide keys even beside a complete
+  // library runtime, then accept saved outputs after repairing each field.
+  {
+    const oracle = structuredClone(file)
+    // Test-only mutation: prove this test detects an accidentally open slide.
+    if (process.env.U34_R9_MUTANT === 'schema') ((oracle.$defs as J).slide as J).additionalProperties = true
+    const misses: string[] = []
+    for (const steps of [-1, '12', 10001]) for (const kind of ['text', 'number', 'color']) {
+      const record = { steps, props: [{ key: 'mode', label: 'Mode', kind, default: null,
+        format: 'select:a|b' }], library: { id: 'map', version: 3 }, assets: ['data.json'] }
+      const d = structuredClone(starter) as unknown as J
+      const slide = (d.slides as J[])[0]
+      slide.runtime = checkRuntime(record)
+      slide.runtimeTypo = true
+      if (!check(stampSchema(d as never), oracle).some(e => e.includes('runtimeTypo'))) misses.push('unknown slide key')
+      delete slide.runtimeTypo
+      const errors = check(stampSchema(d as never), oracle)
+      if (errors.length) misses.push(...errors)
+    }
+    ok(!misses.length, `round 9 closed slide schema rejects unknown keys beside repaired library runtimes; ${misses}`)
+  }
   // BETA FORK, from the independent break round: what the gate hands back validates.
   const savedCases: Array<[string, J, boolean]> = [
     ['an uppercase HTTPS url', { url: 'HTTPS://example.com/scene', steps: 0, props: [] }, true],
@@ -578,6 +599,128 @@ console.log('\na runtime slide validates; a broken one does not\n')
       && saved.slides[0].elements[0].url === url && errs.length === 0,
       'web embed: gate-kept URL validates (' + url + '): ' + JSON.stringify(errs))
   }
+}
+
+// BETA FORK: round 7, negative mutations precede generated valid/save cases.
+{
+  const rt = (file.$defs as any).slide.properties.runtime
+  const { isDeepStrictEqual } = await import('node:util')
+  const errors: string[] = []
+  for (let n = 0; n < 96; n++) {
+    const kind = (['text', 'number', 'color'] as const)[n % 3]
+    const value = kind === 'text' ? `Oslo ${n} 🚲` : kind === 'number' ? n / 7 : '#12ABef'
+    const record = { src: 'asset:scene', still: 'asset:still', steps: n,
+      url: Array.from('https', (c, i) => n & (1 << i) ? c.toUpperCase() : c).join('') + '://example.test/scene',
+      props: [{ key: 'setting', label: 'Setting', kind, default: value, format: n % 2 ? 'select:a|b' : '🚲'.repeat(200) }],
+      values: { setting: value }, library: { id: 'scene-' + n, version: n + 1 }, assets: ['scene.js'] }
+    const broken = structuredClone(record) as any
+    broken.library.version = 0
+    if (!validate(rt, broken, file).length || checkRuntime(broken)?.library) errors.push(`invalid library ${n}`)
+    const kept = checkRuntime(record)!
+    if (validate(rt, record, file).length || !isDeepStrictEqual(kept, record)) errors.push(`valid record ${n}`)
+    // A repaired input may fail schema validation, but the gate's actual output must pass.
+    const repaired = checkRuntime({ ...record, steps: '-7', src: 'javascript:bad',
+      props: [{ ...record.props[0], default: kind === 'number' ? '3.5' : kind === 'color' ? '  #12ABef  ' : false }] })!
+    if (validate(rt, repaired, file).length) errors.push(`repaired output ${n}`)
+    const deck = starterDoc(); deck.slides[0].runtime = kept
+    if (check(deck, file).length) errors.push(`deck ${n}`)
+    ;(deck.slides[0] as any).runtimeTypo = {}
+    if (!check(deck, file).some(e => e.includes('unknown key runtimeTypo'))) errors.push(`unknown slide key ${n}`)
+  }
+  ok(errors.length === 0, 'round 7 generated runtime/library/format records and repaired outputs validate; invalid library and slide keys fail: ' + errors.join(', '))
+}
+
+// BETA FORK: round 7 attacks the round 6 scheme-case fix exhaustively.
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const errors: string[] = []
+  for (const scheme of ['http', 'https']) for (let bits = 0; bits < 1 << scheme.length; bits++) {
+    const mixed = Array.from(scheme, (c, i) => bits & (1 << i) ? c.toUpperCase() : c).join('')
+    const url = mixed + '://example.test/scene?q=Oslo#view'
+    const el = { id: 'case-probe', type: 'embed', x: 0, y: 0, w: 800, h: 450,
+      rotation: 0, opacity: 1, app: 'web', url, live: true, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+    if (!validate((file.$defs as J).embed as J, { ...el, url: 'javascript:bad' }, file).length) errors.push('bad scheme accepted')
+    const kept = sanitizeElement(el)
+    const deck = starterDoc(); deck.slides[0].elements = kept ? [kept] : []
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+    if (!kept || (kept as any).url !== url || check(saved, file).length) errors.push(mixed)
+  }
+  ok(errors.length === 0, 'round 7 all 48 HTTP/HTTPS scheme casings survive gate/save/schema; invalid scheme fails: ' + errors.join(', '))
+}
+
+// BETA FORK: round 7, exercise the library writer used by U11 and U12.
+{
+  const { readManifest, runtimeSlideWith } = await import('../slides/src/beta/libraryread.ts')
+  const raw = { id: 'round-seven', version: 1, name: 'Round seven', kind: 'runtime', steps: 2,
+    props: [{ key: 'caption', label: 'Caption', kind: 'text', default: 'Oslo', format: 'select:Oslo|Bergen' }],
+    presets: [], html: '<main>Scene</main>', still: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }
+  ok(readManifest({ format: 'beta/library', v: 1, scenes: [{ ...raw, version: 0 }] })?.length === 0,
+    'round 7 library writer refuses invalid library version first')
+  const scene = readManifest({ format: 'beta/library', v: 1, scenes: [raw] })?.[0]
+  const deck = starterDoc()
+  const slide = scene && runtimeSlideWith(deck, scene, { caption: 'Bergen' })
+  if (slide) deck.slides.push(slide)
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+  const errs = check(saved, file)
+  ok(!!slide && saved.slides.at(-1).runtime.library.id === raw.id && saved.$schema === file.$id && errs.length === 0,
+    'round 7 actual library insert and save validate against advertised schema: ' + JSON.stringify(errs))
+}
+
+// BETA FORK: round 8, terminal line breaks must not evade the format rule.
+{
+  const rt = (file.$defs as any).slide.properties.runtime
+  const misses: string[] = []
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    const record = { props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'bool' + suffix }] }
+    const kept = checkRuntime(record)!
+    if (validate(rt, record, file).length === 0 || kept.props[0].format !== undefined || validate(rt, kept, file).length) misses.push(JSON.stringify(suffix))
+  }
+  const clean = { props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'bool' }] }
+  ok(!misses.length && validate(rt, clean, file).length === 0 && checkRuntime(clean)!.props[0].format === 'bool',
+    'round 8 terminal format line breaks fail schema and gate; clean hint passes; mismatches=' + misses.join(', '))
+}
+
+// BETA FORK: round 8, actual saved URLs at the gate's length limit, with
+// mixed-case schemes and opaque path/query characters (negative control first).
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const misses: string[] = []
+  for (const prefix of ['hTtP://example.test/', 'hTtPs://example.test/']) {
+    for (const tail of ['?q=%2F%3F%23#part', '/é/🚲?x=1&y=2']) {
+      const url = prefix + 'a'.repeat(2048 - prefix.length - tail.length) + tail
+      const el = { id: 'round8-url', type: 'embed', x: 0, y: 0, w: 800, h: 450, rotation: 0, opacity: 1,
+        app: 'web', live: true, url, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+      const invalid = { ...el, url: 'javascript:alert(1)' }
+      if (!validate((file.$defs as J).embed as J, invalid, file).length) misses.push('invalid scheme')
+      const kept = sanitizeElement(el)
+      const deck = starterDoc(); deck.slides[0].elements = kept ? [kept] : []
+      const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+      if (!kept || (kept as any).url !== url || check(saved, file).length) misses.push(prefix + tail)
+    }
+  }
+  ok(!misses.length, 'round 8 mixed-case embed URLs at the gate limit survive save/schema; bad scheme fails: ' + misses.join(', '))
+}
+
+// BETA FORK: round 10, saved repair output across all runtime metadata fields.
+{
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const rt = (file.$defs as any).slide.properties.runtime
+  const misses: string[] = []
+  for (const [key, bad] of Object.entries({ src: 'javascript:x', still: 'asset:', url: 'http://example.test',
+    steps: -1, props: [{ key: 'x', label: 'X', kind: 'unknown', default: 0 }],
+    assets: ['../secret'], library: { id: 'Bad ID', version: 0 } })) {
+    const raw = { [key]: bad }
+    if (!validate(rt, raw, file).length) misses.push(`invalid ${key} accepted`)
+    const deck = starterDoc(); deck.slides[0].runtime = checkRuntime(raw)!
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+    if (check(saved, file).length) misses.push(`saved repair of ${key} rejected`)
+    saved.slides[0].runtimeUnexpected = true
+    if (!check(saved, file).some(e => e.includes('unknown key runtimeUnexpected'))) misses.push(`unknown slide key after ${key}`)
+  }
+  ok(!misses.length, 'round 10 runtime invalid-field refusal and actual saved repairs: ' + misses.join(', '))
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
