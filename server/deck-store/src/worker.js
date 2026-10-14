@@ -704,11 +704,25 @@ const LIBRARY_KEY = 'library/library.json'
 const LIBRARY_MAX = 8 * 1024 * 1024
 const SCENE_ID_RE = /^[a-z][a-z0-9-]{0,39}$/
 
-/** The least a manifest must be for anything to be stored: the build script's `manifestShape`. */
+// Hosts a web scene may point at: the build script's WEB_HOSTS, restated. The
+// build is where a scene is reviewed, but the upload is authorised by one
+// long-lived shared token, so the store does not take the allowlist on trust.
+const LIBRARY_WEB_HOSTS = ['slides.betamobility.ai', 'design.betamobility.ai']
+
+/** The least a manifest must be for anything to be stored: the build script's `manifestShape`, line for line. */
 function manifestShape(v) {
   const obj = (x) => !!x && typeof x === 'object' && !Array.isArray(x)
   if (!obj(v) || v.format !== 'beta/library' || v.v !== 1 || !Array.isArray(v.scenes)) return false
-  return v.scenes.every((s) => obj(s) && typeof s.id === 'string' && SCENE_ID_RE.test(s.id) && Number.isInteger(s.version) && (s.kind === 'runtime' || s.kind === 'web'))
+  const ids = new Set()
+  return v.scenes.every((s) => {
+    if (!obj(s) || typeof s.id !== 'string' || !SCENE_ID_RE.test(s.id) || ids.has(s.id) || !Number.isInteger(s.version) || s.version < 1) return false
+    ids.add(s.id)
+    if (s.kind === 'runtime') return typeof s.html === 'string' && s.url === undefined
+    if (s.kind !== 'web' || typeof s.url !== 'string' || s.html !== undefined) return false
+    let u
+    try { u = new URL(s.url) } catch { return false }
+    return u.protocol === 'https:' && !u.port && !u.username && !u.password && LIBRARY_WEB_HOSTS.includes(u.hostname)
+  })
 }
 
 async function putLibrary(req, env) {

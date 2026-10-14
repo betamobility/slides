@@ -35,6 +35,7 @@ const known = new Set(['--check', '--upload', '--out', '--dir'])
 for (const [i, a] of args.entries()) {
   if (a.startsWith('--') ? !known.has(a) : !['--out', '--dir'].includes(args[i - 1])) { console.error(`build-beta-library: unknown argument ${a}`); process.exit(2) }
 }
+if (flag('--check') && flag('--upload')) { console.error('build-beta-library: --check uploads nothing; pass one or the other'); process.exit(2) }
 const dir = value('--dir') ?? join(root, 'beta/library')
 const out = value('--out') ?? join(root, 'beta/library/.out/library.json')
 

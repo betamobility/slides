@@ -7,7 +7,7 @@
   html, body { height: 100%; margin: 0; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh;
     font-family: Geist, Inter, system-ui, sans-serif; background: #fff; color: #1a1a1a; overflow: hidden; }
-  #n { font-size: 22vh; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+  #n { font-size: 22vh; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; white-space: nowrap; }
   #l { font-size: 4.2vh; color: #5c5c5c; }
 </style>
 </head>
@@ -20,21 +20,27 @@
     props: { label: 'trips this year', from: 0, to: 1250000, unit: '', decimals: 0, seconds: 2, grouped: 1, accent: '#1A1A1A', background: '#FFFFFF' } }
   const n = document.getElementById('n'), l = document.getElementById('l')
   let raf = 0
+  /** A colour a deck may set: a plain CSS colour, never something that loads (the shell refuses those too). */
+  const colour = (v, fallback) => (typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/.test(v) && !/url|expression|var\s*\(/i.test(v) ? v : fallback)
 
   function show(value) {
     const p = state.props
     const d = Math.max(0, Math.min(3, Math.round(Number(p.decimals) || 0)))
     const fixed = (Number.isFinite(value) ? value : 0).toFixed(d)
     const [whole, frac] = fixed.split('.')
-    const grouped = p.grouped ? whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') : whole
-    n.textContent = grouped + (frac ? ',' + frac : '') + (p.unit ? (p.unit === '%' ? ' ' : ' ') + p.unit : '')
+    const grouped = p.grouped ? whole.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') : whole
+    n.textContent = grouped + (frac ? ',' + frac : '') + (p.unit ? (p.unit === '%' ? '\u202f' : ' ') + String(p.unit).slice(0, 24) : '')
+    // a long number is made smaller, never cut off at the edges
+    n.style.fontSize = ''
+    const room = window.innerWidth * 0.92
+    if (n.scrollWidth > room) n.style.fontSize = `${(22 * room / n.scrollWidth).toFixed(2)}vh`
   }
 
   function paint() {
     const p = state.props
-    document.body.style.background = p.background
-    n.style.color = p.accent
-    l.textContent = p.label
+    document.body.style.background = colour(p.background, '#FFFFFF')
+    n.style.color = colour(p.accent, '#1A1A1A')
+    l.textContent = String(p.label).slice(0, 200)
   }
 
   // The count runs once the shell has said where the show is. Before that the
@@ -67,9 +73,11 @@
     } else if (m.type === 'bento:props') {
       Object.assign(state.props, m.values)
     } else if (m.type === 'bento:motion') {
+      // motion switched off mid-count: land on the number; switched on: nothing to replay
       state.reduce = !!m.reduce
-    } else if (m.type !== 'bento:step') {
-      return
+      if (!state.reduce) return
+    } else {
+      return // bento:step among them: this scene has no steps, and a count under way is not restarted
     }
     run()
   })

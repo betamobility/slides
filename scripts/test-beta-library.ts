@@ -99,6 +99,28 @@ console.log('\nthe still')
     ['<rect onload="x()"/>', 'a handler'], ['<image href="https://example.com/x.png"/>', 'a remote image'], ['<a href="javascript:x()"><rect/></a>', 'a javascript link'],
   ]) ok(refused(files({ 'still.svg': SVG.replace('</svg>', bad + '</svg>') }), 'still.svg', 'a still is a picture'), `a still carrying ${what} fails`)
   ok(refusal(files({ 'still.svg': SVG.replace('<rect', '<linearGradient id="g"/><rect fill="url(#g)"') })) === '', 'a gradient referenced inside the file is still a picture')
+  // found by a local pass before the first Codex round: the check is an allowlist now
+  for (const [bad, what] of [
+    ['<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>', 'a namespaced script'],
+    ['<iframe xmlns="http://www.w3.org/1999/xhtml" src="about:blank"/>', 'an iframe'],
+    ['<style>@import url(https://example.com/x.css);</style>', 'a style element'],
+    ['<rect style="fill:url(https://example.com/x)"/>', 'a style attribute'],
+    ['<rect fill="url(https://example.com/x#g)"/>', 'a url() that leaves the file'],
+    ['<set attributeName="href" to="javascript:alert(1)"/>', 'an animation element'],
+    ['<a href="&#106;avascript:alert(1)"><rect/></a>', 'an encoded link'],
+    ['<image href="data:image/svg+xml,%3Csvg/%3E"/>', 'an image'],
+    ['<use href="https://example.com/x.svg#a"/>', 'a use that leaves the file'],
+    ['<use xlink:href="#a"/>', 'an xlink attribute'],
+    ['<rect ONLOAD="x()"/>', 'a handler in capitals'],
+    ['<rect width=16 height=9/>', 'an unquoted attribute'],
+    ['<![CDATA[<script>x</' + 'script>]]>', 'a CDATA section'],
+  ] as [string, string][]) ok(refused(files({ 'still.svg': SVG.replace('</svg>', bad + '</svg>') }), 'still.svg', 'a still is a picture'), `a still carrying ${what} fails`)
+  ok(refused(files({ 'still.svg': '<!DOCTYPE svg [<!ENTITY x "y">]>' + SVG }), 'still.svg'), 'a doctype, which can declare entities, fails')
+  for (const [good, what] of [
+    ['<!-- Generator: a drawing tool -->\n' + SVG, 'a leading comment'], ['<?xml version="1.0" encoding="UTF-8"?>\n' + SVG, 'an XML declaration'],
+    [SVG.replace('</svg>', '<text x="1" y="2">pay once = 5 &amp; done</text></svg>'), 'text that reads like an attribute'],
+    [SVG.replace('</svg>', '<defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><use href="#c"/><g clip-path="url(#c)"><path d="M0 0L1 1"/></g></svg>'), 'a use and a clip path inside the file'],
+  ] as [string, string][]) ok(refusal(files({ 'still.svg': good })) === '', `a still with ${what} builds`)
 }
 
 console.log('\na web scene')
@@ -116,6 +138,8 @@ console.log('\na web scene')
   ] as [unknown, string][]) ok(refusal(web(url)) !== '', `${why} fails (${JSON.stringify(url)})`)
   ok(refused(web('https://slides.betamobility.ai/x', { 'index.html': HTML }), 'index.html', 'web scene has no page'), 'a web scene with an index.html fails')
   ok(refused(files({}, { url: 'https://slides.betamobility.ai/x' }), 'only a web scene has a url'), 'a runtime scene with a url fails')
+  const long = 'https://slides.betamobility.ai/' + '\u00e9'.repeat(400)
+  ok(refused(web(long), 'once normalised'), `a url is measured as it will be stored (${long.length} characters written, ${new URL(long).href.length} normalised)`)
   ok(lib.WEB_HOSTS.every((h: string) => /^[a-z0-9-]+\.betamobility\.ai$/.test(h)), `the allowlist is exact Beta hosts (${lib.WEB_HOSTS.join(', ')})`)
 }
 
@@ -148,6 +172,10 @@ console.log('\nscene.json')
   ok(bad({ presets: [{ name: 'A' }, { name: 'A' }] }, 'preset name') && bad({ presets: [{ name: '' }] }, 'preset name'), 'preset names are distinct and not empty')
   ok(bad({ presets: [{ name: 'A', values: { nope: 1 } }] }, 'not one of the scene\'s props') && bad({ presets: [{ name: 'A', values: { n: 'nine' } }] }, 'not a valid number') && bad({ presets: [{ name: 'A', values: [] }] }, 'values'), 'a preset sets only declared settings, to values of their kind')
   ok(bad({ presets: [{ name: 'A', values: {}, url: 'x' }] }, 'does not know'), 'a preset key the build does not know fails')
+  ok(bad({ name: 'Map\u202e' }, 'name') && bad({ name: 'a\u0007b' }, 'name') && bad({ description: 'x\u200fy' }, 'description') && bad(prop({ key: 'a', label: 'A\u2066', kind: 'text', default: '' }), 'label') && bad({ presets: [{ name: 'P\u200b' }] }, 'preset name'),
+    'names, labels and descriptions carry no control or direction characters')
+  ok(refusal(files({ 'scene.json': '\ufeff' + scene() })) === '', 'a byte-order mark before scene.json is not an error')
+  ok(bad({ presets: [{ name: 'A', values: JSON.parse('{"__proto__": 1}') }] }, 'not one of the scene') && bad({ presets: [{ name: 'A', values: { constructor: 1 } }] }, 'not one of the scene'), 'a preset cannot name a key every object has')
   for (const id of ['Sample', '1map', 'a_b', '', 'x'.repeat(41), '../x']) ok(refusal(files(), id) !== '', `a folder named ${JSON.stringify(id)} is refused`)
 }
 
@@ -163,9 +191,31 @@ console.log('\nfolders on disk, and the manifest as a whole')
   ok(m.scenes.map((s: { id: string }) => s.id).join(',') === 'a-scene,b-scene', 'folders are read in id order; a README beside them and the generated .out are not scenes')
   put('a-scene', { 'notes.txt': 'x' })
   ok(tryBuild().includes('beta/library/a-scene/notes.txt') && tryBuild().includes('nothing else'), 'a file that is not part of a scene fails the build naming it: nothing rides along unseen')
+  // nothing is read through a link, and nothing that is not a plain file
+  {
+    const { symlinkSync, rmSync } = await import('node:fs')
+    const outside = join(dir, '..', 'outside-' + Date.now() + '.svg'); writeFileSync(outside, SVG)
+    rmSync(join(dir, 'a-scene', 'notes.txt')); rmSync(join(dir, 'a-scene', 'still.svg'))
+    symlinkSync(outside, join(dir, 'a-scene', 'still.svg'))
+    ok(tryBuild().includes('beta/library/a-scene/still.svg') && tryBuild().includes('not a plain file'), 'a still that is a symbolic link fails the build naming it')
+    rmSync(join(dir, 'a-scene', 'still.svg')); mkdirSync(join(dir, 'a-scene', 'still.svg'))
+    ok(tryBuild().includes('not a plain file'), 'and so does a folder with a file\'s name')
+    rmSync(join(dir, 'a-scene', 'still.svg'), { recursive: true }); writeFileSync(join(dir, 'a-scene', 'still.svg'), Buffer.from([0x3c, 0x73, 0x76, 0x67, 0xff, 0xfe]))
+    ok(tryBuild().includes('not UTF-8'), 'a file that is not UTF-8 text fails rather than being read with replacement characters')
+    writeFileSync(join(dir, 'a-scene', 'still.svg'), SVG)
+    symlinkSync(join(dir, 'b-scene'), join(dir, 'c-linked'))
+    ok(tryBuild().includes('beta/library/c-linked') && tryBuild().includes('symbolic link'), 'a scene folder that is a symbolic link fails too')
+    rmSync(join(dir, 'c-linked')); rmSync(outside)
+    ok(tryBuild() === '', 'with the links gone the library builds again')
+    put('a-scene', { 'notes.txt': 'x' })
+  }
   let msg = ''
   try { lib.manifestOf([lib.validateScene('same', files()), lib.validateScene('same', files())]) } catch (e) { msg = (e as Error).message }
   ok(msg.includes('share this id'), 'two scenes with one id are refused')
+  const sh = (scenes: unknown[]) => lib.manifestShape({ format: 'beta/library', v: 1, scenes })
+  ok(sh([{ id: 'a', version: 1, kind: 'runtime', html: '<p>' }, { id: 'b', version: 2, kind: 'web', url: 'https://slides.betamobility.ai/x' }]), 'the shape check takes a runtime scene with its page and a web scene on a Beta host')
+  ok(!sh([{ id: 'a', version: 1, kind: 'runtime', html: '' }, { id: 'a', version: 1, kind: 'runtime', html: '' }]) && !sh([{ id: 'a', version: 0, kind: 'runtime', html: '' }]) && !sh([{ id: 'a', version: 1, kind: 'runtime' }]), 'and refuses a repeated id, a version below 1, a runtime scene with no page')
+  ok(!sh([{ id: 'a', version: 1, kind: 'web', url: 'https://example.com/x' }]) && !sh([{ id: 'a', version: 1, kind: 'web', url: 'http://slides.betamobility.ai/x' }]) && !sh([{ id: 'a', version: 1, kind: 'web', url: 'https://slides.betamobility.ai:444/x' }]) && !sh([{ id: 'a', version: 1, kind: 'runtime', html: '', url: 'https://slides.betamobility.ai/x' }]), 'a web scene off Beta\'s hosts, over http or on another port, and a runtime scene that names a url')
   ok(!lib.manifestShape({ format: 'beta/library', v: 1 }) && !lib.manifestShape(null) && !lib.manifestShape({ format: 'beta/library', v: 1, scenes: [{ id: 'A', version: 1, kind: 'runtime' }] }), 'the shape check refuses what is not a manifest')
 
   console.log('\nthe command')
@@ -179,6 +229,8 @@ console.log('\nfolders on disk, and the manifest as a whole')
   ok(r.status === 1 && r.stderr.includes('beta/library/a-scene/notes.txt') && r.stdout === '', `a library that does not validate exits 1 naming the file (${r.status})`)
   r = run(['--chekc'])
   ok(r.status === 2 && r.stderr.includes('unknown argument'), 'a misspelt flag is refused, not ignored')
+  r = run(['--check', '--upload'], { CF_ACCESS_CLIENT_ID: 'id.access', CF_ACCESS_CLIENT_SECRET: 'shhh', SLIDES_STORE_URL: 'http://127.0.0.1:1' })
+  ok(r.status === 2 && r.stderr.includes('one or the other'), '--check with --upload is refused: a check that exits 0 must not be read as an upload')
   r = run(['--upload', '--out', out])
   ok(r.status === 1 && r.stderr.includes('CF_ACCESS_CLIENT_ID') && r.stderr.includes('nothing was uploaded'), '--upload with no service token refuses')
   r = run(['--upload', '--out', out], { CF_ACCESS_CLIENT_ID: 'id.access' })

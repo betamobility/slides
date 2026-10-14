@@ -7,7 +7,7 @@
   "props": [
     { "key": "place", "label": "Place", "kind": "text", "default": "Oslo" },
     { "key": "position", "label": "Position (latitude, longitude)", "kind": "text", "default": "59.9139, 10.7522", "format": "latlon" },
-    { "key": "zoom", "label": "Zoom when stepped in", "kind": "number", "default": 5, "format": "range:1:9:1" },
+    { "key": "zoom", "label": "Zoom when stepped in", "kind": "number", "default": 5, "format": "range:2:9:1" },
     { "key": "grid", "label": "Show the grid", "kind": "number", "default": 1, "format": "bool" },
     { "key": "accent", "label": "Marker colour", "kind": "color", "default": "#C2410C" },
     { "key": "background", "label": "Background", "kind": "color", "default": "#F5F3EE" }

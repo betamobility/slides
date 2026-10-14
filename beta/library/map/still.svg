@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Oslo, 59.91°N 10.75°E" xmlns="http://www.w3.org/2000/svg" width="1600" height="900">
+<svg viewBox="0 0 1600 900" role="img" aria-label="Oslo, 59.91°N 10.75°E" xmlns="http://www.w3.org/2000/svg" width="1600" height="900">
 <rect width="1600" height="900" fill="#F5F3EE">
 </rect>
 <g stroke="#1A1A1A" stroke-opacity="0.14" stroke-width="1.5" fill="none">
@@ -21,7 +21,7 @@
 <line x1="0" y1="181.8" x2="1600" y2="181.8">
 </line>
 </g>
-<g fill="#1A1A1A" fill-opacity="0.5" font-size="20">
+<g fill="#1A1A1A" fill-opacity="0.5" font-size="20" font-family="Geist, Inter, system-ui, sans-serif">
 <text x="83.5" y="886">30°W</text>
 <text x="350.1" y="886">15°W</text>
 <text x="616.8" y="886">0°</text>
@@ -36,6 +36,6 @@
 </circle>
 <circle cx="800" cy="450" r="13" fill="#C2410C" stroke="#FFFFFF" stroke-width="4">
 </circle>
-<text x="830" y="428" font-size="54" font-weight="600" fill="#1A1A1A">Oslo</text>
-<text x="830" y="468" font-size="24" fill="#1A1A1A" fill-opacity="0.6">59.91°N  10.75°E</text>
+<text x="830" y="428" font-size="54" font-weight="600" font-family="Geist, Inter, system-ui, sans-serif" fill="#1A1A1A">Oslo</text>
+<text x="830" y="468" font-size="24" font-family="Geist, Inter, system-ui, sans-serif" fill="#1A1A1A" fill-opacity="0.6">59.91°N  10.75°E</text>
 </svg>

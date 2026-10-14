@@ -23,7 +23,7 @@
 // opaque string. Its grammar belongs to the format unit (U9), where the three
 // validators that read it share one parser; this file must not grow a fourth.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const FORMAT = 'beta/library'
@@ -56,21 +56,48 @@ export class LibraryError extends Error {}
 const validValue = (kind, v) => kind === 'number' ? typeof v === 'number' && Number.isFinite(v)
   : kind === 'color' ? typeof v === 'string' && !!v.trim() && v.trim().length <= 64 && COLOR_CHARS.test(v.trim()) && !COLOR_TRICKS.test(v)
   : typeof v === 'string' && v.length <= MAX_TEXT
+/** Control characters and the invisible direction marks: a name is read by a person choosing a scene. */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`
 const bytes = (s) => Buffer.byteLength(s, 'utf8')
 
-/**
- * What the store's own asset route strips from an SVG (server/deck-store
- * cleanSvg): script, foreignObject, on* handlers. The manifest is stored as
- * given, so a still that carries any of it is refused HERE, naming the file,
- * instead of being cleaned somewhere a reader cannot see.
- */
+// A still is a PICTURE, and the check is an allowlist, not a search for known
+// tricks: the elements and attributes a drawing needs, and nothing that can
+// run, load or link. The manifest is stored as given, so what is refused here
+// is refused naming the file instead of being cleaned somewhere unseen.
+const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
+  'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
+const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos);)/
+
+/** Why this SVG is not a plain picture, or null when it is one. */
 export function activeSvg(svg) {
-  if (/<script\b/i.test(svg)) return 'a <script> element'
-  if (/<foreignObject\b/i.test(svg)) return 'a <foreignObject> element'
-  if (/[\s/]on[a-z]+\s*=/i.test(svg)) return 'an on* handler attribute'
-  if (/\b(?:href|src)\s*=\s*["']?\s*(?:javascript:|https?:|\/\/)/i.test(svg)) return 'a link out of the file'
+  // comments carry nothing; an XML declaration may lead the file
+  const body = svg.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*<\?xml[^>]*\?>/i, '')
+  if (/<!|<\?/.test(body)) return 'a doctype, CDATA or processing instruction'
+  const tag = /<(\/?)([^\s<>/]*)((?:"[^"]*"|'[^']*'|[^<>"'])*)>/g
+  let m, rest = body
+  while ((m = tag.exec(body))) {
+    const [, close, name, attrs] = m
+    if (!SVG_ELEMENTS.has(name)) return `a <${name || '?'}> element`
+    if (close) { if (attrs.trim()) return `a malformed </${name}> tag`; continue }
+    const attr = /([^\s=/"']+)\s*=\s*("[^"]*"|'[^']*')/g
+    let a, left = attrs
+    while ((a = attr.exec(attrs))) {
+      const key = a[1], value = a[2].slice(1, -1)
+      left = left.replace(a[0], '')
+      if (/^on/i.test(key)) return `an ${key} handler attribute`
+      if (key === 'style') return 'a style attribute (use presentation attributes)'
+      if (key.includes(':') && key !== 'xmlns:xlink' && key !== 'xml:space') return `a ${key} attribute`
+      if (key === 'href' && !/^#[\w.-]+$/.test(value)) return 'a link out of the file'
+      if (SVG_ENTITY.test(value)) return `an encoded value in ${key}`
+      if (/url\s*\(/i.test(value) && !/^url\(#[\w.-]+\)$/.test(value.trim())) return `a url() in ${key} that leaves the file`
+      if (/javascript:|data:|https?:|^\s*\/\//i.test(value) && key !== 'xmlns' && key !== 'xmlns:xlink') return `a link out of the file in ${key}`
+    }
+    if (left.replace(/\//g, '').trim()) return `an attribute without a quoted value on <${name}>`
+  }
+  rest = body.replace(tag, '')
+  if (/[<>]/.test(rest)) return 'markup that does not parse as tags'
   return null
 }
 
@@ -86,12 +113,12 @@ export function validateScene(id, files) {
 
   if (typeof files['scene.json'] !== 'string') fail('scene.json', 'is missing')
   let m
-  try { m = JSON.parse(files['scene.json']) } catch (e) { fail('scene.json', `does not parse: ${e.message}`) }
+  try { m = JSON.parse(files['scene.json'].replace(/^\ufeff/, '')) } catch (e) { fail('scene.json', `does not parse: ${e.message}`) }
   if (!isObject(m)) fail('scene.json', 'must be an object')
   for (const k of Object.keys(m)) if (!SCENE_KEYS.has(k)) fail('scene.json', `has a key this build does not know: ${JSON.stringify(k)}`)
-  if (typeof m.name !== 'string' || !m.name.trim() || m.name.length > 80) fail('scene.json', 'name must be text of 1 to 80 characters')
+  if (typeof m.name !== 'string' || !m.name.trim() || m.name.length > 80 || UNPRINTABLE.test(m.name)) fail('scene.json', 'name must be text of 1 to 80 characters, with no control or direction characters')
   if (!Number.isInteger(m.version) || m.version < 1) fail('scene.json', 'version must be a whole number from 1')
-  if (m.description !== undefined && (typeof m.description !== 'string' || m.description.length > 200)) fail('scene.json', 'description must be text of at most 200 characters')
+  if (m.description !== undefined && (typeof m.description !== 'string' || m.description.length > 200 || UNPRINTABLE.test(m.description))) fail('scene.json', 'description must be text of at most 200 characters, with no control or direction characters')
   const kind = m.kind ?? 'runtime'
   if (kind !== 'runtime' && kind !== 'web') fail('scene.json', 'kind must be "runtime" or "web"')
   const steps = m.steps ?? 0
@@ -104,7 +131,7 @@ export function validateScene(id, files) {
     if (!isObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || p.key === '__proto__' || kinds.has(p.key)) fail('scene.json', `prop key ${JSON.stringify(p?.key)} is missing, repeated or not a plain identifier`)
     for (const k of Object.keys(p)) if (!PROP_KEYS.has(k)) fail('scene.json', `prop "${p.key}" has a key this build does not know: ${JSON.stringify(k)}`)
     if (!KINDS.includes(p.kind)) fail('scene.json', `prop "${p.key}" kind must be text, number or color`)
-    if (typeof p.label !== 'string' || !p.label.trim() || p.label.length > 200) fail('scene.json', `prop "${p.key}" needs a label of 1 to 200 characters`)
+    if (typeof p.label !== 'string' || !p.label.trim() || p.label.length > 200 || UNPRINTABLE.test(p.label)) fail('scene.json', `prop "${p.key}" needs a label of 1 to 200 characters, with no control or direction characters`)
     if (!validValue(p.kind, p.default)) fail('scene.json', `prop "${p.key}" default ${JSON.stringify(p.default)} is not a valid ${p.kind}`)
     // carried, not parsed (see the header): one printable line
     if (p.format !== undefined && (typeof p.format !== 'string' || !p.format || p.format.length > 200 || /[\u0000-\u001f\u007f]/.test(p.format))) fail('scene.json', `prop "${p.key}" format must be one line of at most 200 characters`)
@@ -116,12 +143,12 @@ export function validateScene(id, files) {
   if (!Array.isArray(presets) || !presets.length || presets.length > MAX_PRESETS) fail('scene.json', `presets must be a list of 1 to ${MAX_PRESETS}; the gallery opens on the first`)
   const names = new Set()
   const outPresets = presets.map((p) => {
-    if (!isObject(p) || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 80 || names.has(p.name)) fail('scene.json', `preset name ${JSON.stringify(p?.name)} is missing, repeated or longer than 80 characters`)
+    if (!isObject(p) || typeof p.name !== 'string' || !p.name.trim() || p.name.length > 80 || UNPRINTABLE.test(p.name) || names.has(p.name)) fail('scene.json', `preset name ${JSON.stringify(p?.name)} is missing, repeated or longer than 80 characters`)
     for (const k of Object.keys(p)) if (k !== 'name' && k !== 'values') fail('scene.json', `preset "${p.name}" has a key this build does not know: ${JSON.stringify(k)}`)
     const values = p.values ?? {}
     if (!isObject(values)) fail('scene.json', `preset "${p.name}" values must be an object`)
     for (const [k, v] of Object.entries(values)) {
-      if (!kinds.has(k)) fail('scene.json', `preset "${p.name}" sets "${k}", which is not one of the scene's props`)
+      if (!Object.prototype.hasOwnProperty.call(values, k) || !kinds.has(k)) fail('scene.json', `preset "${p.name}" sets "${k}", which is not one of the scene's props`)
       if (!validValue(kinds.get(k), v)) fail('scene.json', `preset "${p.name}" value for "${k}" (${JSON.stringify(v)}) is not a valid ${kinds.get(k)}`)
     }
     names.add(p.name)
@@ -131,7 +158,7 @@ export function validateScene(id, files) {
   const still = files['still.svg']
   if (typeof still !== 'string') fail('still.svg', 'is missing')
   if (bytes(still) > STILL_BUDGET) fail('still.svg', `is ${kb(bytes(still))}, over the ${STILL_BUDGET / 1024} KB a library still may be`)
-  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?<svg[\s>]/i.test(still)) fail('still.svg', 'is not an SVG document')
+  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(still)) fail('still.svg', 'is not an SVG document')
   const active = activeSvg(still)
   if (active) fail('still.svg', `carries ${active}; a still is a picture`)
 
@@ -144,6 +171,8 @@ export function validateScene(id, files) {
     if (u.protocol !== 'https:') fail('scene.json', `url must be https (${u.host || m.url} is ${u.protocol.replace(':', '')})`)
     if (u.username || u.password) fail('scene.json', `url must not carry a login (${u.host})`)
     if (u.port || !WEB_HOSTS.includes(u.hostname)) fail('scene.json', `url host ${u.host} is not one Beta controls (allowed: ${WEB_HOSTS.join(', ')})`)
+    // measured as it will be stored: a URL grows when it is normalised
+    if (u.href.length > MAX_URL) fail('scene.json', `url is ${u.href.length} characters once normalised, over ${MAX_URL}`)
     return { ...base, url: u.href, view: still }
   }
   if (m.url !== undefined) fail('scene.json', 'only a web scene has a url; a runtime scene is its index.html')
@@ -177,12 +206,16 @@ export function buildManifest(dir) {
   for (const id of readdirSync(dir).sort()) {
     const sd = join(dir, id)
     // README.md beside the folders, and the generated .out/
-    if (id.startsWith('.') || !statSync(sd).isDirectory()) continue
+    const kind = lstatSync(sd)
+    if (kind.isSymbolicLink()) throw new LibraryError(`beta/library/${id}: is a symbolic link; a scene is a real folder in this repository`)
+    if (id.startsWith('.') || !kind.isDirectory()) continue
     const files = {}
     for (const name of readdirSync(sd)) {
       if (name === '.DS_Store') continue
       if (!FILES.includes(name)) throw new LibraryError(`beta/library/${id}/${name}: a scene folder holds scene.json, still.svg and (for a runtime scene) index.html, nothing else`)
-      files[name] = readFileSync(join(sd, name), 'utf8')
+      const f = lstatSync(join(sd, name))
+      if (!f.isFile()) throw new LibraryError(`beta/library/${id}/${name}: is not a plain file (a link or a folder); nothing is read through one`)
+      try { files[name] = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(join(sd, name))) } catch { throw new LibraryError(`beta/library/${id}/${name}: is not UTF-8 text`) }
     }
     scenes.push(validateScene(id, files))
   }
@@ -200,5 +233,14 @@ export const serialize = (manifest) => JSON.stringify(manifest).replace(/</g, '\
  */
 export function manifestShape(value) {
   if (!isObject(value) || value.format !== FORMAT || value.v !== MANIFEST_V || !Array.isArray(value.scenes)) return false
-  return value.scenes.every((s) => isObject(s) && typeof s.id === 'string' && ID.test(s.id) && Number.isInteger(s.version) && (s.kind === 'runtime' || s.kind === 'web'))
+  const ids = new Set()
+  return value.scenes.every((s) => {
+    if (!isObject(s) || typeof s.id !== 'string' || !ID.test(s.id) || ids.has(s.id) || !Number.isInteger(s.version) || s.version < 1) return false
+    ids.add(s.id)
+    if (s.kind === 'runtime') return typeof s.html === 'string' && s.url === undefined
+    if (s.kind !== 'web' || typeof s.url !== 'string' || s.html !== undefined) return false
+    let u
+    try { u = new URL(s.url) } catch { return false }
+    return u.protocol === 'https:' && !u.port && !u.username && !u.password && WEB_HOSTS.includes(u.hostname)
+  })
 }

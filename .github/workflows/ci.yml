@@ -327,6 +327,12 @@ jobs:
         # Beta's hosts), the two seed scenes, and what the upload sends.
         run: node scripts/test-beta-library.ts
 
+      - name: Beta scene library rig (browser)
+        # The seed scenes themselves: each in a sandboxed frame as the shell
+        # mounts it, and as a page whose drawing can be read. A scene is copied
+        # into decks, so a fault in one is a fault in every deck that took it.
+        run: node scripts/test-beta-library-browser.mjs
+
       - name: Beta light table rig (browser)
         # The same in the packaged editor with a real mouse: slides 2 and 5
         # dragged between 7 and 8, undo, double-click, Escape, a file drop.

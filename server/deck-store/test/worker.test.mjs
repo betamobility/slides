@@ -30,7 +30,7 @@ import { mintDocIntoBlock, indexPage } from '../src/pages.js'
 // verify, list and revoke are worker-side functions with no route of their
 // own, and the routes that use them arrive in U2 and U3.
 import { mintGrant, verifyGrant, listGrants, revokeGrant } from '../src/grant.js'
-import { buildManifest, manifestShape, serialize } from '../../../scripts/lib/beta-library.mjs'
+import { buildManifest, manifestShape, serialize, WEB_HOSTS } from '../../../scripts/lib/beta-library.mjs'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -1906,6 +1906,11 @@ export async function run(Miniflare) {
         ['{"format":"beta/library","v":2,"scenes":[]}', 'another version'], ['{"format":"beta/library","v":1}', 'no scenes list'],
         ['{"format":"beta/library","v":1,"scenes":[{"id":"../x","version":1,"kind":"runtime"}]}', 'a scene id that is not one'],
         ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"script"}]}', 'a scene kind that is not one'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"runtime","html":""},{"id":"x","version":2,"kind":"runtime","html":""}]}', 'two scenes with one id'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":0,"kind":"runtime","html":""}]}', 'a version below 1'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"runtime"}]}', 'a runtime scene with no page'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"web","url":"https://example.com/x"}]}', 'a web scene on a host Beta does not control'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"web","url":"http://slides.betamobility.ai/x"}]}', 'a web scene over http'],
       ]) {
         r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: bad })
         eq(r.status, 400, `a manifest that is ${why} is 400`)
@@ -1973,6 +1978,13 @@ export async function run(Miniflare) {
       ok(r.status === 403 || r.status === 404, `there is no delete (${r.status})`)
       r = await call('GET', '/api/harness/library.json', { as: 'service' })
       eq(r.status, 200, 'and the manifest is still there')
+
+      // the store's own copy of the web-host allowlist is the build script's
+      eq(JSON.stringify(/const LIBRARY_WEB_HOSTS = (\[[^\]]*\])/.exec(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/worker.js'), 'utf8'))?.[1].replace(/'/g, '"').replace(/\s/g, '')), JSON.stringify(JSON.stringify(WEB_HOSTS)), 'the worker and the build script name the same web hosts')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'w', version: 1, kind: 'web', url: 'https://slides.betamobility.ai/scenes/w' }] }) })
+      eq(r.status, 200, 'a web scene on a Beta host is accepted')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 200, 'and the real manifest goes back in')
 
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
