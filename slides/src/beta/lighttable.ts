@@ -116,7 +116,9 @@ export function barFor(rects: Box[], slides: SlideLike[], gap: number, y: number
   // beside a thumbnail on the pointer's own row when the gap touches that row
   if (gap < n && row.includes(gap)) return before(gap)
   const last = row[row.length - 1]
-  if (gap > last && gap <= legal(slides, last + 1)) return after(last)
+  // (only for a plain row break. When the unit under the pointer runs on into the next
+  // row, the slides land after its last state there, and that is where the bar goes.)
+  if (gap === last + 1) return after(last)
   return gap < n ? before(gap) : after(n - 1)
 }
 
@@ -149,12 +151,19 @@ export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1
   const free = parents(slides, slides.map((_, i) => i)).filter((p) => !moving.has(p))
   let drop: number
   if (dir > 0) {
-    const max = Math.max(...moving)
+    // The end of the selection is where its last unit ends IN PLACE: the parent
+    // and the states right behind it. A state that drifted further down the
+    // deck is carried along, but it is not where the block stands.
+    const max = Math.max(...parents(slides, moving).map((p) => {
+      let e = p
+      while (e + 1 < slides.length && slides[e + 1].stateOf === slides[p].id) e++
+      return e
+    }))
     const k = free.findIndex((p) => p > max)
     // past that unit: before the free parent after it, or the end
     drop = k < 0 ? slides.length : free[k + 1] ?? slides.length
   } else {
-    const min = Math.min(...moving)
+    const min = Math.min(...parents(slides, moving))
     const before = free.filter((p) => p < min)
     drop = before.length ? before[before.length - 1] : free[0] ?? slides.length
   }

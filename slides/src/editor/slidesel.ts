@@ -80,7 +80,9 @@ export function moveBlock<T extends SlideLike>(slides: T[], selected: Iterable<n
   if (!moving.size) return slides
   const dropParent = drop >= slides.length ? slides.length : parentOf(slides, drop)
   if (moving.has(dropParent)) return slides
-  const block = slides.filter((_, i) => moving.has(i))
+  // BETA FORK: unit by unit, not by deck index, so a state that drifted away from its
+  // parent travels right behind it instead of landing inside the next unit of the block
+  const block = parents(slides, moving).flatMap((p) => unitOf(slides, p)).map((i) => slides[i])
   const rest: T[] = []
   let at = -1
   slides.forEach((s, i) => {

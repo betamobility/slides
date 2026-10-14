@@ -163,5 +163,76 @@ console.log('\nthe keyboard move')
   ok(g0 === 0 && lt.gaps(orphan).includes(g0) && ids(moveBlock(orphan, [1], g0)) === '1,x,2', 'and a slide can be moved before it')
 }
 
+console.log('\nindependent adversarial cases (U14, R16, AE9)')
+{
+  // A legal unit can wrap over a row boundary. A marker after the first row
+  // must not advertise an insertion inside that unit, even if its data-gap
+  // correctly names the place after the last state on the following row.
+  // This also tests RTL without assuming that "after" means screen-right.
+  const s: S[] = [
+    { id: '1' }, { id: '2' }, { id: 'P' },
+    { id: 'P1', stateOf: 'P' }, { id: 'P2', stateOf: 'P' }, { id: '6' },
+  ]
+  const observations = [false, true].map((rtl) => {
+    const r = grid(s.length, 4, { rtl, small: [3, 4] })
+    const x = rtl ? r[3].left - 10 : r[3].right + 10
+    const gap = lt.gapAt(r, s, x, 30, rtl)
+    const bar = lt.barFor(r, s, gap, 30, rtl)
+    // Gap 5 is on row two, between P2 and 6. It does not touch row one.
+    const left = Math.min(r[4].right, r[5].right)
+    const right = Math.max(r[4].left, r[5].left)
+    return { rtl, gap, bar, correct: gap === 5 && !!bar &&
+      bar.top === r[5].top && bar.x > left && bar.x < right }
+  })
+  ok(observations.every((o) => o.correct),
+    `ADVERSARIAL wrapped-state drop bar marks the actual legal boundary: ${JSON.stringify(observations)}`)
+}
+{
+  // slidesel explicitly supports states that have drifted from their parent.
+  // Selecting two parents must gather each parent's states behind THAT parent,
+  // not just gather every selected index in its old document order.
+  const s: S[] = [
+    { id: 'A' }, { id: 'B' }, { id: 'C' },
+    { id: 'A1', stateOf: 'A' }, { id: 'D' }, { id: 'E' },
+  ]
+  const r = grid(s.length, 3, { small: [3] })
+  const gap = lt.gapAt(r, s, 900, 900)
+  const before = JSON.stringify(s)
+  const moved = moveBlock(s, [0, 1], gap)
+  ok(gap === s.length && ids(moved) === 'C,D,E,A,A1,B' && JSON.stringify(s) === before,
+    `ADVERSARIAL multi-drag gathers a drifted state directly after its parent: expected C,D,E,A,A1,B, got ${ids(moved)}`)
+
+  // Independently of moveBlock's ordering, the target must be before D:
+  // A and B move past the next unselected PARENT C, not past both C and D.
+  // A1's old index must not make D look like the next unit after A/B.
+  const later = lt.keyMove(s, [0, 1], 1)
+  ok(later === 4,
+    `ADVERSARIAL keyboard move counts parents rather than a drifted state's index: expected gap 4 (before D), got ${later}`)
+}
+{
+  // AE9 in both directions and at every possible wrapping width, including
+  // the 7/8 gap at a row break. Assert order and identity preservation, not
+  // merely membership in gaps(). No product state is changed by this rig.
+  const s = plain(8)
+  const attempts: string[] = []
+  for (const rtl of [false, true]) for (let cols = 1; cols <= 8; cols++) {
+    const r = grid(s.length, cols, { rtl })
+    const x = rtl ? r[7].right + 5 : r[7].left - 5
+    const gap = lt.gapAt(r, s, x, r[7].top + 20, rtl)
+    const moved = moveBlock(s, [1, 4], gap)
+    if (gap !== 7 || ids(moved) !== '1,3,4,6,7,2,5,8' ||
+      moved.some((slide) => !s.includes(slide))) attempts.push(`${rtl}/${cols}: gap ${gap}, ${ids(moved)}`)
+  }
+  ok(!attempts.length, `ADVERSARIAL AE9 is invariant across one-to-eight columns and RTL: ${attempts.join('; ') || '16 layouts agree'}`)
+}
+{
+  const s: S[] = [{ id: 'A' }, { id: 'A1', stateOf: 'A' }, { id: 'B' }, { id: 'B1', stateOf: 'B' }]
+  const before = JSON.stringify(s)
+  const all = [0, 1, 2, 3]
+  ok(lt.keyMove(s, all, -1) === null && lt.keyMove(s, all, 1) === null &&
+    lt.keyMove(s, [0], -1) === null && lt.keyMove(s, [2], 1) === null && JSON.stringify(s) === before,
+    'ADVERSARIAL all-selected and end-unit keyboard moves are no-ops without mutating the deck')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
