@@ -690,7 +690,7 @@ SLIDES_GRANT_LABEL="Claude Code" node splice.mjs --create <projectDir>
    meanwhile. **Never open or approve the link yourself**, with a browser
    tool or any other way: the click is the user's consent and nobody else's.
 3. They open it in a browser where they are already signed in, see what is
-   being granted ("publish decks as you", for 7 days, when the pairing
+   being granted ("publish decks as you", for 30 days, when the pairing
    started, and what you called yourself), and click **Approve** once.
 4. The command continues, saying who approved and until when. Every later
    `splice.mjs` command publishes as them, with no second approval.
@@ -713,7 +713,7 @@ and the name on the user's Agent access list. In Claude Code set
 `SLIDES_GRANT_LABEL="Claude Code"` on the command that pairs, as above; left
 unset, the label is "Claude (Cowork)".
 
-The approval lasts **7 days**, so a week of work and any number of decks ask
+The approval lasts **30 days**, so a month of work and any number of decks ask
 once. It can create decks, and read and change any deck by its link; it
 cannot list the store, delete a deck, or read a deck's live-session keys. The
 user can end it at any time from the deck list at `slides.betamobility.ai`,

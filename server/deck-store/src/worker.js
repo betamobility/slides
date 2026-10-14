@@ -63,7 +63,7 @@
 // KTD6).
 //
 // A GRANT is the third identity (one-click publish plan): a bearer a person
-// approved in the browser, good for seven days, that acts as them on the
+// approved in the browser, good for thirty days, that acts as them on the
 // publish prefix. It reaches create, read, replace and asset upload on any
 // deck by id — never list, never delete — and what it reads carries no
 // `collab` block at all, so it holds no live-session keys. Ownership follows
@@ -839,7 +839,7 @@ async function serveHead(env, id) {
 // `stripCollab` is the grant path (KTD6, R11). The WHOLE `collab` block goes,
 // not its three private fields: room plus the symmetric key is exactly what
 // `saveReaderCopy` writes into a read-only copy, so leaving them would hand
-// a seven-day grant a reader capability on the live session that outlives
+// a thirty-day grant a reader capability on the live session that outlives
 // it. The tool never reads `collab`, so dropping it costs nothing — and the
 // restore on write (see `replace`) is what keeps a read-modify-write from
 // destroying the keys instead.

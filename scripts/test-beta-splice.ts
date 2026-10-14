@@ -1198,7 +1198,7 @@ try {
   console.log('\n--link twice does not cost a second click (U5)')
   {
     // An agent that re-runs --link defensively must not ask the person again:
-    // one approval covers seven days and any number of decks.
+    // one approval covers thirty days and any number of decks.
     const before = approvals.length
     const again = await runTool(['--link'], { env: noCredential })
     eq(again.code, 0, 'the second --link exits 0')

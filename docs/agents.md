@@ -803,7 +803,7 @@ Publishing is one click in a browser, and nobody handles a secret. The first
 command that reaches the store with no approval on the machine prints one URL
 and waits; the user opens it in a browser they are already signed into and
 clicks **Approve** once, and the tool collects a grant that acts as them for
-7 days, kept in `~/.bento/slides-grant.json` and never beside the deck.
+30 days, kept in `~/.bento/slides-grant.json` and never beside the deck.
 Run that command in the background, or with a long command timeout, so the
 link can be read while it waits (up to ten minutes); a command killed while
 waiting takes the pairing with it, and the next run prints a new link. The
