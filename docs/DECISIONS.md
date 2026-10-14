@@ -10653,3 +10653,37 @@ each level: the library, the table, the CLI and the page's rendering. A
 first mutation run showed the library's own default was untested, because
 every caller passed the option, so a library-level row was added.
 
+## 2026-10-14 — Beta fork: one owner for live frames in a show, and four rules it keeps
+
+In present mode `slides/src/runtime-present.ts` owns every live frame: a
+runtime slide's scene and a web embed's page. `render.ts` adds no embed frame
+when present mode passes `ownedFrames`. The slide showing and its linear
+neighbours hold frames (`LIVE_WINDOW = 1`, and a neighbour must be a section
+Reveal lays out); every other slide is its still. Four rules were settled
+while building it; each was tried the other way first.
+
+- **A scene is uncovered by `bento:ready` or by `load`, whichever comes
+  first.** The plan (KTD11) names `bento:ready` alone. A hosted page never
+  says it, and an inline scene with no script renders today; waiting for
+  `bento:ready` alone turns both into their still after ten seconds.
+- **A scene the show leaves is replaced by a fresh frame, not kept alive.**
+  A scene mounted ahead of the show is told nothing until the show enters
+  it, so exactly one scene has ever been initialised, nothing runs behind
+  the slide showing, and every entry starts the scene from the top.
+  `bento:init` carries the step; no `bento:step` is sent on entry.
+- **A frame is replaced only when it stops being valid:** detached, on a
+  node that is no longer its slide's, or built from a definition its slide
+  no longer has. A remote edit is not a reason by itself. Remounting on every
+  edit was tried: document events fire for every remote keystroke, and a
+  collaborator typing reloaded each neighbour's page twice a second.
+- **One clock per frame, and a failure is remembered with the definition
+  that failed.** A clock shared across replacements was tried: it removed a
+  healthy page after ten seconds of someone typing and left it failed. The
+  cost of the rule kept: a frame on a section the caller rebuilds (the
+  section showing on any remote edit; every section on an insert, delete or
+  reorder) gets a new clock with its replacement, so a page that hangs while
+  such edits keep arriving is not torn down. It is never uncovered either.
+
+Guards: `scripts/test-beta-runtime.ts` (sections 9 and 10) and
+`scripts/test-beta-liveness.mjs`.
+

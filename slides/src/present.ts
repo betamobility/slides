@@ -121,7 +121,7 @@ export function startPresentation(
     section.dataset.transition =
       slide.transition === 'morph' || morphNext ? 'none' : slide.transition
     if (!inLinearFlow(slide)) section.dataset.bentoState = '1' // dimmed in overview
-    const surface = renderSlide(slide, doc, { hidePlaceholders: true, liveMedia: true })
+    const surface = renderSlide(slide, doc, { hidePlaceholders: true, liveMedia: true, ownedFrames: true }) // BETA FORK: runtime-present.ts owns every live frame
     // Web links: rel set AT MOUNT, in the show only, never stored — a click
     // goes through openWeb, but the browser's own routes to an anchor (the
     // context menu's "open in new tab", a drag) do not, and on a hosted deck
@@ -189,6 +189,7 @@ export function startPresentation(
   // BETA FORK: runtime slides step through their scene before the slide walk
   const runtimeShow = createRuntimeShow(doc, slidesEl, storeIdFromLocation(), {
     goNext: () => goNext(), goPrev: () => goPrev(), exit: () => exit(), reduceMotion: () => reduceMotion,
+    viewDistance: () => { const c = deck.getConfig(); return Math.min(c.viewDistance ?? 2, c.mobileViewDistance ?? 2) }, // BETA FORK: the live window must fit what Reveal lays out
   })
   const goNext = () => {
     if (runtimeShow.next()) { sendNav(deck.getIndices().h); return } // BETA FORK: the scene took the arrow; a following audience hears its step
@@ -1369,7 +1370,7 @@ export function startPresentation(
     if (from) pauseMediaIn(from)
     if (from) runtimeShow.leave(fromIdx)
     startMediaIn(to)
-    runtimeShow.enter(toIdx, forward)
+    runtimeShow.enter(toIdx, forward, followed) // BETA FORK: a step the presenter named is the one the scene opens on
     if (followed !== null) runtimeShow.follow(toIdx, followed) // BETA FORK: the presenter named the scene's step
     // Capture where this slide's formula symbols sit WHILE it is on screen —
     // once it becomes the outgoing slide there is no layout left to measure.
@@ -1569,7 +1570,9 @@ export function startPresentation(
     // it opens on. Any other slide drained it in slidechanged on the way there.
     if (pendingStep !== null) { const named = pendingStep; pendingStep = null; followStep(deck.getIndices().h, named) }
     if (opts?.onDocChange) {
-      opts.onDocChange({ slidesEl, deck, buildSection })
+      // BETA FORK: a section rebuilt under the show has lost its live frames;
+      // the owner puts them back once the caller has finished replacing nodes.
+      opts.onDocChange({ slidesEl, deck, buildSection: (s, i) => { runtimeShow.rebuilt(() => deck.getIndices().h); return buildSection(s, i) } })
     }
   })
 

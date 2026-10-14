@@ -10,9 +10,20 @@
 //
 // THE FRAME. `sandbox="allow-scripts allow-forms"` with no same-origin: every
 // deck is untrusted input, so a scene gets a screen and never this document.
-// Content is set on slide ENTER and cleared on exit, never at render time,
-// because Reveal keeps neighbouring sections mounted (viewDistance 2) and a
-// frame there would run a scene nobody is looking at.
+//
+// THE LIVE WINDOW (2026-10-13-2236 plan, U13). This file owns EVERY live frame
+// in a show: a runtime slide's scene and a web embed's page. render.ts is told
+// not to add embed frames here (`ownedFrames`), because frames added at render
+// time load every page in the deck when the show starts. Instead the slide
+// showing and its linear neighbours hold frames and every other slide is its
+// still; a frame that leaves the window has `src` and `srcdoc` cleared.
+// A neighbour's scene is mounted ahead of the show but told NOTHING: no
+// bento:init until the show enters it, and the scene contract makes a scene
+// wait for bento:init before it trusts any state. When the show leaves a
+// scene its frame is replaced by a fresh one, so exactly one scene has ever
+// been initialised, none keeps running behind the slide showing, and every
+// entry starts the scene from the top, as it did before the window existed.
+// A web embed gets a frame and no channel at all.
 //
 // THE CHANNEL (KTD3). Keys pressed inside a sandboxed frame never reach this
 // window, and an opaque-origin frame cannot see the overlay's classes or
@@ -33,12 +44,16 @@
 // speak the protocol, or a scene offline behind its still has no visible
 // steps to walk, and arrows there must change slide or the show gets stuck.
 
-import type { BentoDoc, RuntimeSlide } from './model.ts'
+import type { BentoDoc, EmbedElement, RuntimeSlide, Slide } from './model.ts'
+import { inLinearFlow } from './model.ts'
 import { netFetch, offlineEnabled } from '../../kernel/src/net.ts'
+import { liveFrameAllowed } from './render.ts'
 import { ASSET_NAME, isRuntimeSlide, runtimeSource } from './runtime.ts'
 
-/** A frame that has not fired `load` by then is removed; the still stays. */
+/** A frame that has reported nothing by then is removed; the still stays. */
 const LOAD_TIMEOUT_MS = 10_000
+/** Slides either side of the one showing that hold live frames. */
+export const LIVE_WINDOW = 1
 const HTTPS = /^https:\/\//i
 const STORE_ID = /^[A-Za-z0-9]+$/
 
@@ -54,6 +69,36 @@ export function moveStep(steps: number, index: number, dir: StepDir): number | n
   const to = dir === 'next' ? index + 1 : index - 1
   return to >= 0 && to < steps ? to : null
 }
+
+/**
+ * The slide indices that hold live frames while `cur` shows: `cur`, and up to
+ * `span` slides either side over the LINEAR flow (a state slide is nobody's
+ * neighbour: the arrows skip it). A neighbour also has to be a section Reveal
+ * lays out, which is index distance < viewDistance; past that the section is
+ * `display:none` and a scene mounted there would measure a 0×0 screen.
+ */
+export function liveWindow(flow: boolean[], cur: number, viewDistance: number, span = LIVE_WINDOW): number[] {
+  if (!Number.isInteger(cur) || cur < 0 || cur >= flow.length) return []
+  const out = [cur]
+  for (const dir of [-1, 1]) {
+    let found = 0
+    for (let i = cur + dir; i >= 0 && i < flow.length && found < span && Math.abs(i - cur) < viewDistance; i += dir) {
+      if (flow[i]) { out.push(i); found++ }
+    }
+  }
+  return out.sort((a, b) => a - b)
+}
+
+/** Reveal lays out a section while its distance is < viewDistance, so the window must be smaller. */
+export const windowFits = (viewDistance: number): boolean => LIVE_WINDOW < viewDistance
+
+/**
+ * What lifts a frame's cover. A scene by bento:ready, or by `load` for a page
+ * that never says it (a hosted page, a scene with no script). A web embed has
+ * no channel, so only `load`.
+ */
+export const uncovers = (kind: 'scene' | 'embed', signal: 'ready' | 'load'): boolean =>
+  signal === 'load' || kind === 'scene'
 
 /** Declared defaults overlaid with what a presenter set. */
 export function sceneProps(rt: RuntimeSlide): Record<string, string | number> {
@@ -93,26 +138,39 @@ export const fromFrame = (ev: Pick<MessageEvent, 'source'>, win: Window | null |
   !!win && ev.source === win
 
 /**
- * Holds the channel shut until bento:ready. Before it, step, motion and
- * props changes are dropped (init is built at ready time, so it carries their
- * current values) and fetched assets are held; at ready, init goes first and
- * the held assets follow. A second ready (the scene reloaded itself) replays
- * the same pair.
+ * Holds the channel shut until the scene has said bento:ready AND the show
+ * has entered its slide. Before both, step, motion and props changes are
+ * dropped (init is built when it is sent, so it carries their current values)
+ * and fetched assets are held; then init goes first and the held assets
+ * follow. A second ready (the scene reloaded itself) replays the same pair.
+ * `entered` is false for a scene mounted ahead of the show.
  */
 export class SceneChannel {
-  private open = false
+  private isReady = false
+  private isIn: boolean
   private held: Record<string, Blob> | null = null
   private readonly post: (m: ShellMessage) => void
   private readonly init: () => InitMessage
-  constructor(post: (m: ShellMessage) => void, init: () => InitMessage) {
+  constructor(post: (m: ShellMessage) => void, init: () => InitMessage, entered = true) {
     this.post = post
     this.init = init
+    this.isIn = entered
+  }
+  private get open(): boolean { return this.isReady && this.isIn }
+  private hello(): void {
+    this.post(this.init())
+    if (this.held) this.post({ type: 'bento:assets', assets: this.held })
   }
   get live(): boolean { return this.open }
   ready(): void {
-    this.open = true
-    this.post(this.init())
-    if (this.held) this.post({ type: 'bento:assets', assets: this.held })
+    this.isReady = true
+    if (this.open) this.hello()
+  }
+  /** The show reached this scene's slide. Idempotent. */
+  enter(): void {
+    if (this.isIn) return
+    this.isIn = true
+    if (this.open) this.hello()
   }
   step(index: number): void { if (this.open) this.post({ type: 'bento:step', index }) }
   motion(reduce: boolean): void { if (this.open) this.post({ type: 'bento:motion', reduce }) }
@@ -160,10 +218,17 @@ export const sceneGetsAssets = (source: { html?: string; url?: string }): boolea
 // ---- the controller (present.ts) ---------------------------------------------
 
 export interface RuntimeShow {
-  /** Slide `idx` became current. Idempotent for the slide already mounted. */
-  enter(idx: number, forward: boolean): void
-  /** Slide `idx` stopped being current: clear and remove its frame. */
+  /** Slide `idx` became current: its frames and its neighbours' are mounted,
+   *  every other slide's are cleared. Idempotent for the slide already showing. */
+  enter(idx: number, forward: boolean, named?: number | null): void
+  /** Slide `idx` stopped being current: its scene is cleared, so it starts over next time. */
   leave(idx: number): void
+  /** The sections were rebuilt under the show (a remote edit) with slide `idx`
+   *  showing: mount again whatever the rebuild dropped, on the step it was on. */
+  refresh(idx: number): void
+  /** A section is being rebuilt: refresh once the caller has finished replacing
+   *  nodes (a microtask on), however many sections it rebuilds in one go. */
+  rebuilt(at: () => number): void
   /** An arrow press: true when it moved a step and the slide must stay. */
   next(): boolean
   prev(): boolean
@@ -181,39 +246,123 @@ export interface RuntimeShow {
   dispose(): void
 }
 
-interface Live {
-  idx: number
+/** One live frame. A scene has a channel; a web embed has none. */
+interface Held {
+  key: string
+  slideId: string
+  /** The embed element this frame stands on; null for a scene. */
+  elId: string | null
   frame: HTMLIFrameElement
-  channel: SceneChannel
-  steps: number
-  step: number
-  timer: number
+  /** The node the frame was put on. A reorder under the show moves a slide to
+   *  another section; a frame on its old section's node is in the wrong place. */
+  host: HTMLElement | null
+  /** What the frame was built from. A remote edit that changes it makes the frame stale. */
+  made: string
+  scene: { channel: SceneChannel; steps: number; rt: RuntimeSlide; inline: boolean; fetched: boolean } | null
 }
+
 
 export function createRuntimeShow(
   doc: BentoDoc,
   slidesEl: HTMLElement,
   storeId: string | null,
-  hooks: { goNext(): void; goPrev(): void; exit(): void; reduceMotion(): boolean },
+  hooks: {
+    goNext(): void; goPrev(): void; exit(): void; reduceMotion(): boolean
+    /** Reveal's view distance, asked on every slide change. Absent: Reveal's default, 2. */
+    viewDistance?(): number
+  },
 ): RuntimeShow {
-  let live: Live | null = null
+  const frames = new Map<string, Held>()
+  /** Frames that reported nothing in time. Not mounted again until their slide
+   *  leaves the window or the show enters it; else every slide change would retry. */
+  const failed = new Map<string, { slide: string; def: string }>()
+  let current = -1
+  /** The id of the slide at `current`. A remote edit can move a slide to another
+   *  index under the show; it is still the same slide, on the same step. */
+  let currentId: string | null = null
+  /** The current slide's scene step: the one it is on, or will open on. */
+  let stepNow = 0
   /** The slide a rail/grid click targeted; its next entry lands on step 0. */
   let jumpTo = -1
+  let checked = false
+  let pendingRefresh = false
+  let disposed = false
 
-  const teardown = () => {
-    if (!live) return
-    clearTimeout(live.timer)
-    live.frame.removeAttribute('srcdoc')
-    live.frame.removeAttribute('src')
-    live.frame.remove()
-    live = null
+  /**
+   * A slide's key in the frame map: its id, which survives a move to another
+   * index. A hand-written deck can repeat an id; the second and later copies
+   * are told apart by their count, so each still gets its own frame.
+   */
+  const sid = (i: number): string | null => {
+    const slide = doc.slides[i]
+    if (!slide) return null
+    let n = 0
+    for (let k = 0; k < i; k++) if (doc.slides[k].id === slide.id) n++
+    // (JSON, not a separator: any character may appear in an id a deck was written with)
+    return JSON.stringify([slide.id, n])
   }
 
+  /**
+   * One clock per frame, held by its key. It starts when the frame is mounted
+   * (or when the show enters its slide) and stops when the frame reports,
+   * fails or is removed. A frame is removed only when it stops being valid
+   * (see sync), never just because a remote edit landed: a collaborator
+   * typing must neither reload a neighbour's page nor run out its clock.
+   *
+   * A section the caller rebuilds does lose its frames (the nodes are
+   * replaced: the section SHOWING on any remote edit, every section on an
+   * insert, delete or reorder), and their replacements start a new clock. That is
+   * deliberate: the other rule, one clock across replacements, removes a
+   * healthy page that needs 600 ms while edits land every 500 ms and leaves
+   * it failed after the typing stops. A page that hangs under constant edits
+   * is never torn down, but it is never uncovered either: its view shows.
+   */
+  const deadlines = new Map<string, number>()
+  const stopClock = (key: string) => { clearTimeout(deadlines.get(key)); deadlines.delete(key) }
+  const startClock = (h: Held) => {
+    stopClock(h.key)
+    deadlines.set(h.key, window.setTimeout(() => {
+      deadlines.delete(h.key)
+      if (frames.get(h.key) === h) fail(h)
+    }, LOAD_TIMEOUT_MS))
+  }
+  /** Give up on a frame, and on its definition: the same thing is not tried again
+   *  until its slide leaves the window or the show enters it. A changed one is. */
+  const fail = (h: Held) => { drop(h); failed.set(h.key, { slide: h.slideId, def: h.made }) }
+
+  const drop = (h: Held) => {
+    if (frames.get(h.key) === h) stopClock(h.key)
+    h.frame.removeAttribute('srcdoc')
+    h.frame.removeAttribute('src')
+    h.frame.remove()
+    if (frames.get(h.key) === h) frames.delete(h.key)
+  }
+
+  /** The scene on the slide showing, or null (a detached frame is no scene). */
+  const scene = (): Held | null => {
+    // by id, not by index: a slide inserted before this one by a remote edit
+    // moves it, and it is still the scene showing
+    const h = currentId !== null ? frames.get(currentId) : undefined
+    return h && h.scene && h.frame.isConnected ? h : null
+  }
+
+  // (only the frame that holds the key: a dropped frame's late `load` must not stop its successor's clock)
+  const uncover = (h: Held) => { if (frames.get(h.key) !== h) return; stopClock(h.key); h.frame.style.visibility = '' }
+
   const onMessage = (ev: MessageEvent) => {
-    if (!live || !fromFrame(ev, live.frame.contentWindow)) return
+    let from: Held | null = null
+    // a web embed has no channel: whatever its page posts is never read
+    for (const h of frames.values()) if (h.scene && fromFrame(ev, h.frame.contentWindow)) { from = h; break }
+    if (!from) return
     const msg = parseSceneMessage(ev.data)
     if (!msg) return
-    if (msg.type === 'bento:ready') { live.channel.ready(); return }
+    if (msg.type === 'bento:ready') {
+      if (uncovers('scene', 'ready')) uncover(from)
+      from.scene!.channel.ready()
+      return
+    }
+    // only the scene on the slide showing may move the show
+    if (from !== scene()) return
     // The scene forwarded a key it does not use. Focus is inside the frame,
     // so the NEXT key would go there too; take it back first. window.focus()
     // alone does not move focus off a focused iframe element.
@@ -225,41 +374,66 @@ export function createRuntimeShow(
   }
   window.addEventListener('message', onMessage)
 
-  const enter = (idx: number, forward: boolean) => {
-    if (live?.idx === idx) return
-    teardown()
-    const slide = doc.slides[idx]
-    const startAtZero = jumpTo === idx
-    jumpTo = -1
-    if (!slide || !isRuntimeSlide(slide)) return
-    const rt = slide.runtime!
-    const source = runtimeSource(slide, doc)
-    const surface = slidesEl.children[idx]?.querySelector<HTMLElement>('.bento-slide')
-    if (!source || !surface) return
-    if (!frameAllowed(source, {
-      offline: offlineEnabled(),
-      online: typeof navigator === 'undefined' || navigator.onLine !== false,
-    })) return
+  /** Put `frame` on `host`, covered until it reports, removed if it never does. */
+  const hold = (h: Held, host: HTMLElement) => {
+    h.frame.style.visibility = 'hidden'
+    h.frame.addEventListener('load', () => uncover(h), { once: true })
+    h.frame.addEventListener('error', () => { if (frames.get(h.key) === h) fail(h) }, { once: true })
+    h.host = host
+    frames.set(h.key, h)
+    startClock(h)
+    host.appendChild(h.frame)
+  }
 
+  const blank = (title: string): HTMLIFrameElement => {
     const frame = document.createElement('iframe')
     frame.className = 'bento-runtime-frame'
     frame.setAttribute('sandbox', 'allow-scripts allow-forms')
     frame.referrerPolicy = 'no-referrer'
-    frame.title = slide.name || slide.id
+    frame.title = title
+    return frame
+  }
+
+  const mountScene = (slide: Slide, key: string, surface: HTMLElement) => {
+    const rt = slide.runtime!
+    const source = runtimeSource(slide, doc)
+    // A frame mounted ahead of the show can be overtaken by a remote edit to
+    // its slide (only the section SHOWING is rebuilt): what it was built from
+    // is compared on every sync, and a stale frame is replaced.
+    // Asked on every sync, not only at mount: the offline switch or the network
+    // can change while a frame waits ahead of the show, and a frame the switch
+    // would refuse now must not be the one the show enters.
+    const allowed = !!source && frameAllowed(source, {
+      offline: offlineEnabled(),
+      online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    })
+    // (the definition, apart from whether it is allowed right now: a frame that
+    // failed is not tried again just because the network went away and came back)
+    const def = JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null])
+    const made = allowed ? def : ''
+    const old = frames.get(key)
+    if (old && (old.made !== made || old.host !== surface)) drop(old)
+    if (failed.has(key) && failed.get(key)!.def !== def) failed.delete(key) // it changed: one more try
+    if (frames.has(key) || failed.has(key)) return
+    if (!allowed || !source) return
+    const frame = blank(slide.name || slide.id)
     const steps = rt.steps
-    const cur: Live = {
-      idx,
-      frame,
-      steps,
-      step: startAtZero ? 0 : enterStep(steps, forward),
-      timer: 0,
-      channel: new SceneChannel(
-        (m) => frame.contentWindow?.postMessage(m, '*'),
-        () => ({ type: 'bento:init', step: cur.step, steps, props: sceneProps(rt), reduceMotion: hooks.reduceMotion() }),
-      ),
+    const h: Held = {
+      key, slideId: key, elId: null, frame, made, host: null,
+      scene: {
+        steps, rt, inline: sceneGetsAssets(source), fetched: false,
+        // Not entered: a scene mounted ahead of the show hears nothing. Init
+        // is built when it is sent, which is only ever while this slide shows,
+        // so `stepNow` is this scene's step.
+        channel: new SceneChannel(
+          (m) => frame.contentWindow?.postMessage(m, '*'),
+          () => ({ type: 'bento:init', step: stepNow, steps, props: sceneProps(rt), reduceMotion: hooks.reduceMotion() }),
+          false,
+        ),
+      },
     }
     // A failed or hung load leaves the still, never an empty box: the frame
-    // stays invisible (it still loads and runs) until 'load', so a slow or
+    // stays invisible (it still loads and runs) until it reports, so a slow or
     // hanging page shows the still rather than a blank rectangle.
     //
     // A hosted page that REFUSES framing (X-Frame-Options, CSP
@@ -267,61 +441,180 @@ export function createRuntimeShow(
     // inside, and a cross-origin frame gives the shell no reliable way to tell
     // that apart from a real page. That case is caught at authoring time: the
     // splice tool checks a URL override's framing headers before it writes the
-    // slide. Do not wait for bento:ready here instead; hosted pages never send it.
-    const fail = () => { if (live === cur) teardown() }
-    cur.timer = window.setTimeout(fail, LOAD_TIMEOUT_MS)
-    frame.style.visibility = 'hidden'
-    frame.addEventListener('load', () => { clearTimeout(cur.timer); frame.style.visibility = '' }, { once: true })
-    frame.addEventListener('error', fail, { once: true })
+    // slide. Do not wait for bento:ready ALONE here; hosted pages never send it.
+    //
     // content before insertion, so the frame navigates once, straight to the scene
     if (source.html != null) frame.srcdoc = source.html
     else frame.src = source.url!
-    surface.appendChild(frame)
-    live = cur
+    hold(h, surface)
+  }
 
-    if (storeId && rt.assets?.length && sceneGetsAssets(source)) {
-      void fetchAssets(storeId, rt.assets).then((got) => {
-        if (live === cur && Object.keys(got).length) cur.channel.assets(got)
+  const mountEmbeds = (slide: Slide, slideKey: string, surface: HTMLElement) => {
+    for (const el of slide.elements ?? []) {
+      if (el.type !== 'embed') continue
+      const key = JSON.stringify([slideKey, el.id])
+      const allowed = liveFrameAllowed(el as EmbedElement)
+      const def = typeof (el as EmbedElement).url === 'string' ? (el as EmbedElement).url!.trim() : ''
+      const made = allowed ? def : ''
+      // scoped to this section: the grid and the speaker view repeat the ids
+      const host = surface.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
+      const old = frames.get(key)
+      if (old && (old.made !== made || old.host !== host)) drop(old)
+      if (failed.has(key) && failed.get(key)!.def !== def) failed.delete(key) // it changed: one more try
+      if (frames.has(key) || failed.has(key)) continue
+      if (!allowed || !host) continue
+      const frame = blank((el as EmbedElement).url ?? '')
+      frame.src = made
+      hold({ key, slideId: slideKey, elId: el.id, frame, made, host: null, scene: null }, host)
+    }
+  }
+
+  /** Make the frames match the window around `current`. */
+  const sync = () => {
+    const vd = hooks.viewDistance?.() ?? 2
+    if (!checked) {
+      checked = true
+      if (!windowFits(vd)) console.warn(`bento: LIVE_WINDOW (${LIVE_WINDOW}) must be below Reveal's viewDistance (${vd}); neighbours stay stills`)
+    }
+    const win = liveWindow(doc.slides.map(inLinearFlow), current, vd)
+    const ids = new Set(win.map((i) => sid(i)!))
+    for (const h of [...frames.values()]) if (!ids.has(h.slideId) || !h.frame.isConnected) drop(h)
+    for (const [key, f] of [...failed]) if (!ids.has(f.slide)) failed.delete(key)
+    for (const i of win) {
+      const slide = doc.slides[i]
+      const key = sid(i)!
+      const surface = slidesEl.children[i]?.querySelector<HTMLElement>('.bento-slide')
+      if (!surface) continue
+      const scene = isRuntimeSlide(slide)
+      // a frame of the other kind, or for an element that is gone, has nothing to stand on
+      for (const h of [...frames.values()]) {
+        if (h.slideId !== key) continue
+        const elId = h.elId
+        if (scene ? !h.scene : !!h.scene || !(slide.elements ?? []).some((el) => el.type === 'embed' && el.id === elId)) drop(h)
+      }
+      if (scene) mountScene(slide, key, surface)
+      else mountEmbeds(slide, key, surface)
+    }
+  }
+
+  /** Tell the scene on the slide showing that the show is on it. */
+  const arrive = () => {
+    const h = scene()
+    if (!h) return
+    const sc = h.scene!
+    // a rebuilt scene may declare fewer steps than the one the audience was on
+    stepNow = clamp(sc.steps, stepNow)
+    sc.channel.enter()
+    // Assets go only to the scene showing, and only once it shows: a scene
+    // mounted ahead of the show makes no request the viewer did not walk into.
+    if (!sc.fetched && storeId && sc.rt.assets?.length && sc.inline) {
+      sc.fetched = true
+      void fetchAssets(storeId, sc.rt.assets).then((got) => {
+        if (frames.get(h.key) === h && Object.keys(got).length) sc.channel.assets(got)
       })
     }
   }
 
+  /** A scene that was shown is not kept: replaced by a fresh, silent one on the next sync. */
+  const retire = () => {
+    const h = currentId !== null ? frames.get(currentId) : undefined
+    if (h?.scene) drop(h)
+  }
+
+  const clamp = (steps: number, step: number): number =>
+    Number.isFinite(step) ? Math.max(0, Math.min(Math.max(0, steps - 1), Math.floor(step))) : 0
+
+  const enter = (idx: number, forward: boolean, named?: number | null) => {
+    if (disposed) return // a show that ended mounts nothing, whoever still holds it
+    const slide = doc.slides[idx]
+    const key = sid(idx)
+    if (key !== null && key === currentId) current = idx // the same slide, moved
+    else if (current !== idx || currentId !== key) {
+      retire()
+      const startAtZero = jumpTo === idx
+      jumpTo = -1
+      current = idx
+      currentId = key
+      stepNow = slide && isRuntimeSlide(slide) && !startAtZero ? enterStep(slide.runtime!.steps, forward) : 0
+      // A presenter named the step: the scene opens ON it. Set before the
+      // scene is told anything, or a scene mounted ahead of the show would
+      // open on the entry step and then be corrected in front of the audience.
+      if (named != null && slide && isRuntimeSlide(slide)) stepNow = clamp(slide.runtime!.steps, named)
+      // The ten seconds count from when the audience looks, not from when a
+      // frame was mounted ahead of them: whatever on this slide is still
+      // covered gets its full time again. Once per entry; a refresh of the
+      // slide showing must not keep a hung frame alive.
+      for (const f of frames.values()) {
+        if (f.slideId === key && f.frame.style.visibility === 'hidden') startClock(f)
+      }
+      // walking onto a slide is one more try for a frame that gave up
+      if (key !== null) for (const [k, f] of [...failed]) if (f.slide === key) failed.delete(k)
+    }
+    sync()
+    arrive()
+  }
+
   const move = (dir: StepDir, commit: boolean): boolean => {
-    if (!live || !live.channel.live) return false
-    const to = moveStep(live.steps, live.step, dir)
+    const h = scene()
+    if (!h || !h.scene!.channel.live) return false
+    const to = moveStep(h.scene!.steps, stepNow, dir)
     if (to === null) return false
-    if (commit) { live.step = to; live.channel.step(to) }
+    if (commit) { stepNow = to; h.scene!.channel.step(to) }
     return true
   }
 
   return {
     enter,
-    leave: (idx) => { if (live?.idx === idx) teardown() },
+    leave: (idx) => {
+      if (current !== idx) return
+      retire()
+      current = -1
+      currentId = null
+    },
+    // enter() keeps the step when it is still the same slide, so a rebuilt
+    // scene opens where the audience was
+    refresh: (idx) => enter(idx, true),
+    rebuilt: (at) => {
+      if (pendingRefresh) return
+      pendingRefresh = true
+      // enter() keeps whatever is still valid and replaces what the rebuild
+      // detached or the edit changed (sync checks every frame against its slide)
+      queueMicrotask(() => { pendingRefresh = false; enter(at(), true) })
+    },
     next: () => move('next', true),
     prev: () => move('prev', true),
     canNext: () => move('next', false),
     canPrev: () => move('prev', false),
     // The step the scene is ON, or will open on: a scene still loading already
     // has one (its bento:init carries it), and the audience must hear that one.
-    step: () => (live ? live.step : null),
+    step: () => (scene() ? stepNow : null),
     follow: (idx, step) => {
-      if (!live || live.idx !== idx) return false
-      const to = Math.max(0, Math.min(Math.max(0, live.steps - 1), Math.floor(step)))
-      if (to === live.step) return true
-      live.step = to
-      // a scene still loading reads cur.step in its bento:init; a live one is told
-      live.channel.step(to)
+      const h = scene()
+      if (!h || sid(idx) !== currentId) return false
+      const to = clamp(h.scene!.steps, step)
+      if (to === stepNow) return true
+      stepNow = to
+      // a scene still loading reads stepNow in its bento:init; a live one is told
+      h.scene!.channel.step(to)
       return true
     },
     jump: (idx) => {
       // Reveal fires no slidechanged for the slide already showing, so a
       // click on it resets here; any other target resets on its entry.
-      if (live?.idx === idx) { live.step = 0; live.channel.step(0) }
+      const h = scene()
+      // (the step is reset even with no scene to tell: one that failed and is
+      // mounted again later must open on the step the click asked for)
+      if (currentId !== null && sid(idx) === currentId) { stepNow = 0; h?.scene!.channel.step(0) }
       else jumpTo = idx
     },
-    setReduceMotion: (reduce) => live?.channel.motion(reduce),
+    setReduceMotion: (reduce) => scene()?.scene!.channel.motion(reduce),
     dispose: () => {
-      teardown()
+      disposed = true
+      for (const h of [...frames.values()]) drop(h)
+      for (const key of [...deadlines.keys()]) stopClock(key)
+      failed.clear()
+      current = -1
+      currentId = null
       window.removeEventListener('message', onMessage)
     },
   }

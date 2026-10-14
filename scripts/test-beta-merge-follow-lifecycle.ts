@@ -47,7 +47,7 @@ function fixture(start = 0, readyDeck = true, reduce = false, lock = false, muta
   const deck = { getIndices: () => ({ h: index }), slide(i: number) { if (i === index) return; const previousSlide = sections[index]; index = i; change({ previousSlide, currentSlide: sections[i] }) } }
   const activateDOM = () => {
     ;(globalThis as any).document = { createElement: () => {
-      const frame = { style: {}, setAttribute: noop, removeAttribute: noop, addEventListener: noop, remove: noop, messages: [] as any[], contentWindow: { postMessage(m: any) { frame.messages.push(m) } } }
+      const frame = { isConnected: true, style: {}, setAttribute: noop, removeAttribute: noop, addEventListener: noop, remove: noop, messages: [] as any[], contentWindow: { postMessage(m: any) { frame.messages.push(m) } } }
       frames.push(frame); return frame
     } }
   }

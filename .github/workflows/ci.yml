@@ -292,6 +292,20 @@ jobs:
             --outfile="$RUNNER_TEMP/test-beta-runtime.mjs"
           node --no-warnings "$RUNNER_TEMP/test-beta-runtime.mjs"
 
+      - name: Install browser test runtime (beta)
+        # Pinned outside app packages, the same pin as the browser jobs below:
+        # browser automation is not shipped in documents.
+        run: |
+          npm install --prefix "$RUNNER_TEMP/bento-browser" --no-package-lock --ignore-scripts playwright@1.61.1
+          "$RUNNER_TEMP/bento-browser/node_modules/.bin/playwright" install --with-deps chromium
+          echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/bento-browser/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+
+      - name: Beta live window rig (browser)
+        # Only the slide showing and its neighbours hold a live frame
+        # (slides/src/runtime-present.ts). Counted in a real show, in the
+        # packaged document: six scenes, the show on the third, three frames.
+        run: node scripts/test-beta-liveness.mjs
+
       - name: Beta runtime assets survive a save
         # Upstream prunes doc.assets at save time by walking elements; a
         # runtime slide's scene is named by the slide. Without the fork's hook

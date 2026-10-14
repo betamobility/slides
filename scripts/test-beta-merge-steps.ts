@@ -25,7 +25,7 @@ assert.equal(declarations.size, 4)
 const messages: any[] = []
 let listener: any, frame: any
 ;(globalThis as any).window = { addEventListener: (_: any, fn: any) => { listener = fn }, removeEventListener() {}, setTimeout: () => 0, focus() {} }
-;(globalThis as any).document = { createElement: () => (frame = { style: {}, setAttribute() {}, removeAttribute() {}, addEventListener() {}, remove() {}, contentWindow: { postMessage: (m: any) => messages.push(m) } }) }
+;(globalThis as any).document = { createElement: () => (frame = { isConnected: true, style: {}, setAttribute() {}, removeAttribute() {}, addEventListener() {}, remove() {}, contentWindow: { postMessage: (m: any) => messages.push(m) } }) }
 const doc = newDoc()
 doc.assets = { scene: 'data:text/html;base64,' + Buffer.from('<p>scene</p>').toString('base64') }
 doc.slides[0].runtime = { src: 'asset:scene', steps: 2, props: [] }
