@@ -160,22 +160,55 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(/elements\s+other\s+than\s+its\s+still/.test(text), `${name} documents the extra-elements refusal`)
   ok(/same\s+(asset\s+)?name[^.]*different\s+bytes/.test(text), `${name} documents the cross-scene asset name rule`)
 }
-console.log('\npublishing from a sandbox that holds no token (one-click publish plan, U6)')
+console.log('\npublishing is one click in a browser, for everyone (one-click publish plan U6; upstream-merge plan U6, U7)')
 // The whole point of the pairing flow is that nobody handles a secret. These
 // assertions exist because the previous text told Cowork to hand the file back
-// as its PRIMARY path, and an agent reading that would not discover --link.
+// as its PRIMARY path, and then told everyone else to fetch the service token
+// from a password manager: an agent reading either would not pair.
 const splicePairs = /--link/.test(read('plugins/beta-slides/scripts/splice.mjs'))
 for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
   ok(splicePairs && /splice\.mjs --link/.test(text), `${name} gives the pairing command`)
-  ok(/8 hours/.test(text), `${name} says how long one approval lasts`)
+  ok(/7 days/.test(text) && !/8 hours/.test(text), `${name} says how long one approval lasts`)
+  ok(!/1Password/i.test(text), `${name} never sends anyone to 1Password`)
   ok(/Approve/.test(text), `${name} says the person clicks Approve`)
   ok(/Agent access/.test(text), `${name} says where the person can end it`)
   ok(/never (ask|be pasted)|must never be pasted|Never ask/i.test(text), `${name} forbids asking for a pasted token`)
 }
-// The fallback is still documented, and is no longer the first answer: the
-// pairing command must come BEFORE Save to Beta in the Cowork section.
+// A `###` section of the skill: from its heading to the next heading of the
+// same or a higher level. Empty when the heading is missing, so every check
+// on it fails rather than reading the rest of the file.
+function sectionOf(text, heading) {
+  const at = text.indexOf(`${heading}\n`)
+  if (at < 0) return ''
+  const rest = text.slice(at + heading.length)
+  const next = rest.search(/\n#{2,3} /)
+  return next < 0 ? rest : rest.slice(0, next)
+}
+// The token is for machines, and its recipe lives under that heading only:
+// a person following any other part of the skill is never handed one (R5).
 {
-  const section = skill.slice(skill.indexOf('### Publishing without a service token'))
+  const heading = '### Machines and CI: the service token'
+  const machines = sectionOf(skill, heading)
+  ok(/CF_ACCESS_CLIENT_ID/.test(machines) && /CF-Access-Client-Secret/.test(machines), 'the skill keeps the service-token recipe, under a machines and CI heading')
+  const elsewhere = skill.replace(heading + machines, '')
+  ok(machines.length > 0 && !/CF_ACCESS_CLIENT|CF-Access-Client/.test(elsewhere), 'and nowhere else in the skill')
+  ok(/\bCI\b[^.]*\b(refuses|refuse)/.test(machines), 'which says a run with CI set and no token refuses instead of pairing')
+  const people = sectionOf(skill, '### Publishing: one click in a browser')
+  ok(/SLIDES_GRANT_LABEL="Claude Code"/.test(people), 'the skill has a Claude Code session name itself on the Agent access list')
+  ok(/Cowork/.test(people) && /~\/\.bento/.test(people), 'and says Cowork may not keep the approval between sessions')
+  // What an agent needs to get the ONE click: the tool waits up to ten minutes
+  // and an agent's shell shows output only when a command returns.
+  ok(/background/.test(people) && /ten\s+minutes/.test(people), 'the skill says to run the pairing where its link can be read while it waits')
+  ok(/kills[^.]*takes\s+the\s+pairing\s+with\s+it/.test(people) && /new\s+link/.test(people), 'and that a command killed while waiting loses the pairing, so the next link is a new one')
+  ok(/Never\s+open[^.]*yourself/.test(people), 'and that the click is the person\'s, never the agent\'s')
+  ok(!/`curl`\s+recipe/.test(elsewhere), 'no part of the skill outside the machines section sends an agent to a curl recipe')
+  ok(/When\s+it\s+exits/.test(people), 'and what to read when the background command ends')
+  ok(/splice\.mjs --link/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')) && /splice\.mjs --read <deckId>/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')), 'the command synopsis lists --link and --read')
+}
+// The fallback is still documented, and is no longer the first answer: the
+// pairing command must come BEFORE Save to Beta in the publishing section.
+{
+  const section = sectionOf(skill, '### Publishing: one click in a browser')
   const linkAt = section.indexOf('--link')
   const saveAt = section.indexOf('Save to Beta')
   ok(linkAt >= 0 && saveAt >= 0 && linkAt < saveAt, 'the skill offers pairing before the hand-the-file-back fallback')
@@ -184,14 +217,31 @@ for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
 // The lifetime is a number in three places; the worker is the authority.
 {
   const grant = read('server/deck-store/src/grant.js')
-  const m = /GRANT_TTL_S = (\d+) \* 60 \* 60/.exec(grant)
-  const hours = m ? Number(m[1]) : NaN
-  ok(hours === 8 && /8 hours/.test(skill) && /8 hours/.test(guide),
-    `the grant lifetime is ${hours} hours in grant.js, the skill and the guide`)
+  const m = /GRANT_TTL_S = (\d+) \* 24 \* 60 \* 60/.exec(grant)
+  const days = m ? Number(m[1]) : NaN
+  const said = new RegExp(`\\b${days} days\\b`)
+  const storeReadme = read('server/deck-store/README.md')
+  const concepts = read('CONCEPTS.md')
+  ok(days === 7 && [skill, guide, storeReadme, concepts].every((t) => said.test(t)),
+    `the grant lifetime is ${days} days in grant.js, the skill, the guide, the store README and CONCEPTS.md`)
+  // R25: revocation is per person, from inside their login, so the order matters.
+  const off = sectionOf(storeReadme, '### Offboarding')
+  ok(/revoke[^.]*grants[^.]*,\s+then\s+remove\s+them\s+from\s+Access/i.test(off),
+    'the store README gives the offboarding order: revoke the grants, then remove the person from Access')
+}
+
+// Break-round text probe: a scene project is not yet a standalone deck.
+// --create only POSTs its assembled shell; a timed-out first pairing leaves
+// deck.json/scenes on disk, not a complete .bento.html file.
+{
+  const people = sectionOf(skill, '### Publishing: one click in a browser')
+  const timeout = people.split('**When nobody clicks**')[1]?.split('**When the sandbox')[0] || ''
+  ok(timeout.length > 0 && !/file on disk is a complete deck/i.test(timeout),
+    'timeout guidance does not promise a complete HTML deck for an unpublished --create project')
 }
 
 // Numbers the README states as prose, checked against the code that enforces
-// them — the same treatment the 8-hour lifetime already gets. Prose that
+// them — the same treatment the grant lifetime already gets. Prose that
 // drifts from a cap is how an agent learns the wrong limit.
 {
   // Read from wherever the constant actually lives: this check caught the

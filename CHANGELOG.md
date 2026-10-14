@@ -12,6 +12,8 @@ pre-1.0.
 ## [Unreleased]
 
 - **Current with upstream bento/slides 1.2.7.** Merges 187 upstream commits (1.0.19 to 1.2.7): the generated document schema, sidebar multi-select, reveal steps, export slides as images, the compress-pictures tool, maths, and the hardened loader. Upstream's own entries are below Beta's, under their version numbers.
+- **Publishing asks for one click, never a secret.** The splice tool starts the browser approval by itself when a person has none, and the beta-slides skill (0.3.0) no longer points anyone at a token. The service token is for unattended runs only.
+- **One approval covers a week.** A publishing approval lasts 7 days, and the Agent access list names which agent holds it. Needs the deck store worker deployed.
 
 ## [2026.10.9] — 2026-10-09
 

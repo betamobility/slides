@@ -143,7 +143,7 @@ function fmtTime(iso) {
 /**
  * "Agent access": the live grants of the person reading the page (U4, R10).
  *
- * A grant ends by itself after eight hours, so this is not the safety net —
+ * A grant ends by itself after seven days, so this is not the safety net —
  * it is how someone SEES that an agent can currently publish as them, which
  * a background capability has to be. Absent entirely when there are none: an
  * empty table would be a question nobody asked.
@@ -361,6 +361,10 @@ ${create ? `<script>
 `
 }
 
+// How long a grant lasts, as the pages say it: whole days, from the one
+// constant, so a week never reads as "168 hours".
+const LIFETIME = `${Math.round(GRANT_TTL_S / 86400)} days`
+
 /**
  * `GET /link/<code>` — the one click (one-click publish plan, KTD11, R2/R3).
  *
@@ -381,7 +385,6 @@ ${create ? `<script>
  * that makes the click a consent rather than a forgery.
  */
 export function linkPage(who, code, { label = '', created = '', nonce = '' } = {}) {
-  const hours = Math.round(GRANT_TTL_S / 3600)
   return `${head('Approve agent access', { analytics: false })}
 <body>
 <main>
@@ -390,7 +393,7 @@ export function linkPage(who, code, { label = '', created = '', nonce = '' } = {
 <div class="who">${esc(who)}</div>
 </header>
 <div class="card">
-<p>Whoever started this pairing will be able to publish decks as you for ${hours} hours. Approve only if you asked an agent to publish in the last few minutes.</p>
+<p>Whoever started this pairing will be able to publish decks as you for ${LIFETIME}. Approve only if you asked an agent to publish in the last few minutes.</p>
 <dl>
 <dt>Asked for by</dt><dd>${label ? `&quot;${esc(label)}&quot;` : '<span class="muted">an agent that gave no name</span>'}</dd>
 <dt>Started</dt><dd class="num">${esc(fmtTime(created))}</dd>
@@ -400,7 +403,7 @@ export function linkPage(who, code, { label = '', created = '', nonce = '' } = {
 <form method="post" action="/link/${esc(code)}/approve">
 <input type="hidden" name="nonce" value="${esc(nonce)}">
 <div class="row">
-<button type="submit">Approve for ${hours} hours</button>
+<button type="submit">Approve for ${LIFETIME}</button>
 <span class="muted">Close this tab to refuse.</span>
 </div>
 </form>
@@ -414,7 +417,6 @@ export function linkPage(who, code, { label = '', created = '', nonce = '' } = {
 
 /** The page after the click. Nothing to do here, and it says so. */
 export function linkDonePage(who, { label = '' } = {}) {
-  const hours = Math.round(GRANT_TTL_S / 3600)
   return `${head('Approved', { analytics: false })}
 <body>
 <main>
@@ -423,7 +425,7 @@ export function linkDonePage(who, { label = '' } = {}) {
 <div class="who">${esc(who)}</div>
 </header>
 <div class="card">
-<p>${label ? `&quot;${esc(label)}&quot;` : 'The agent'} can publish decks as you for the next ${hours} hours. Go back to where you asked for the deck; you can close this tab.</p>
+<p>${label ? `&quot;${esc(label)}&quot;` : 'The agent'} can publish decks as you for the next ${LIFETIME}. Go back to where you asked for the deck; you can close this tab.</p>
 <p class="muted">End this access at any time from <a href="/">the deck list</a>.</p>
 </div>
 </main>
