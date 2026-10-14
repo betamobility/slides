@@ -29,7 +29,8 @@ import { checkRuntime, isRuntimeSlide, LIBRARY_ID } from '../runtime.ts'
 import type { Store } from '../store.ts'
 import { sanitizeElement } from '../untrusted.ts'
 import { t } from '../i18n.ts'
-import { applyPreset, rememberPresets, webSceneOf, writeQueryAll, type Preset } from './scenesettings.ts'
+import { activeSvg, WEB_HOSTS } from './libraryrules.ts'
+import { applyPreset, coerce, rememberPresets, webSceneOf, writeQueryAll, type Preset } from './scenesettings.ts'
 
 export interface LibraryScene {
   id: string
@@ -101,17 +102,44 @@ function readScene(raw: unknown): LibraryScene | null {
     if (!isObject(p) || !line(p.name, MAX_NAME) || presets.some((q) => q.name === p.name)) return null
     const values = p.values ?? {}
     if (!isObject(values)) return null
+    // every value names a declared setting and is one it keeps as given:
+    // a preset the form would have to hold or refuse is not repaired here
+    for (const [k, v] of Object.entries(values)) {
+      const prop = props.find((q) => q.key === k)
+      const r = prop ? coerce(prop, v) : null
+      if (!r || r.value === undefined || r.note || r.value !== v) return null
+    }
     presets.push({ name: p.name as string, values: { ...(values as Preset['values']) } })
   }
   const still = kind === 'web' ? raw.view : raw.still
-  if (typeof still !== 'string' || !/^\s*(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(still) || utf8Bytes(still).length > RUNTIME_STILL_BUDGET) return null
+  // a picture by the library's own rules (libraryrules.ts): nothing that can run, load or link
+  if (typeof still !== 'string' || utf8Bytes(still).length > RUNTIME_STILL_BUDGET || activeSvg(still) !== null) return null
   const base = { id, version: version as number, name: name as string, description: description as string, kind, steps: steps as number, props, presets, still } as LibraryScene
   if (kind === 'runtime') {
     if (typeof raw.html !== 'string' || !raw.html || utf8Bytes(raw.html).length > RUNTIME_SRC_BUDGET) return null
     return { ...base, html: raw.html }
   }
-  if (typeof raw.url !== 'string' || 'error' in writeQueryAll(raw.url, {}) || !/^https:\/\//i.test(raw.url)) return null
+  // https, on a host Beta controls, no login and no port: the build's rule (libraryrules.ts)
+  if (typeof raw.url !== 'string' || 'error' in writeQueryAll(raw.url, {})) return null
+  let u: URL
+  try { u = new URL(raw.url) } catch { return null }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || !WEB_HOSTS.includes(u.hostname)) return null
   return { ...base, url: raw.url }
+}
+
+/**
+ * An svg as a data: URI, percent-encoding only what a URI cannot carry, so
+ * it costs about its own size (base64 costs a third more). That decides
+ * whether a library still (at most 64 KB) travels INSIDE the op that inserts
+ * its slide: an asset value over BLOB_INLINE_MAX (64 K characters) goes the
+ * relay's blob route instead, and a collaborator would see the slide before
+ * its still (AE5). runtime.ts decodeAsset reads both forms.
+ */
+export function svgDataUri(svg: string): string {
+  // % and # would be read as an escape and a fragment; control characters
+  // are stripped by the URL parser; non-ASCII as UTF-8. Code points, not
+  // halves (the u flag): a still has passed activeSvg, so no lone surrogate.
+  return 'data:image/svg+xml,' + svg.replace(/[\u0000-\u001f%#\u007f-\u{10ffff}]/gu, (c) => encodeURIComponent(c))
 }
 
 /** A data: URI holding UTF-8 text, base64 as the splice tool writes it. */
@@ -133,7 +161,7 @@ const valuesFor = (scene: LibraryScene, preset: Preset | undefined) => applyPres
 export function runtimeSlide(doc: BentoDoc, scene: LibraryScene, preset?: Preset): Slide | null {
   if (scene.kind !== 'runtime' || !scene.html) return null
   const srcUri = textDataUri('text/html;charset=utf-8', scene.html)
-  const stillUri = textDataUri('image/svg+xml', scene.still)
+  const stillUri = svgDataUri(scene.still)
   const record = {
     src: 'asset:scene', still: 'asset:still', steps: scene.steps, props: scene.props,
     values: valuesFor(scene, preset), library: { id: scene.id, version: scene.version },
@@ -236,7 +264,7 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 /** A still as a picture: an <img> of a data URI, so its markup can never run or reach the page. */
 const stillImg = (scene: LibraryScene, cls: string): HTMLImageElement => {
   const img = el('img', cls)
-  img.src = textDataUri('image/svg+xml', scene.still)
+  img.src = svgDataUri(scene.still)
   img.alt = ''
   return img
 }

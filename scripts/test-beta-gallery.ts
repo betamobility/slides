@@ -8,12 +8,12 @@
 // scripts/test-beta-gallery-browser.mjs.
 
 import './lib/no-document.ts' // before anything that reaches i18n
-import { buildManifest } from './lib/beta-library.mjs'
+import { buildManifest, validateScene, STILL_BUDGET, WEB_HOSTS } from './lib/beta-library.mjs'
 import type { BentoDoc, EmbedElement, Slide } from '../slides/src/model.ts'
 import { checkRuntime, runtimeSource } from '../slides/src/runtime.ts'
 import { sanitizeElement, sanitizeSlide } from '../slides/src/untrusted.ts'
 import { Store } from '../slides/src/store.ts'
-import { SyncState } from '../slides/src/sync/crdt.ts'
+import { SyncState, BLOB_INLINE_MAX } from '../slides/src/sync/crdt.ts'
 import * as g from '../slides/src/beta/gallery.ts'
 import { presetsFor, webSceneOf } from '../slides/src/beta/scenesettings.ts'
 
@@ -99,7 +99,10 @@ console.log('\na runtime scene becomes a new slide')
   ok(slide.elements.length === 1 && still.type === 'image' && still.x === 0 && still.y === 0 && still.w === 1280 && still.h === 720 && (still as { src: string }).src === rt.still,
     'one element: the still, full-bleed, pointing at the runtime still')
   ok(runtimeSource(slide, doc)?.html === map.html, 'the scene HTML is inlined and decodes back byte for byte (UTF-8, base64)')
-  ok(typeof doc.assets?.[rt.still!.slice(6)] === 'string' && doc.assets![rt.still!.slice(6)].startsWith('data:image/svg+xml;base64,'), 'the still is an interned svg data URI')
+  const stillAsset = doc.assets?.[rt.still!.slice(6)] ?? ''
+  ok(stillAsset.startsWith('data:image/svg+xml,') && decodeURIComponent(stillAsset.slice(19)) === map.still, 'the still is an interned svg data URI that decodes back to the library still')
+  const base64Length = 26 + Math.ceil(new TextEncoder().encode(map.still).length / 3) * 4
+  ok(stillAsset.length < base64Length, `percent-encoded, smaller than base64 (${stillAsset.length} for a ${map.still.length}-character still; base64 ${base64Length})`)
   const reread = sanitizeSlide(clone(slide))
   ok(reread && checkRuntime(clone(reread.runtime), doc.assets) && JSON.stringify(reread.runtime) === JSON.stringify(slide.runtime), 'the untrusted gate keeps the slide as written (a reload drops nothing)')
   const again = g.runtimeSlide(doc, map, copenhagen)!
@@ -185,6 +188,94 @@ console.log('\nAE5: a collaborator receives the inserted slide')
   ok(got?.runtime?.library?.id === 'map' && got.runtime.values?.place === 'Copenhagen', "the second copy has the slide, the marker and the preset's values")
   ok(got && runtimeSource(got, docB)?.html === map.html, 'and the scene HTML, so present mode runs it there')
   ok(got && typeof docB.assets?.[(got.elements[0] as { src: string }).src.slice(6)] === 'string', 'and the still, so it paints first')
+}
+
+console.log('\nU11 independent round 1: rejection and transport boundaries')
+{
+  // Wrong-kind/undeclared preset values must not be silently repaired into a
+  // different scene. Exercise the whole reader -> insertion path when admitted.
+  const raw = clone(manifest).scenes.find((s) => s.id === 'map')!
+  const admitted: string[] = []
+  for (const values of [{ zoom: 'many' }, { zom: 5 }]) {
+    const scenes = g.readManifest(withScenes({ ...raw, presets: [{ name: 'Broken', values }] }))!
+    if (scenes.length) {
+      const store = new Store(deck())
+      const refusal = g.insertScene(store, scenes[0], scenes[0].presets[0])
+      admitted.push(JSON.stringify({ values, refusal, inserted: store.slide.runtime?.values }))
+    }
+  }
+  ok(admitted.length === 0,
+    `R1 runtime preset rejects wrong kinds and undeclared keys instead of substituting defaults: ${admitted.join('; ')}`)
+}
+{
+  // A card's <img> containment is not manifest validation: these SVGs cannot
+  // be trusted as the library's portable picture (and embed views are inline SVG).
+  const raw = clone(manifest).scenes[0]
+  const badStills = [
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="16" height="9"><div xmlns="http://www.w3.org/1999/xhtml">Only artwork</div></foreignObject></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><use href="https://example.invalid/still.svg#art"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+  ]
+  const accepted = badStills.flatMap((still, i) =>
+    (['runtime', 'web'] as const).flatMap((kind) => {
+      const input = kind === 'runtime' ? { ...raw, still } : web({ view: still })
+      return g.readManifest(withScenes(input))!.length ? [`${kind}:${i}`] : []
+    }))
+  ok(accepted.length === 0, `R1 rejects active, external and malformed stills before shelving: ${accepted.join(', ')}`)
+}
+{
+  const urls = [
+    'https://example.invalid/scene/',
+    'https://slides.betamobility.ai.example.invalid/scene/',
+    'https://user:secret@slides.betamobility.ai/scene/',
+    'https://slides.betamobility.ai:8443/scene/',
+  ]
+  const admitted = urls.filter((url) => g.readManifest(withScenes(web({ url })))!.length)
+  ok(admitted.length === 0,
+    `R1 web scene rejects foreign hosts, credentials and ports (allowed ${WEB_HOSTS.join(', ')}): ${admitted.join(', ')}`)
+}
+{
+  // A genuinely build-valid 50 KiB still: below the library's 64 KiB limit,
+  // but its base64 data URI crosses the sync engine's inline threshold.
+  // The assertion is on the receiving document, not merely on a source ref.
+  const raw = clone(manifest).scenes.find((s) => s.id === 'map')!
+  const { id, html, still: _still, stillType: _type, ...metadata } = raw
+  const prefix = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9"><rect width="16" height="9" fill="#123456"/><!--'
+  const suffix = '--></svg>'
+  const still = prefix + 'x'.repeat(50 * 1024 - prefix.length - suffix.length) + suffix
+  const validated = validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': html, 'still.svg': still })
+  const scene = g.readManifest(withScenes(validated))![0]
+  const store = new Store(deck()), remote = deck()
+  const a = new SyncState('round1-A'), b = new SyncState('round1-B')
+  a.adopt(store.doc); b.adopt(remote)
+  const before = clone(store.doc)
+  const refusal = g.insertScene(store, scene, scene.presets[1])
+  b.apply(remote, a.diff(before, store.doc, { text: true }))
+  const received = remote.slides.find((s) => s.id === store.slide.id)
+  const key = store.slide.runtime!.still!.slice(6)
+  const encodedLength = store.doc.assets![key].length
+  ok(refusal === null && still.length < STILL_BUDGET && received?.runtime?.library?.id === 'map'
+    && remote.assets?.[key] === store.doc.assets![key],
+    `R1 AE5 build-valid 50 KiB still arrives with inserted slide: raw=${still.length}, encoded=${encodedLength}, inlineMax=${BLOB_INLINE_MAX}, receiverHasStill=${!!remote.assets?.[key]}`)
+}
+{
+  const scene = g.readManifest(clone(manifest))!.find((s) => s.id === 'map')!
+  const store = new Store(deck())
+  store.goTo(1) // a state slide, rather than its parent
+  const before = JSON.stringify(store.doc)
+  g.insertScene(store, scene)
+  const first = store.slide.id
+  g.insertScene(store, scene)
+  const second = store.slide.id
+  const inserted = JSON.stringify(store.doc)
+  const order = store.doc.slides.map((s) => s.id)
+  store.undo(); store.undo()
+  const restored = JSON.stringify(store.doc) === before && store.slide.id === 'a-state'
+  store.redo(); store.redo()
+  ok(restored && JSON.stringify(store.doc) === inserted && store.slide.id === second
+    && order.join() === ['a', 'a-state', first, second, 'b'].join() && first !== second,
+    'R1 state-slide insertion twice preserves order, identities and assets through undo/redo')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
