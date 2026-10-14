@@ -339,5 +339,65 @@ console.log('\nU10 round 5: what a native slider can show')
     'onStep survives a large negative offset; below min or not a number is off it')
 }
 
+
+console.log('\nU10 round 6 adversarial regressions')
+{
+  // Exercise the rebuilt decimal snap at the narrowest supported step,
+  // including a negative midpoint and an off-grid upper endpoint.
+  const tiny: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0,
+    format: 'range:-0.00000000000000000003:0.000000000000000000025:0.00000000000000000001' }
+  const low = ss.coerce(tiny, -1), high = ss.coerce(tiny, 1)
+  const middle = ss.coerce(tiny, -1.5e-20)
+  ok(low.value === -3e-20 && high.value === 2.5e-20 && !!low.note && !!high.note
+    && middle.value === -1e-20 && ss.coerce(tiny, high.value).value === high.value
+    && !ss.onStep(tiny.format!, high.value as number),
+    'U10 round 6: twenty-decimal signed clamp and off-grid endpoint stay stable')
+
+  const declared: RuntimeProp[] = [
+    { key: 'constructor', label: 'City', kind: 'text', default: '東京', format: 'select:New York|東京| São Paulo ' },
+    { key: 'enabled', label: 'Enabled', kind: 'number', default: 1, format: 'bool' },
+    tiny,
+  ]
+  const chosen = Object.assign(Object.create({ enabled: 0, extra: 'inherited' }),
+    { constructor: ' São Paulo ', n: 1, extra: 'discard' })
+  const preset = { name: 'Boundary', values: chosen }
+  const before = JSON.stringify(declared)
+  const applied = ss.applyPreset(declared, preset)
+  ok(same(applied, { constructor: ' São Paulo ', enabled: 1, n: 2.5e-20 })
+    && ss.activePreset(declared, applied, [preset]) === 'Boundary'
+    && JSON.stringify(declared) === before,
+    'U10 round 6: preset combines prototype names, spaced Unicode, inherited defaults and exact clamping')
+
+  const address = 'http://user:pass@xn--bcher-kva.example:8080/a%2Fb?%63onstructor=remote&constructor=older&x=%2B&x=+#frag%2F'
+  const changed = ss.writeQuery(address, 'constructor', '東京 + São Paulo')
+  const u = 'url' in changed ? new URL(changed.url) : null, b = new URL(address)
+  ok(!!u && u.origin === b.origin && u.pathname === b.pathname && u.hash === b.hash
+    && u.username === b.username && u.password === b.password
+    && same(u.searchParams.getAll('x'), ['+', ' '])
+    && same(u.searchParams.getAll('constructor'), ['東京 + São Paulo'])
+    && ss.readQuery(u.href, declared).constructor === '東京 + São Paulo',
+    'U10 round 6: encoded prototype query key keeps remote address and duplicate siblings')
+
+  const prefix = 'https://example.test/?a=&b='
+  const addressAtLimit = prefix + 'y'.repeat(ss.MAX_WEB_URL - prefix.length)
+  const swap = { a: '😀'.repeat(100), b: '' }
+  const first = ss.writeQueryAll(addressAtLimit, swap)
+  const reversed = ss.writeQueryAll(addressAtLimit, { b: '', a: swap.a })
+  const over = ss.writeQueryAll(addressAtLimit, { a: '😀'.repeat(200), b: '' })
+  ok('url' in first && 'url' in reversed && first.url === reversed.url && isWebUrl(first.url)
+    && new URL(first.url).searchParams.get('a') === swap.a
+    && 'error' in over && over.error === 'This makes the page address too long',
+    'U10 round 6: atomic Unicode preset ignores key order and refuses encoded overflow')
+
+  // A refused edit must not mutate the caller's schema or current settings.
+  const stored = { n: 2.5e-20, extra: 'untouched' }
+  const snapshot = JSON.stringify({ declared, stored })
+  const refused = ss.coerce(tiny, 'Infinity')
+  ok(refused.value === undefined && refused.note?.says === 'Not a number'
+    && JSON.stringify({ declared, stored }) === snapshot
+    && ss.valuesOf([tiny], stored).n === 2.5e-20,
+    'U10 round 6: refused nonfinite edit leaves stored off-grid endpoint and schema untouched')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

@@ -342,6 +342,87 @@ const afterDeletedUndo = await probe.evaluate(() => JSON.stringify(independent.s
 ok(afterDeletedEdit === deletionBaseline && afterDeletedUndo === deletionBaseline,
   'U10 round 5: focused edit after remote deletion is refused without recreating geometry or an undo step')
 
+
+console.log('\nU10 round 6 adversarial browser regressions')
+// A pending local edit takes precedence on its own key; the undo baseline
+// must include the remote value, remote sibling settings and remote geometry.
+await mount('runtime', props, { place: 'Oslo', zoom: 6 }, [])
+await probeSetting('place').fill('Local')
+const runtimeRemote = await probe.evaluate(() => {
+  independent.store.slide.runtime.values = { place: 'Remote', zoom: 8 }
+  independent.store.slide.elements = [{ id: 'remote-still', type: 'image',
+    x: 17, y: 30, w: 640, h: 360, rotation: 0, opacity: 1,
+    src: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E', fit: 'cover', radius: 0 }]
+  independent.store.emit('doc')
+  return JSON.parse(JSON.stringify(independent.store.slide))
+})
+await probeSetting('place').press('Tab')
+await probe.waitForTimeout(50)
+const runtimeEdited = await probeSnapshot()
+await probe.evaluate(() => independent.store.undo())
+const runtimeUndone = await probeSnapshot()
+await probe.evaluate(() => independent.store.redo())
+const runtimeRedone = await probeSnapshot()
+ok(runtimeEdited.runtime.values.place === 'Local' && runtimeEdited.runtime.values.zoom === 8
+  && JSON.stringify(runtimeEdited.elements) === JSON.stringify(runtimeRemote.elements)
+  && JSON.stringify(runtimeUndone) === JSON.stringify(runtimeRemote)
+  && JSON.stringify(runtimeRedone) === JSON.stringify(runtimeEdited),
+  'U10 round 6: focused runtime edit preserves remote siblings and geometry through one undo/redo')
+
+const edgeProps = [
+  { key: 'constructor', label: 'City', kind: 'text', default: '東京', format: 'select:New York|東京| São Paulo ' },
+  { key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:-2:1:0.7' },
+  { key: 'grid', label: 'Grid', kind: 'number', default: 1, format: 'bool' },
+]
+await mount('runtime', edgeProps, { constructor: 'New York', n: 0.1, grid: 0 },
+  [{ name: 'Edge', values: { constructor: ' São Paulo ', n: 99, extra: 'discard' } }])
+const edgeBefore = await probeSnapshot()
+await probePreset().selectOption('Edge')
+const edgeAfter = await probeSnapshot()
+const edgeShown = await probeSetting('n').locator('input[type=range]').inputValue()
+const edgeNote = await probe.locator('.ed-scene-settings').innerText()
+await probe.evaluate(() => independent.store.undo())
+const edgeUndo = await probeSnapshot()
+ok(JSON.stringify(edgeAfter.runtime.values) === JSON.stringify({ constructor: ' São Paulo ', n: 1, grid: 1 })
+  && edgeShown === '1' && /Held at 1/.test(edgeNote)
+  && JSON.stringify(edgeAfter.elements) === JSON.stringify(edgeBefore.elements)
+  && JSON.stringify(edgeUndo) === JSON.stringify(edgeBefore),
+  'U10 round 6: preset writes every declared key, shows off-grid clamp, and undoes once')
+
+// Try the refused swatch twice: its replacement must remain wired to the
+// latest address. Then a remote shortening makes the same colour admissible.
+await mount('web', colorProps, {}, [], fullColorUrl)
+for (const colour of ['#00ff00', '#0000ff']) {
+  await probeSetting('accent').focus()
+  await probeSetting('accent').evaluate((el, colour) => {
+    el.value = colour
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }, colour)
+}
+const twiceRefused = await probeSnapshot()
+const twiceShown = await probeSetting('accent').inputValue()
+const twiceNote = await probe.locator('.ed-scene-settings').innerText()
+const shortened = 'https://example.test/revised%2Fmap?%61ccent=%23f00&accent=%23000&keep=a%2Bb#remote'
+await probe.evaluate((url) => {
+  independent.store.slide.elements[0].url = url
+  independent.store.emit('doc')
+}, shortened)
+await probeSetting('accent').evaluate((el) => {
+  el.value = '#0000ff'
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+})
+const recoveredColour = await probeSnapshot()
+const recoveredUrl = new URL(recoveredColour.elements[0].url), shortBase = new URL(shortened)
+await probe.evaluate(() => independent.store.undo())
+const colourUndo = await probeSnapshot()
+ok(twiceRefused.elements[0].url === fullColorUrl && twiceShown === '#ff0000' && /too long/i.test(twiceNote)
+  && recoveredUrl.origin === shortBase.origin && recoveredUrl.pathname === shortBase.pathname
+  && recoveredUrl.hash === shortBase.hash && recoveredUrl.searchParams.get('keep') === 'a+b'
+  && JSON.stringify(recoveredUrl.searchParams.getAll('accent')) === JSON.stringify(['#0000ff'])
+  && colourUndo.elements[0].url === shortened,
+  'U10 round 6: repeated colour refusal restores swatch and later edit keeps remote URL through undo')
+
 await probe.close()
 
 ok(errors.length === 0, `no page error (${errors.join(' | ')})`)
