@@ -316,6 +316,20 @@ jobs:
         # gap under the pointer, the drop bar, the arrows, the keyboard move.
         run: node scripts/test-beta-lighttable.ts
 
+      - name: Beta scene settings rig
+        # One module reads and writes a scene's settings (slides/src/beta/
+        # scenesettings.ts): the format hint grammar, held and refused values,
+        # presets, and a web scene's settings in its address's query string.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-beta-scenesettings.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-beta-scenesettings.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-scenesettings.mjs"
+
+      - name: Beta scene settings form (browser)
+        # The form in the packaged editor: the control each hint picks, one
+        # undo step per change, a held value said, a web scene's address.
+        run: node scripts/test-beta-scenesettings-browser.mjs
+
       - name: Beta scene library validates
         # beta/library/<scene>/ folders build into one manifest. --check writes
         # nothing and uploads nothing; the upload is the maintainer's, with the
