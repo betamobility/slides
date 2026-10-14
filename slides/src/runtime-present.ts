@@ -371,15 +371,18 @@ export function createRuntimeShow(
     // A frame mounted ahead of the show can be overtaken by a remote edit to
     // its slide (only the section SHOWING is rebuilt): what it was built from
     // is compared on every sync, and a stale frame is replaced.
-    const made = JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null])
+    // Asked on every sync, not only at mount: the offline switch or the network
+    // can change while a frame waits ahead of the show, and a frame the switch
+    // would refuse now must not be the one the show enters.
+    const allowed = !!source && frameAllowed(source, {
+      offline: offlineEnabled(),
+      online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    })
+    const made = allowed ? JSON.stringify([source, rt.steps, rt.props, rt.values ?? null, rt.assets ?? null]) : ''
     const old = frames.get(key)
     if (old && old.made !== made) { drop(old); failed.delete(key) }
     if (frames.has(key) || failed.has(key)) return
-    if (!source) return
-    if (!frameAllowed(source, {
-      offline: offlineEnabled(),
-      online: typeof navigator === 'undefined' || navigator.onLine !== false,
-    })) return
+    if (!allowed || !source) return
     const frame = blank(slide.name || slide.id)
     const steps = rt.steps
     const h: Omit<Held, 'fail'> = {
@@ -462,12 +465,6 @@ export function createRuntimeShow(
 
   /** Tell the scene on the slide showing that the show is on it. */
   const arrive = () => {
-    // The ten seconds count from when the audience looks, not from when a
-    // frame was mounted ahead of them: whatever on this slide is still
-    // covered gets its full time again.
-    if (currentId !== null) for (const f of frames.values()) {
-      if (f.slideId === currentId && f.frame.style.visibility === 'hidden') { clearTimeout(f.timer); f.timer = window.setTimeout(f.fail, LOAD_TIMEOUT_MS) }
-    }
     const h = scene()
     if (!h) return
     const sc = h.scene!
@@ -509,6 +506,13 @@ export function createRuntimeShow(
       // scene is told anything, or a scene mounted ahead of the show would
       // open on the entry step and then be corrected in front of the audience.
       if (named != null && slide && isRuntimeSlide(slide)) stepNow = clamp(slide.runtime!.steps, named)
+      // The ten seconds count from when the audience looks, not from when a
+      // frame was mounted ahead of them: whatever on this slide is still
+      // covered gets its full time again. Once per entry; a refresh of the
+      // slide showing must not keep a hung frame alive.
+      for (const f of frames.values()) {
+        if (f.slideId === key && f.frame.style.visibility === 'hidden') { clearTimeout(f.timer); f.timer = window.setTimeout(f.fail, LOAD_TIMEOUT_MS) }
+      }
       // walking onto a slide is one more try for a frame that gave up
       if (key !== null) for (const k of [...failed]) if (k.split(SEP)[0] === key) failed.delete(k)
     }

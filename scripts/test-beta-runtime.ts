@@ -830,6 +830,72 @@ console.log('\npresent: the frame owner')
       ok(!e1.isConnected, 'and is removed when that runs out')
       t.show.dispose()
     }
+    // Round 2: assertions written against the contract before running the
+    // implementation. Keep failures visible; this review changes no product code.
+    {
+      const t = build([embedSlide('deadline', 'hung')])
+      t.show.enter(0, true)
+      const f = t.framesOn(0)[0]
+      tick(6_000)
+      t.show.refresh(0) // same connected frame, not a new arrival
+      tick(4_001)
+      ok(!f.isConnected && t.framesOn(0).length === 0,
+        `U13 round2: refresh preserves the deadline of a hung embed (connected at 10001ms=${f.isConnected})`)
+      t.show.dispose()
+    }
+    {
+      const { setOffline } = await import('../kernel/src/net.ts')
+      setOffline(false)
+      const t = build([sceneSlide('online'), sceneSlide('premounted')])
+      try {
+        t.show.enter(0, true)
+        const f = t.framesOn(1)[0]
+        t.say(f, { type: 'bento:ready' })
+        // The switch can change in another tab while this show is open.
+        setOffline(true)
+        t.show.leave(0); t.show.enter(1, true)
+        ok(!f.isConnected && t.live().every((n) => n === 0)
+          && t.show.step() === null && t.types(f).length === 0,
+          `U13 round2: offline switch refuses an already pre-mounted scene on entry (frames=${t.live()}, messages=${t.types(f)}, step=${t.show.step()})`)
+      } finally { t.show.dispose(); setOffline(false) }
+    }
+    {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: true } })
+      const hosted = { ...sceneSlide('hosted'), runtime: { url: 'https://example.com/scene', steps: 2, props: [] } } as Slide
+      const t = build([sceneSlide('local'), hosted])
+      try {
+        t.show.enter(0, true)
+        const f = t.framesOn(1)[0]
+        f.fire('load')
+        Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { onLine: false } })
+        t.show.leave(0); t.show.enter(1, true)
+        ok(!f.isConnected && t.framesOn(1).length === 0 && t.show.step() === null,
+          `U13 round2: loss of network refuses a pre-mounted hosted scene on entry (connected=${f.isConnected}, step=${t.show.step()})`)
+      } finally {
+        t.show.dispose()
+        if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor)
+        else delete g.navigator
+      }
+    }
+    {
+      const t = build([sceneSlide('error-current'), sceneSlide('survivor')])
+      t.show.enter(0, true)
+      const f = t.framesOn(0)[0]
+      f.fire('error')
+      t.rebuild(0); t.show.rebuilt(() => 0)
+      await new Promise<void>((r) => queueMicrotask(r))
+      t.say(f, { type: 'bento:ready' }); t.say(f, { type: 'bento:navigate', dir: 'exit' })
+      const quiet = t.framesOn(0).length === 0 && t.show.step() === null
+        && !t.show.follow(0, 2) && !t.show.next() && !t.show.prev() && t.moved.length === 0
+      t.show.leave(0); t.show.enter(1, true)
+      t.show.leave(1); t.show.enter(0, true)
+      const fresh = t.framesOn(0)[0]
+      t.say(fresh, { type: 'bento:ready' })
+      ok(quiet && fresh !== f && t.types(fresh).join() === 'bento:init',
+        'U13 round2: rebuild after current-scene error stays failed until re-entry')
+      t.show.dispose()
+    }
   } else ok(false, 'createRuntimeShow is exported')
   g.window = saved.window; g.document = saved.document; g.CSS = saved.CSS
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
