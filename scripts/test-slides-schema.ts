@@ -647,5 +647,41 @@ console.log('\na runtime slide validates; a broken one does not\n')
     'round 7 actual library insert and save validate against advertised schema: ' + JSON.stringify(errs))
 }
 
+// BETA FORK: round 8, terminal line breaks must not evade the format rule.
+{
+  const rt = (file.$defs as any).slide.properties.runtime
+  const misses: string[] = []
+  for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+    const record = { props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'bool' + suffix }] }
+    const kept = checkRuntime(record)!
+    if (validate(rt, record, file).length === 0 || kept.props[0].format !== undefined || validate(rt, kept, file).length) misses.push(JSON.stringify(suffix))
+  }
+  const clean = { props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'bool' }] }
+  ok(!misses.length && validate(rt, clean, file).length === 0 && checkRuntime(clean)!.props[0].format === 'bool',
+    'round 8 terminal format line breaks fail schema and gate; clean hint passes; mismatches=' + misses.join(', '))
+}
+
+// BETA FORK: round 8, actual saved URLs at the gate's length limit, with
+// mixed-case schemes and opaque path/query characters (negative control first).
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const misses: string[] = []
+  for (const prefix of ['hTtP://example.test/', 'hTtPs://example.test/']) {
+    for (const tail of ['?q=%2F%3F%23#part', '/é/🚲?x=1&y=2']) {
+      const url = prefix + 'a'.repeat(2048 - prefix.length - tail.length) + tail
+      const el = { id: 'round8-url', type: 'embed', x: 0, y: 0, w: 800, h: 450, rotation: 0, opacity: 1,
+        app: 'web', live: true, url, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+      const invalid = { ...el, url: 'javascript:alert(1)' }
+      if (!validate((file.$defs as J).embed as J, invalid, file).length) misses.push('invalid scheme')
+      const kept = sanitizeElement(el)
+      const deck = starterDoc(); deck.slides[0].elements = kept ? [kept] : []
+      const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+      if (!kept || (kept as any).url !== url || check(saved, file).length) misses.push(prefix + tail)
+    }
+  }
+  ok(!misses.length, 'round 8 mixed-case embed URLs at the gate limit survive save/schema; bad scheme fails: ' + misses.join(', '))
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

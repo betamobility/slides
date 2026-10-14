@@ -448,6 +448,29 @@ export async function run(Miniflare) {
       }
       ok(good, 'round 7 schema matrix/dot/empty-segment routing never selects private data or permits writes')
     }
+    // Round 8: request rewrite headers and unusual percent escapes cannot
+    // turn the public schema prefix into an authenticated store route.
+    {
+      const misses = []
+      const headers = { 'x-original-url': '/api/decks', 'x-rewrite-url': '/api/decks',
+        'x-http-method-override': 'GET', 'cf-access-jwt-assertion': 'invalid' }
+      for (const [path, publicPath] of [
+        ['/SCHEMA/slides.json', false], ['/schema%00/slides.json', false],
+        ['/schema/../../../api/decks', false], ['/schema/%', true],
+        ['/schema/%00/api/decks', true], ['/schema/slides.json', true],
+      ]) for (const method of ['POST', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path, { headers })
+        const body = await response.text()
+        const allowed = publicPath && method !== 'POST'
+        if (response.status !== (allowed ? 200 : 401)
+          || proxied.length !== before + (allowed ? 1 : 0)
+          || ((!allowed || method === 'HEAD') && body !== '')
+          || (allowed && (new URL(proxied.at(-1).url).host !== PAGES_ORIGIN
+            || proxied.at(-1).method !== method))) misses.push(`${method} ${path}: ${response.status}`)
+      }
+      ok(!misses.length, 'round 8 schema rewrite headers, method override and percent escapes stay on the static origin: ' + misses.join(', '))
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

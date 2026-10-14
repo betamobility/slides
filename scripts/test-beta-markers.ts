@@ -128,18 +128,38 @@ export function markerLines(file: string, text: string): Set<number> {
       if (fences % 2 === 1) inString = !inString
     })
   } else if (['yml', 'yaml'].includes(ext)) {
-    let block = -1 // indent of the key that opened a block scalar, or -1
-    lines.forEach((l, i) => {
-      const indent = l.search(/\S/)
-      if (block >= 0) {
-        if (indent < 0 || indent > block) return // blank, or the scalar's content
-        block = -1
+    // Is a line string CONTENT rather than structure? Fail-closed, without
+    // parsing a block scalar's header (rounds 7 and 8 each found one more
+    // header form: `|2-`, then tags and anchors, `!!str &a |2-`). A line is
+    // content when any ANCESTOR (each earlier line with a smaller indent, up
+    // to column 0) has `|` or `>` in its value: whatever the header spells,
+    // a block scalar's text is indented under the line that opens it. A plain
+    // value with a `>` in it (`run: a > b`) is content-bearing too, and its
+    // deeper lines are its continuation, so treating them as content is right.
+    // The cost of the rule is a real marker refused in an odd layout, which
+    // CI reports; never a forgotten marker accepted.
+    const indentOf = (l: string) => l.search(/\S/)
+    const unquoted = (l: string) => l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
+    const opensText = (l: string) => {
+      const bare = unquoted(l).replace(/(^|\s)#.*$/, '')
+      // the value: after `- ` for a sequence item, then after the first `:` if there is one
+      const item = /^\s*-(?:\s+|$)(.*)$/.exec(bare)
+      const rest = item ? item[1] : bare
+      const value = rest.includes(':') ? rest.slice(rest.indexOf(':') + 1) : item ? rest : ''
+      return /[|>]/.test(value)
+    }
+    const isComment = (l: string) => /^\s*#/.test(l)
+    const insideText = (i: number) => {
+      let floor = indentOf(lines[i])
+      for (let j = i - 1; j >= 0 && floor > 0; j--) {
+        const ind = indentOf(lines[j])
+        if (ind < 0 || isComment(lines[j]) || ind >= floor) continue
+        if (opensText(lines[j])) return true
+        floor = ind
       }
-      if (hashComment(l)) out.add(i + 1)
-      // a block scalar's header: `|` or `>`, then the chomping sign and the indentation
-      // digit in EITHER order (YAML 1.2, 8.1.1: `|2-` and `|-2` are both valid)
-      if (/(?::|^\s*-)\s*[|>](?:[+-]?[1-9]?|[1-9][+-]?)\s*(?:#.*)?$/.test(l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) block = indent
-    })
+      return false
+    }
+    lines.forEach((l, i) => { if (hashComment(l) && !insideText(i)) out.add(i + 1) })
   }
   return out
 }
@@ -311,6 +331,25 @@ console.log('the rule itself (no git needed)')
     'round 7 YAML block-scalar positive control: an actual heading comment counts')
 }
 
+// Round 8: node properties may precede a YAML block scalar header. The
+// marker-looking line remains scalar DATA, with either indicator order.
+{
+  const file = '.github/workflows/ci.yml'
+  const misses: string[] = []
+  for (const property of ['!!str', '&caption', '!!str &caption', '&caption !!str']) {
+    for (const header of ['|2-', '|-2', '>2+', '>+2']) {
+      const lines = ['env:', `  CAPTION: ${property} ${header}`, '    # BETA FORK', '    literal data']
+      const diff = '@@ -0,0 +1,4 @@\n' + lines.map(l => '+' + l).join('\n') + '\n'
+      const hook = hooksOf(file, diff, lines)[0]
+      if (hook.marked || hook.file !== file || hook.line !== 1) misses.push(`${property} ${header}`)
+      // A real heading comment must still cover this hook.
+      const marked = ['# BETA FORK: real comment', ...lines]
+      if (!hooksOf(file, '@@ -0,0 +1,5 @@\n' + marked.map(l => '+' + l).join('\n') + '\n', marked)[0].marked) misses.push('positive control')
+    }
+  }
+  ok(misses.length === 0, `round 8 tagged/anchored block scalars cannot mark ${file}:1; falsely marked=${misses.join(', ')}`)
+}
+
 console.log('\nthe upstream this fork tracks')
 const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8')
 const tag = /Upstream base: `(v\d+\.\d+\.\d+)`/.exec(agents)?.[1]
@@ -348,6 +387,30 @@ if (tag) {
     ok(oldMarkers.length === 0, `no hook is still marked with the old spelling "Beta build"${oldMarkers.length ? ': ' + oldMarkers.slice(0, 5).map(([f, n]) => `${f}:${n}`).join(', ') : ''}`)
     for (const [r, why] of EXEMPT) console.log(`    exempt ${r}: ${why}`)
   }
+}
+
+// The YAML rule, swept (after Codex U3+U4 rounds 7 and 8): every header form
+// a block scalar can take, at three depths, with a marker-looking line inside
+// its text must leave a forgotten hook unmarked; a real heading comment beside
+// the same layouts must still count.
+{
+  const props = ['', '!!str ', '&a ', '!!str &a ', '&a !!str ', '!t ']
+  const indicators = ['|', '>', '|-', '|+', '>-', '>+', '|2', '>2', '|2-', '|-2', '>2+', '>+2', '| # c', '>- # c']
+  const missed: string[] = []
+  let negatives = 0, positives = 0
+  for (const p of props) for (const ind of indicators) for (const depth of [0, 1, 2]) {
+    const pad = '  '.repeat(depth)
+    const open = depth === 0 ? `CAPTION: ${p}${ind}` : `${pad}- key: ${p}${ind}`
+    const scalar = [...(depth ? ['env:'] : []), open, `${pad}    # BETA FORK`, `${pad}    text`, `${pad}      # BETA FORK`]
+    const hook = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${scalar.length} @@\n` + scalar.map((l) => '+' + l).join('\n') + '\n', scalar)
+    negatives++
+    if (hook.some((h) => h.marked)) missed.push(`${JSON.stringify(open)}`)
+    const real = ['# BETA FORK: a heading comment', ...scalar]
+    const ok2 = hooksOf('.github/workflows/ci.yml', `@@ -0,0 +1,${real.length} @@\n` + real.map((l) => '+' + l).join('\n') + '\n', real)
+    positives++
+    if (!ok2.every((h) => h.marked)) missed.push(`positive ${JSON.stringify(open)}`)
+  }
+  ok(missed.length === 0, `YAML sweep: ${negatives} block-scalar layouts never mark a hook from their text, and ${positives} real heading comments still do (${missed.slice(0, 4).join('; ') || 'none wrong'})`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
