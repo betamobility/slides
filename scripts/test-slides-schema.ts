@@ -580,5 +580,72 @@ console.log('\na runtime slide validates; a broken one does not\n')
   }
 }
 
+// BETA FORK: round 7, negative mutations precede generated valid/save cases.
+{
+  const rt = (file.$defs as any).slide.properties.runtime
+  const { isDeepStrictEqual } = await import('node:util')
+  const errors: string[] = []
+  for (let n = 0; n < 96; n++) {
+    const kind = (['text', 'number', 'color'] as const)[n % 3]
+    const value = kind === 'text' ? `Oslo ${n} 🚲` : kind === 'number' ? n / 7 : '#12ABef'
+    const record = { src: 'asset:scene', still: 'asset:still', steps: n,
+      url: Array.from('https', (c, i) => n & (1 << i) ? c.toUpperCase() : c).join('') + '://example.test/scene',
+      props: [{ key: 'setting', label: 'Setting', kind, default: value, format: n % 2 ? 'select:a|b' : '🚲'.repeat(200) }],
+      values: { setting: value }, library: { id: 'scene-' + n, version: n + 1 }, assets: ['scene.js'] }
+    const broken = structuredClone(record) as any
+    broken.library.version = 0
+    if (!validate(rt, broken, file).length || checkRuntime(broken)?.library) errors.push(`invalid library ${n}`)
+    const kept = checkRuntime(record)!
+    if (validate(rt, record, file).length || !isDeepStrictEqual(kept, record)) errors.push(`valid record ${n}`)
+    // A repaired input may fail schema validation, but the gate's actual output must pass.
+    const repaired = checkRuntime({ ...record, steps: '-7', src: 'javascript:bad',
+      props: [{ ...record.props[0], default: kind === 'number' ? '3.5' : kind === 'color' ? '  #12ABef  ' : false }] })!
+    if (validate(rt, repaired, file).length) errors.push(`repaired output ${n}`)
+    const deck = starterDoc(); deck.slides[0].runtime = kept
+    if (check(deck, file).length) errors.push(`deck ${n}`)
+    ;(deck.slides[0] as any).runtimeTypo = {}
+    if (!check(deck, file).some(e => e.includes('unknown key runtimeTypo'))) errors.push(`unknown slide key ${n}`)
+  }
+  ok(errors.length === 0, 'round 7 generated runtime/library/format records and repaired outputs validate; invalid library and slide keys fail: ' + errors.join(', '))
+}
+
+// BETA FORK: round 7 attacks the round 6 scheme-case fix exhaustively.
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const errors: string[] = []
+  for (const scheme of ['http', 'https']) for (let bits = 0; bits < 1 << scheme.length; bits++) {
+    const mixed = Array.from(scheme, (c, i) => bits & (1 << i) ? c.toUpperCase() : c).join('')
+    const url = mixed + '://example.test/scene?q=Oslo#view'
+    const el = { id: 'case-probe', type: 'embed', x: 0, y: 0, w: 800, h: 450,
+      rotation: 0, opacity: 1, app: 'web', url, live: true, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+    if (!validate((file.$defs as J).embed as J, { ...el, url: 'javascript:bad' }, file).length) errors.push('bad scheme accepted')
+    const kept = sanitizeElement(el)
+    const deck = starterDoc(); deck.slides[0].elements = kept ? [kept] : []
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+    if (!kept || (kept as any).url !== url || check(saved, file).length) errors.push(mixed)
+  }
+  ok(errors.length === 0, 'round 7 all 48 HTTP/HTTPS scheme casings survive gate/save/schema; invalid scheme fails: ' + errors.join(', '))
+}
+
+// BETA FORK: round 7, exercise the library writer used by U11 and U12.
+{
+  const { readManifest, runtimeSlideWith } = await import('../slides/src/beta/libraryread.ts')
+  const raw = { id: 'round-seven', version: 1, name: 'Round seven', kind: 'runtime', steps: 2,
+    props: [{ key: 'caption', label: 'Caption', kind: 'text', default: 'Oslo', format: 'select:Oslo|Bergen' }],
+    presets: [], html: '<main>Scene</main>', still: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>' }
+  ok(readManifest({ format: 'beta/library', v: 1, scenes: [{ ...raw, version: 0 }] })?.length === 0,
+    'round 7 library writer refuses invalid library version first')
+  const scene = readManifest({ format: 'beta/library', v: 1, scenes: [raw] })?.[0]
+  const deck = starterDoc()
+  const slide = scene && runtimeSlideWith(deck, scene, { caption: 'Bergen' })
+  if (slide) deck.slides.push(slide)
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const saved = JSON.parse(embeddedDocBlock(serializeFile(deck))!)
+  const errs = check(saved, file)
+  ok(!!slide && saved.slides.at(-1).runtime.library.id === raw.id && saved.$schema === file.$id && errs.length === 0,
+    'round 7 actual library insert and save validate against advertised schema: ' + JSON.stringify(errs))
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

@@ -421,6 +421,33 @@ export async function run(Miniflare) {
         `schema encoded delimiter stays within routing boundary: ${path}`)
       await response.text()
     }
+    // Round 7: dot-segment normalization with matrix parameters and empty segments.
+    // Refusal cases first; an encoded separator must remain a static-origin request.
+    {
+      const cases = [
+        ['/schema/..;/../../api/decks', false],
+        ['/schema//../../api/decks', false],
+        ['/schema/../schemaX/slides.json', false],
+        ['/schema/%2e./api/decks', false],
+        ['/schema/%2f..%2fapi%2fdecks', true],
+        ['/schema/slides.json', true],
+      ]
+      let good = true
+      for (const [path, publicRead] of cases) {
+        for (const method of ['DELETE', 'GET', 'HEAD']) {
+          const before = proxied.length
+          const response = await call(method, path)
+          const body = await response.text()
+          const allowed = publicRead && method !== 'DELETE'
+          good &&= response.status === (allowed ? 200 : 401)
+            && proxied.length === before + (allowed ? 1 : 0)
+            && (allowed || body === '')
+            && (method !== 'HEAD' || body === '')
+            && (!allowed || new URL(proxied.at(-1).url).host === PAGES_ORIGIN)
+        }
+      }
+      ok(good, 'round 7 schema matrix/dot/empty-segment routing never selects private data or permits writes')
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

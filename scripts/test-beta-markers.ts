@@ -136,7 +136,9 @@ export function markerLines(file: string, text: string): Set<number> {
         block = -1
       }
       if (hashComment(l)) out.add(i + 1)
-      if (/(?::|^\s*-)\s*[|>][+-]?\d*\s*(?:#.*)?$/.test(l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) block = indent
+      // a block scalar's header: `|` or `>`, then the chomping sign and the indentation
+      // digit in EITHER order (YAML 1.2, 8.1.1: `|2-` and `|-2` are both valid)
+      if (/(?::|^\s*-)\s*[|>](?:[+-]?[1-9]?|[1-9][+-]?)\s*(?:#.*)?$/.test(l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'))) block = indent
     })
   }
   return out
@@ -290,6 +292,23 @@ console.log('the rule itself (no git needed)')
     ok(h.file === file && h.line === 1 && h.marked === marked,
       `template interpolation: ${marked ? 'real comment passes' : 'forgotten marker names file and line'}`)
   }
+}
+
+// Round 7: both orders of YAML's indentation/chomping indicators are valid.
+// These are BLOCK scalars, not the deliberately unmodelled quoted/flow scalars.
+{
+  const file = '.github/workflows/ci.yml'
+  const missed: string[] = []
+  for (const header of ['|2-', '|2+', '>2-', '>2+', '|-2', '|+2', '>-2', '>+2']) {
+    const lines = ['env:', `  CAPTION: ${header}`, '    # BETA FORK', '    literal data']
+    const diff = `@@ -0,0 +1,4 @@\n${lines.map(l => '+' + l).join('\n')}\n`
+    const hook = hooksOf(file, diff, lines)[0]
+    if (hook.marked || hook.file !== file || hook.line !== 1) missed.push(header)
+  }
+  ok(missed.length === 0, `round 7 YAML block-scalar data cannot mark a forgotten hook at ${file}:1; falsely marked=${missed.join(',')}`)
+  const lines = ['# BETA FORK: actual YAML comment', 'env:', '  CAPTION: |2-', '    literal data']
+  ok(hooksOf(file, '@@ -0,0 +1,4 @@\n' + lines.map(l => '+' + l).join('\n') + '\n', lines)[0].marked,
+    'round 7 YAML block-scalar positive control: an actual heading comment counts')
 }
 
 console.log('\nthe upstream this fork tracks')
