@@ -93,7 +93,8 @@ console.log('\nthe still')
   ok(refused(files({ 'still.svg': SVG.replace('</svg>', '<!--' + 'x'.repeat(64 * 1024) + '--></svg>') }), 'beta/library/sample/still.svg', '64 KB'), 'a still over 64 KB fails the build naming the file')
   ok(refusal(files({ 'still.svg': SVG.replace('</svg>', '<!--' + 'x'.repeat(64 * 1024 - SVG.length - 7) + '--></svg>') })) === '', 'one at exactly 64 KB builds')
   ok(refused(files({ 'still.svg': undefined }), 'still.svg', 'missing'), 'a missing still fails naming the file')
-  ok(refused(files({ 'still.svg': '<html><svg/></html>' }), 'still.svg', 'not an SVG'), 'a still that is not an SVG document fails')
+  ok(refused(files({ 'still.svg': '<html><svg/></html>' }), 'still.svg', '<html>'), 'a still that is not an SVG document fails')
+  ok(refused(files({ 'still.svg': SVG.replace(' xmlns="http://www.w3.org/2000/svg"', '') }), 'still.svg', 'SVG namespace'), 'and so does an svg root outside the SVG namespace')
   for (const [bad, what] of [
     ['<script>alert(1)</' + 'script>', 'a script'], ['<foreignObject><p>x</p></foreignObject>', 'a foreignObject'],
     ['<rect onload="x()"/>', 'a handler'], ['<image href="https://example.com/x.png"/>', 'a remote image'], ['<a href="javascript:x()"><rect/></a>', 'a javascript link'],
@@ -190,6 +191,38 @@ console.log('\nround 2: boundary and XML regressions')
   ok(hostile.every((url) => refused(files({ 'index.html': undefined }, { kind: 'web', url }), 'scene.json') &&
     !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
     'round2: encoded authority delimiters, userinfo and HTTP on port 443 fail both build validators')
+}
+
+console.log('\nround 3: independent failing-first cases')
+{
+  // Real files and the CLI, not just the pure validator. Four-byte codepoints
+  // keep the JS string well below the cap while the inline bytes exceed it.
+  const dir = mkdtempSync(join(tmpdir(), 'beta-library-r3-budget-'))
+  mkdirSync(join(dir, 'sample'))
+  for (const [name, text] of Object.entries(files({ 'still.svg': SVG.replace('</svg>', '<text>' + '🗺'.repeat(16384) + '</text></svg>') }))) {
+    writeFileSync(join(dir, 'sample', name), text)
+  }
+  const checked = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  ok(checked.status === 1 && checked.stderr.includes('sample/still.svg') && checked.stderr.includes('64 KB'),
+    'round3: CLI rejects a four-byte UTF-8 still over budget and names its file')
+
+  const malformed = [
+    SVG.replace('width="16" height', 'width="16"height'),
+    SVG.replace('<rect ', '<rect/ '),
+    SVG.replace('</svg>', '<text>\u0001</text></svg>'),
+    SVG.replace('</svg>', '<!-- invalid -- comment --></svg>'),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>trailing',
+  ]
+  const accepted = malformed.filter((still) => !refused(files({ 'still.svg': still }), 'sample/still.svg'))
+  writeFileSync(join(dir, 'sample', 'still.svg'), malformed[0])
+  const lexicalCheck = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  ok(accepted.length === 0 && lexicalCheck.status === 1 && lexicalCheck.stderr.includes('sample/still.svg'),
+    `round3: XML lexical errors and text after a self-closing root fail naming the still (${accepted.length} accepted, CLI exit ${lexicalCheck.status})`)
+
+  const urls = ['https://slides。betamobility.ai.evil.test/x', 'https://%64esign.betamobility.ai.evil.test/x', 'http:\\design.betamobility.ai/x']
+  ok(urls.every((url) => refused(files({ 'index.html': undefined }, { kind: 'web', url }), new URL(url).hostname) &&
+    !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
+    'round3: Unicode dots, percent-encoded hostname and backslash HTTP fail naming the parsed host')
 }
 
 console.log('\na web scene')
@@ -312,13 +345,14 @@ console.log('\nfolders on disk, and the manifest as a whole')
 
   // a stand-in store: what does the upload send?
   const seen: { method?: string; url?: string; headers: Record<string, unknown>; body: string }[] = []
-  let answer = 200, echoSecret = false, echoEtag = false, redirectTo = ''
+  let answer = 200, echoSecret = false, echoEtag = false, quoteEtag = false, redirectTo = ''
   const server = createServer((req, res) => {
     let body = ''
     req.on('data', (c) => { body += c })
     req.on('end', () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body })
-      res.writeHead(answer, answer === 200 ? { etag: echoEtag ? String(req.headers['cf-access-client-secret']) : '"abc"' } : redirectTo ? { location: redirectTo } : {}); res.end(echoSecret ? String(req.headers['cf-access-client-secret']) : answer === 400 ? 'shape' : '')
+      const reflected = String(req.headers['cf-access-client-secret'])
+      res.writeHead(answer, answer === 200 ? { etag: echoEtag ? (quoteEtag ? JSON.stringify(reflected) : reflected) : '"abc"' } : redirectTo ? { location: redirectTo } : {}); res.end(echoSecret ? reflected : answer === 400 ? 'shape' : '')
     })
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -348,6 +382,24 @@ console.log('\nfolders on disk, and the manifest as a whole')
   u = await upload({ CF_ACCESS_CLIENT_SECRET: 'synthetic-round-two-secret-only-for-local-test' })
   ok(u.status === 0 && ![u.stdout, u.stderr].some((s) => s.includes('synthetic-round-two-secret-only-for-local-test')),
     'round2: a successful upload reflecting the secret in ETag never prints the credential')
+  // Fetch normalises header whitespace. Redaction must protect the actual
+  // wire token as well as the environment spelling (e.g. a file's final LF).
+  const wireSecret = 'r3' + 'a'.repeat(62)
+  quoteEtag = true
+  const sentBefore = seen.length
+  u = await upload({ CF_ACCESS_CLIENT_SECRET: wireSecret + '\n' })
+  const sentNormalised = seen.length > sentBefore && seen.at(-1)?.headers['cf-access-client-secret'] === wireSecret
+  const leaked = [u.stdout, u.stderr].some((s) => s.includes(wireSecret))
+  // Either outcome keeps the token in: refused before anything is sent (what the
+  // tool does now: a token with a line break was mangled on the way), or sent
+  // trimmed and redacted in that spelling too.
+  const refusedUnsent = u.status === 1 && seen.length === sentBefore && u.stderr.includes('nothing was uploaded')
+  ok(!leaked && (refusedUnsent || (sentNormalised && u.status === 0)),
+    `round3: ETag reflection cannot print the normalised wire token from a newline-terminated secret (exit ${u.status}, sent ${seen.length > sentBefore}, leaked ${leaked})`)
+  // and the redaction holds for the trimmed spelling even where a token is sent
+  u = await upload({ CF_ACCESS_CLIENT_SECRET: wireSecret })
+  ok(u.status === 0 && ![u.stdout, u.stderr].some((s) => s.includes(wireSecret)), 'a well-formed token reflected in the ETag is not printed either')
+  quoteEtag = false
   echoEtag = false
   echoSecret = false; answer = 307
   const destinationRequests: string[] = []

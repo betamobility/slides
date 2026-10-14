@@ -62,52 +62,140 @@ const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`
 const bytes = (s) => Buffer.byteLength(s, 'utf8')
 
-// A still is a PICTURE, and the check is an allowlist, not a search for known
-// tricks: the elements and attributes a drawing needs, and nothing that can
-// run, load or link. The manifest is stored as given, so what is refused here
-// is refused naming the file instead of being cleaned somewhere unseen.
+// A still is a PICTURE. The check reads it with a strict scanner for a small
+// subset of XML (elements, double- or single-quoted attributes separated by
+// whitespace, text, comments, one leading XML declaration) and then holds the
+// elements and attributes to an allowlist: what a drawing needs, and nothing
+// that can run, load or link. Anything outside the grammar is refused, so the
+// cost of a gap is a still that has to be re-saved, never one that passes
+// broken or active. The manifest is stored as given, so a still is refused
+// here, naming the file, instead of being cleaned somewhere unseen.
 const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
   'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
-const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/
-/** A numeric reference XML allows: no NUL, no control character but tab and newlines, no surrogate, nothing past U+10FFFF. */
-const xmlChar = (n) => n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n >= 0x10000 && n <= 0x10ffff)
-const badReference = (text) => /&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/.test(text)
-  || [...text.matchAll(/&#(\d{1,7});|&#x([0-9a-fA-F]{1,6});/g)].some(([, d, h]) => !xmlChar(d ? Number(d) : parseInt(h, 16)))
-/** An attribute value as the browser will read it: numeric references decoded, so an encoded "javascript:" is seen as one. */
-const decoded = (v) => v.replace(/&#(\d{1,7});|&#x([0-9a-fA-F]{1,6});/g, (_, d, h) => { const n = d ? Number(d) : parseInt(h, 16); return n <= 0x10ffff ? String.fromCodePoint(n) : '' })
+const SVG_NS = 'http://www.w3.org/2000/svg'
+/** A character XML 1.0 allows in a document, less the C1 controls (a picture has no use for them). */
+const xmlChar = (n) => n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0x7e) || (n >= 0xa0 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n >= 0x10000 && n <= 0x10ffff)
+const WS = /[ \t\n\r]/
+const NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*/
+
+/** Text or an attribute value as the browser reads it, or null when a reference in it is not one XML has. */
+function unescape(text) {
+  let out = ''
+  for (let i = 0; i < text.length;) {
+    const c = text.codePointAt(i)
+    if (!xmlChar(c)) return null
+    if (text[i] !== '&') { out += String.fromCodePoint(c); i += c > 0xffff ? 2 : 1; continue }
+    const m = /^&(?:(amp|lt|gt|quot|apos)|#(\d{1,7})|#x([0-9a-fA-F]{1,6}));/.exec(text.slice(i))
+    if (!m) return null
+    const n = m[1] ? '&<>"\''.codePointAt(['amp', 'lt', 'gt', 'quot', 'apos'].indexOf(m[1])) : m[2] ? Number(m[2]) : parseInt(m[3], 16)
+    if (!xmlChar(n)) return null
+    out += String.fromCodePoint(n)
+    i += m[0].length
+  }
+  return out
+}
+
+/** Read the still: its elements with their attributes, or the reason it does not parse. */
+function scanSvg(src) {
+  let i = 0
+  const elements = []
+  const fail = (why) => ({ error: `${why} (not well-formed)` })
+  const space = () => { while (i < src.length && WS.test(src[i])) i++ }
+  const comment = () => {
+    const end = src.indexOf('-->', i + 4)
+    if (end < 0) return false
+    const body = src.slice(i + 4, end)
+    if (body.includes('--') || body.endsWith('-') || unescape(body.replace(/&/g, '&amp;')) === null) return false
+    i = end + 3
+    return true
+  }
+  /** Whitespace and comments, where the document allows nothing else. */
+  const misc = () => {
+    for (;;) {
+      space()
+      if (!src.startsWith('<!--', i)) return true
+      if (!comment()) return false
+    }
+  }
+  if (src.startsWith('<?xml', i)) {
+    const end = src.indexOf('?>', i)
+    if (end < 0 || !/^<\?xml[ \t]+version=(["'])1\.[0-9]\1(?:[ \t]+encoding=(["'])UTF-8\2)?[ \t]*$/i.test(src.slice(i, end))) return fail('an XML declaration this check does not read')
+    i = end + 2
+  }
+  if (!misc()) return fail('a malformed comment')
+  if (src[i] !== '<') return fail('no root element')
+  const stack = []
+  for (;;) {
+    if (src.startsWith('</', i)) {
+      i += 2
+      const name = NAME.exec(src.slice(i))?.[0]
+      if (!name) return fail('a malformed closing tag')
+      i += name.length
+      space()
+      if (src[i] !== '>') return fail(`a malformed </${name}>`)
+      i++
+      if (stack.pop() !== name) return fail(`a </${name}> that closes nothing open`)
+    } else if (src.startsWith('<!--', i)) {
+      if (!comment()) return fail('a malformed comment')
+    } else if (src[i] === '<') {
+      if (!stack.length && elements.length) return fail('more than one root element')
+      i++
+      const name = NAME.exec(src.slice(i))?.[0]
+      if (!name) return fail('a malformed tag')
+      i += name.length
+      const attrs = new Map()
+      let selfClosing = false
+      for (;;) {
+        const before = i
+        space()
+        if (src.startsWith('/>', i)) { i += 2; selfClosing = true; break }
+        if (src[i] === '>') { i++; break }
+        if (i === before) return fail(`attributes on <${name}> not separated by whitespace`)
+        const key = NAME.exec(src.slice(i))?.[0]
+        if (!key) return fail(`a malformed attribute on <${name}>`)
+        i += key.length
+        space()
+        if (src[i] !== '=') return fail(`${key} without a value on <${name}>`)
+        i++
+        space()
+        const q = src[i]
+        if (q !== '"' && q !== "'") return fail(`an unquoted ${key} on <${name}>`)
+        const end = src.indexOf(q, i + 1)
+        if (end < 0) return fail(`an unclosed ${key} on <${name}>`)
+        const raw = src.slice(i + 1, end)
+        const value = raw.includes('<') ? null : unescape(raw)
+        if (value === null) return fail(`a character or reference XML does not allow in ${key}`)
+        if (attrs.has(key)) return fail(`${key} written twice on one <${name}>`)
+        attrs.set(key, value)
+        i = end + 1
+      }
+      elements.push({ name, attrs, root: !stack.length })
+      if (!selfClosing) stack.push(name)
+    } else if (i >= src.length) {
+      return stack.length ? fail(`a <${stack[stack.length - 1]}> never closed`) : fail('no root element')
+    } else {
+      const end = src.indexOf('<', i)
+      const text = src.slice(i, end < 0 ? src.length : end)
+      if (unescape(text) === null || text.includes('>')) return fail('text with a character or reference XML does not allow')
+      i += text.length
+    }
+    if (!stack.length) {
+      // the root is closed: only whitespace and comments may follow
+      if (!misc()) return fail('a malformed comment')
+      if (i < src.length) return fail('content after the root element')
+      return { elements }
+    }
+  }
+}
 
 /** Why this SVG is not a plain picture, or null when it is one. */
 export function activeSvg(svg) {
-  // comments carry nothing; an XML declaration may lead the file
-  const body = svg.replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*<\?xml[^>]*\?>/i, '')
-  if (/<!|<\?/.test(body)) return 'a doctype, CDATA or processing instruction'
-  const tag = /<(\/?)([^\s<>/]*)((?:"[^"]*"|'[^']*'|[^<>"'])*)>/g
-  let m, rest = body
-  // well-formed too: a picture the browser cannot parse is not drawn at all
-  const open = []
-  let roots = 0
-  while ((m = tag.exec(body))) {
-    const [, close, name, attrs] = m
-    if (!SVG_ELEMENTS.has(name)) return `a <${name || '?'}> element`
-    if (close) {
-      if (attrs.trim()) return `a malformed </${name}> tag`
-      if (open.pop() !== name) return `a </${name}> that closes nothing open (not well-formed)`
-      continue
-    }
-    if (!open.length && ++roots > 1) return 'more than one root element (not well-formed)'
-    if (!open.length && name !== 'svg') return `a <${name}> outside the <svg> element`
-    if (!open.length && !/(?:^|\s)xmlns\s*=\s*(["'])http:\/\/www\.w3\.org\/2000\/svg\1/.test(attrs)) return 'a root <svg> that is not in the SVG namespace'
-    if (!/\/\s*$/.test(attrs)) open.push(name)
-    const attr = /([^\s=/"']+)\s*=\s*("[^"]*"|'[^']*')/g
-    const seen = new Set()
-    let a, left = attrs
-    while ((a = attr.exec(attrs))) {
-      const key = a[1], raw = a[2].slice(1, -1)
-      if (seen.has(key)) return `${key} written twice on one <${name}> (not well-formed)`
-      seen.add(key)
-      if (SVG_ENTITY.test(raw) || badReference(raw)) return `an encoded value in ${key}`
-      const value = decoded(raw)
-      left = left.replace(a[0], '')
+  const read = scanSvg(svg)
+  if (read.error) return read.error
+  for (const { name, attrs, root } of read.elements) {
+    if (!SVG_ELEMENTS.has(name)) return `a <${name}> element`
+    if (root && (name !== 'svg' || attrs.get('xmlns') !== SVG_NS)) return 'a root that is not an <svg> in the SVG namespace'
+    for (const [key, value] of attrs) {
       if (/^on/i.test(key)) return `an ${key} handler attribute`
       if (key === 'style') return 'a style attribute (use presentation attributes)'
       if (key.includes(':') && key !== 'xmlns:xlink' && key !== 'xml:space') return `a ${key} attribute`
@@ -115,15 +203,7 @@ export function activeSvg(svg) {
       if (/url\s*\(/i.test(value) && !/^url\(#[\w.-]+\)$/.test(value.trim())) return `a url() in ${key} that leaves the file`
       if (/javascript:|data:|https?:|^\s*\/\//i.test(value) && key !== 'xmlns' && key !== 'xmlns:xlink') return `a link out of the file in ${key}`
     }
-    if (left.replace(/\//g, '').trim()) return `an attribute without a quoted value on <${name}>`
   }
-  if (open.length) return `a <${open[open.length - 1]}> never closed (not well-formed)`
-  // nothing after the root closes; text inside it uses only the references XML has
-  const end = body.lastIndexOf('</svg>')
-  if (end >= 0 && body.slice(end + 6).trim()) return 'content after the closing </svg> (not well-formed)'
-  rest = body.replace(tag, '')
-  if (/[<>]/.test(rest)) return 'markup that does not parse as tags'
-  if (badReference(rest)) return 'a bare "&" or a character reference XML does not allow (not well-formed)'
   return null
 }
 
@@ -184,7 +264,6 @@ export function validateScene(id, files) {
   const still = files['still.svg']
   if (typeof still !== 'string') fail('still.svg', 'is missing')
   if (bytes(still) > STILL_BUDGET) fail('still.svg', `is ${kb(bytes(still))}, over the ${STILL_BUDGET / 1024} KB a library still may be`)
-  if (!/^\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(still)) fail('still.svg', 'is not an SVG document')
   const active = activeSvg(still)
   if (active) fail('still.svg', `carries ${active}; a still is a picture`)
 

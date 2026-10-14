@@ -2065,6 +2065,35 @@ export async function run(Miniflare) {
         ok(conditionalSafe, 'round2: weak ETag lists revalidate only for each route’s authorized readers')
       }
 
+      // Round 3: lifetime checks precede cache validation; parser spellings
+      // are checked at the HTTP boundary too, without any outbound fetch.
+      {
+        let gated = true
+        for (const token of [deadGrant.token, expiredGrant.token]) {
+          for (const validator of ['*', etag]) {
+            r = await call('GET', '/api/publish/library.json?round=3', { headers: asGrant(token, { 'if-none-match': validator }) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        ok(gated, 'round3: expired and revoked grants cannot read or revalidate the manifest')
+        let hostsSafe = true
+        for (const url of ['https://slides。betamobility.ai.evil.test/x', 'https://%64esign.betamobility.ai.evil.test/x', 'http:\\design.betamobility.ai/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400) hostsSafe = false
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(hostsSafe && await r.text() === lib,
+          'round3: worker rejects Unicode dots, encoded hostname and backslash HTTP without replacing the manifest')
+        let identitiesSafe = true
+        const expiredIdentity = await sign(k1, 'k1', human('alice@betamobility.io', { exp: now() - 10 }))
+        for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'], ['PUT', '/api/harness/library.json']]) {
+          r = await call(method, path, { as: expiredIdentity, headers: { ...J, 'if-none-match': '*' }, ...(method === 'PUT' ? { body: lib } : {}) })
+          if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) identitiesSafe = false
+        }
+        ok(identitiesSafe, 'round3: an expired Access identity cannot upload, read or revalidate through either Access route')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })

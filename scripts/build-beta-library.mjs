@@ -68,12 +68,20 @@ if (flag('--upload')) {
   const { CF_ACCESS_CLIENT_ID: id, CF_ACCESS_CLIENT_SECRET: secret } = process.env
   // Belt and braces: whatever this command prints from here on, the token is
   // taken out of it, wherever it came from.
+  // (Both as written and as sent: fetch trims a header value, so a token with
+  // a stray newline would go out shorter than the variable that holds it.)
+  const hide = [secret, secret?.trim(), id, id?.trim()].filter((v) => v && v.length >= 4)
   for (const stream of [process.stdout, process.stderr]) {
     const write = stream.write.bind(stream)
-    stream.write = (chunk, ...rest) => write(String(chunk).split(secret || '\u0000').join('[redacted]').split(id || '\u0000').join('[redacted]'), ...rest)
+    stream.write = (chunk, ...rest) => write(hide.reduce((out, v) => out.split(v).join('[redacted]'), String(chunk)), ...rest)
   }
   if (!id || !secret) {
     console.error('build-beta-library: --upload needs the store\'s service token in CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET; nothing was uploaded')
+    process.exit(1)
+  }
+  // a token is printable ASCII with no space in it; anything else was mangled on the way here
+  if (!/^[\x21-\x7e]+$/.test(id) || !/^[\x21-\x7e]+$/.test(secret)) {
+    console.error('build-beta-library: CF_ACCESS_CLIENT_ID or CF_ACCESS_CLIENT_SECRET has a space, a line break or a character a token never has; nothing was uploaded')
     process.exit(1)
   }
   const store = (process.env.SLIDES_STORE_URL || 'https://slides.betamobility.ai').replace(/\/+$/, '')
