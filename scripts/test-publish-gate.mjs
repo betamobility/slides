@@ -24,7 +24,7 @@
 // without a guestbook deck would be blocked.
 
 import { plannedDeletions, groupDeletions, walk, supersededPacks } from './site-inventory.mjs'
-import { embeddedShellDecks, staleEmbeddedDecks } from './lib/beta-shell-payload.mjs'
+import { embeddedShellDecks, staleEmbeddedDecks } from './lib/beta-shell-payload.mjs' // BETA FORK
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'

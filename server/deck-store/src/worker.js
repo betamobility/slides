@@ -157,7 +157,11 @@ const RELAY_HOST = 'sync.betamobility.ai'
 //
 // The match is a PREFIX BOUNDARY, not a substring: `/releases-secret` is
 // gated. Reads only: a write to an allowlisted path is not a pass-through.
-const PUBLIC_PREFIXES = ['/releases/', '/templates/', '/skills/', '/logo/']
+// `/schema/` (upstream-merge plan U3): the document schema every saved deck
+// names in its `$schema` key. An agent validating a deck has no login, so the
+// schema has to answer without one. A PREFIX, entered in Access with its
+// trailing slash, because the version-pinned twins live beside slides.json.
+const PUBLIC_PREFIXES = ['/releases/', '/templates/', '/skills/', '/logo/', '/schema/']
 // NOT here, though the plan's KTD0 listed it: /404.html. An unknown path is
 // gated before it ever reaches Pages, so Pages' 404 page is never served to
 // an anonymous visitor and nothing fetches it by name. Listing it bought

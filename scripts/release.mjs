@@ -35,11 +35,11 @@
 // rebuild producing different bytes than what was signed.)
 
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs' // BETA FORK
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gateShell } from './shell-gate.mjs'
-import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs'
+import { APPS, RELEASE_MARKER, SITE, tagFor } from './apps.mjs' // BETA FORK
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const args = process.argv.slice(2)
@@ -294,7 +294,7 @@ const signArgs = [
   join(site, `releases/${app.dir}/${app.shell}`),
   '--app', app.appId,
   '--version', version,
-  '--url', `${SITE.origin}/releases/${app.dir}/${app.shell}`,
+  '--url', `${SITE.origin}/releases/${app.dir}/${app.shell}`, // BETA FORK
   '--out', join(site, `releases/${app.dir}/manifest.json`),
 ]
 if (notes) signArgs.push('--notes', notes)
@@ -339,7 +339,7 @@ if (app.packs) {
   console.log(`packs: ${app.appId} has no signed pack channel yet — skipped`)
 }
 
-writeFileSync(join(site, 'CNAME'), `${SITE.host}\n`)
+writeFileSync(join(site, 'CNAME'), `${SITE.host}\n`) // BETA FORK
 // The site is fully pre-built static — disable Jekyll so every file is served
 // verbatim. Without this, GitHub Pages' Jekyll processes .md files that carry
 // YAML front matter (e.g. skills/*/SKILL.md) into .html, 404-ing the .md URL.
@@ -371,7 +371,7 @@ if (app.ownsSiteContent) {
   for (const f of ['robots.txt', 'sitemap.xml']) cpSync(join(root, `site-src/${f}`), join(site, f))
 
   cpSync(join(site, `${app.dir}/agents.md`), join(site, 'agents.md'))
-  // The skill is published for `/plugin marketplace add`-less installs: a zip
+  // BETA FORK: The skill is published for `/plugin marketplace add`-less installs: a zip
   // people upload to claude.ai. Beta's plugin (plugins/beta-slides) replaces
   // upstream's here once U7 lands; until then upstream's skill is what ships.
   const skillSrc = [
@@ -383,9 +383,19 @@ if (app.ownsSiteContent) {
   execFileSync('zip', ['-q', '-X', '-o', 'beta-slides.zip', 'beta-slides/SKILL.md'], { cwd: join(site, 'skills') })
 
   cpSync(join(root, 'LICENSE'), join(site, 'LICENSE'))
-  cpSync(join(root, 'site-src/404.html'), join(site, '404.html'))
+  cpSync(join(root, 'site-src/404.html'), join(site, '404.html')) // BETA FORK: the page only; upstream's 404 deck is not built
 
-  // Beta starter decks (plan U4), at the URLs the beta-slides skill names.
+  // BETA FORK: /schema/slides.json and its version-pinned twin, at the URL every saved
+  // Beta deck names in its `$schema` key (slides/src/schema.ts SCHEMA_URL).
+  // Generated from the gate's tables (scripts/build-schema.mjs, pinned by CI).
+  // Only Beta's own files: the upstream twins in schema/ carry bento.page ids.
+  mkdirSync(join(site, 'schema'), { recursive: true })
+  for (const f of readdirSync(join(root, 'schema')).filter((f) => f.endsWith('.json'))) {
+    // BETA FORK: Beta's ids only
+    if (JSON.parse(readFileSync(join(root, 'schema', f), 'utf8')).$id?.startsWith('https://slides.betamobility.ai/')) cpSync(join(root, 'schema', f), join(site, 'schema', f))
+  }
+
+  // BETA FORK: Beta starter decks (plan U4), at the URLs the beta-slides skill names.
   // They embed the shell this release built (build-beta-templates.mjs reads
   // slides/dist-single), so they and the release always share a runtime.
   execFileSync('node', [join(root, 'scripts/build-beta-templates.mjs'), '--shell', shellSrc, '--out', join(site, 'templates')], { stdio: 'inherit' })

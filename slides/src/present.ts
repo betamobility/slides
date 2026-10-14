@@ -211,7 +211,7 @@ export function startPresentation(
     }
   }
   const hasNext = () => {
-    if (runtimeShow.canNext()) return true
+    if (runtimeShow.canNext()) return true // BETA FORK
     if (steps.hasNext()) return true
     const cur = deck.getIndices().h
     for (let i = (isState(cur) ? anchorOf(cur) : cur) + 1; i < doc.slides.length; i++) {
@@ -220,7 +220,7 @@ export function startPresentation(
     return false
   }
   const hasPrev = () => {
-    if (runtimeShow.canPrev()) return true
+    if (runtimeShow.canPrev()) return true // BETA FORK
     if (steps.hasPrev()) return true
     const cur = deck.getIndices().h
     if (isState(cur)) return true // right-swipe returns to the parent slide
@@ -928,7 +928,7 @@ export function startPresentation(
     reduceMotion = on
     if (persist) lsSet('bento-reduce-motion', on ? 'on' : 'off')
     overlay.classList.toggle('reduce-motion', on)
-    runtimeShow.setReduceMotion(on)
+    runtimeShow.setReduceMotion(on) // BETA FORK
     if (on) clearLaserTrail()
     // Toast only on an explicit toggle (M / speaker button), not the silent
     // OS-preference follow or the initial state.
@@ -1204,7 +1204,7 @@ export function startPresentation(
     // show if the deck was edited in between — never carry them across
     symCache.clear()
     pauseMediaIn(slidesEl) // stop any playing clip before teardown
-    runtimeShow.dispose()
+    runtimeShow.dispose() // BETA FORK
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     const last = deck.getIndices().h
     try {
@@ -1368,7 +1368,7 @@ export function startPresentation(
     if (from) disposeLiveCharts(doc.slides[fromIdx], from)
     mountLiveCharts(doc.slides[toIdx], to, morphing ? doc.slides[fromIdx] : undefined)
     if (from) pauseMediaIn(from)
-    if (from) runtimeShow.leave(fromIdx)
+    if (from) runtimeShow.leave(fromIdx) // BETA FORK
     startMediaIn(to)
     runtimeShow.enter(toIdx, forward, followed) // BETA FORK: a step the presenter named is the one the scene opens on
     if (followed !== null) runtimeShow.follow(toIdx, followed) // BETA FORK: the presenter named the scene's step
