@@ -35,7 +35,7 @@ const xml=execFileSync('unzip',['-p',file,'ppt/slides/slide1.xml'],{encoding:'ut
 assert.ok(!report.some(r=>['image-remote','unknown:svg'].includes(r.reason)))
 writeFileSync(join(tmpdir(),'beta-general-export-report.json'),JSON.stringify(report,null,2))
 console.log('PASS: 35 layouts, fit, logo geometry, no eyebrows, native validation, editable 35-slide PPTX. '+file)
-assert.ok(findings.filter((f:any)=>f.severity==='warning').every((f:any)=>f.code==='unknown-key'&&f.path==='beta')); console.log('Only informational fixed-canvas margin notes and the documented beta provenance key remain.')
+assert.equal(findings.filter((f:any)=>f.severity==='warning').length, 0); console.log('Only informational fixed-canvas margin notes remain; the beta provenance key is part of the format.')
 
 assert.deepEqual(doc.fonts.filter((f:any)=>f.family==='Geist').map((f:any)=>f.weight),['300','400','500','600','700']);
 assert.ok(doc.fonts.some((f:any)=>f.family==='DM Mono'));

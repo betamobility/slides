@@ -319,5 +319,48 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ok(check(7 as unknown, rt).length > 0, 'runtime: 7 is refused by the schema, as the gate drops it')
 }
 
+
+// BETA FORK, from break round 5: real save output, not a hand-built fixture.
+{
+  const { serializeFile, capturePristine, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const { sanitizeDoc, guardOpenedDoc } = await import('../slides/src/restoregate.ts')
+  const { betaStarterDoc } = await import('../slides/src/betastarter.ts')
+  class SchemaShell {
+    block = { textContent: '' }
+    title = { textContent: '' }
+    cloneNode() { return new SchemaShell() }
+    querySelectorAll(s: string) { return s === 'script' ? [this.block] : [] }
+    getElementById(id: string) { return id === 'bento-doc' ? this.block : null }
+    querySelector(s: string) { return s === 'title' ? this.title : null }
+    get documentElement() { return { outerHTML: `<html><head><title>${this.title.textContent}</title></head><body><script id="bento-doc">${this.block.textContent}</script></body></html>` } }
+  }
+  const { configureApp } = await import('../kernel/src/app.ts')
+  configureApp({ appId: 'beta-slides', appName: 'beta/slides', manifestUrl: 'https://invalid.example/manifest' })
+  const priorDocument = globalThis.document
+  ;(globalThis as any).document = new SchemaShell()
+  capturePristine()
+  const inputs: Array<[string, any]> = [['starterDoc', starterDoc()], ['betaStarterDoc', betaStarterDoc()]]
+  for (const name of readdirSync(join(root, 'beta/templates')).filter(n => n.endsWith('.bento.html'))) {
+    inputs.push([name, parseDoc(embeddedDocBlock(read(`beta/templates/${name}`))!)])
+  }
+  const runtime = starterDoc()
+  runtime.slides[0].runtime = { steps: 2, props: [{ key: 'caption', label: 'Caption', kind: 'text', default: 'Oslo' }], values: { caption: 'Bergen' } }
+  inputs.push(['runtime deck', runtime])
+  for (const [name, input] of inputs) {
+    guardOpenedDoc(input) // main.ts's actual file-open guard precedes saving
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(input))!)
+    const errs = check(saved, file)
+    const parsed = parseDoc(JSON.stringify(saved))!
+    const gated = sanitizeDoc(parsed as unknown as J)
+    ok(saved.$schema === file.$id && errs.length === 0 && !!gated && gated.dropped.length === 0,
+      `saved ${name}: advertised schema accepts actual save output and reload drops nothing; errors=${JSON.stringify(errs.slice(0, 8))}; dropped=${JSON.stringify(gated?.dropped.slice(0, 8))}`)
+    // Failing-first control: changing a slide key must make these exact saved bytes fail.
+    saved.slides[0].runtim = {}
+    ok(check(saved, file).some(e => e.includes('unknown key runtim')),
+      `saved ${name}: unknown slide key fails with its name`)
+  }
+  ;(globalThis as any).document = priorDocument
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

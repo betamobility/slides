@@ -254,6 +254,29 @@ console.log('the rule itself (no git needed)')
     'a real CSS comment still marks the hook')
 }
 
+
+// break round 5: the forgotten-marker path with actual -U0 output, including a
+// preceding unrelated marked hook outside NEAR. No checkout or git refs change.
+{
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { spawnSync } = await import('node:child_process')
+  const fixture = mkdtempSync(join(tmpdir(), 'beta-marker-round5-'))
+  try {
+    const before = '// BETA FORK: existing feature\nconst a = 1\nconst b = 2\nconst c = 3\nconst d = 4\n'
+    writeFileSync(join(fixture, 'before.ts'), before)
+    for (const marked of [false, true]) {
+      const after = before + (marked ? '// BETA FORK: new independent feature\n' : '') + 'enableNewFeature()\n'
+      writeFileSync(join(fixture, 'after.ts'), after)
+      const diff = spawnSync('git', ['diff', '--no-index', '-U0', join(fixture, 'before.ts'), join(fixture, 'after.ts')], { encoding: 'utf8' })
+      const hooks = hooksOf('slides/src/editor/editor.ts', diff.stdout, after.split('\n'))
+      ok(diff.status === 1 && hooks.length === 1 && hooks[0].file === 'slides/src/editor/editor.ts'
+        && hooks[0].line === 6 && hooks[0].marked === marked,
+      `actual git diff: ${marked ? 'marked hook passes' : 'forgotten marker fails at slides/src/editor/editor.ts:6'}`)
+    }
+  } finally { rmSync(fixture, { recursive: true, force: true }) }
+}
+
 console.log('\nthe upstream this fork tracks')
 const agents = readFileSync(join(root, 'AGENTS.md'), 'utf8')
 const tag = /Upstream base: `(v\d+\.\d+\.\d+)`/.exec(agents)?.[1]

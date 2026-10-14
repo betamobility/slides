@@ -108,12 +108,12 @@ for (const name of ['blank', 'client-pitch', 'insight-brief', 'workshop']) {
   type F = { code: string; severity: string; message: string; path?: string; slide?: string; element?: string }
   const findings = res.findings as F[]
   const errors = findings.filter((f) => f.severity === 'error')
-  const tolerated = (f: F) => f.code === 'unknown-key' && f.path === 'beta' && !f.slide
-  const warnings = findings.filter((f) => f.severity === 'warning' && !tolerated(f))
+  const warnings = findings.filter((f) => f.severity === 'warning')
   const show = (fs: F[]) => fs.map((f) => `${f.code}@${f.slide ?? '-'}/${f.element ?? '-'}/${f.path ?? '-'}: ${f.message}`).join('\n          ')
   ok(errors.length === 0, `${name}: validate() reports no errors${errors.length ? '\n          ' + show(errors) : ''}`)
-  ok(warnings.length === 0, `${name}: no warnings except unknown-key on beta${warnings.length ? '\n          ' + show(warnings) : ''}`)
-  ok(findings.some(tolerated), `${name}: the beta provenance key is reported as the one tolerated unknown key`)
+  // the beta provenance key is in the format now (model.ts BentoDoc.beta), so it is no longer a tolerated unknown key
+  ok(warnings.length === 0, `${name}: no warnings at all${warnings.length ? '\n          ' + show(warnings) : ''}`)
+  ok(!!(doc as { beta?: { designSystem?: string } }).beta?.designSystem, `${name}: carries the beta provenance stamp`)
   ok(!res.findings.some((f: { code: string }) => f.code === 'font-not-embedded'), `${name}: every face is embedded`)
   ok(doc.slides.every((s) => s.elements.every((e) => e.type !== 'text' || ((e as { role?: string }).role ?? '') !== '')), `${name}: every text element on every slide carries a role`)
   ok(doc.slides.some((s) => s.elements.some((e) => e.type === 'text' && /\{\{company\}\}/.test((e as { html: string }).html))), `${name}: footers or bylines use {{company}}`)

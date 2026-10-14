@@ -558,6 +558,18 @@ export interface BentoDoc {
     event?: string
     keywords?: string
   }
+  /**
+   * BETA FORK: which Beta design system a template was built from, stamped by
+   * scripts/build-beta-templates.mjs from beta/theme.json. Provenance only:
+   * nothing reads it at run time. It is in the format so the gate keeps it and
+   * the published schema accepts the decks that carry it.
+   */
+  beta?: {
+    designSystem?: string
+    tokens?: string
+    /** the template build a deck started from (the general template stamps one) */
+    template?: string
+  }
   /** slide coordinate space, px */
   size: { width: number; height: number }
   theme: {

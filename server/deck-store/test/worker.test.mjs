@@ -385,6 +385,28 @@ export async function run(Miniflare) {
       }
       schemaStatus = 200
     }
+
+    // break round 5: schema failure responses on HEAD, and query strings cannot
+    // redirect this anonymous route into the private deck API.
+    {
+      for (const originStatus of [404, 503]) {
+        schemaStatus = originStatus
+        const before = proxied.length
+        const response = await call('HEAD', '/schema/slides.json')
+        ok(response.status === (originStatus === 404 ? 404 : 502)
+          && (await response.text()) === '' && proxied.length === before + 1,
+          `schema HEAD outage fails closed without a body (${originStatus})`)
+      }
+      schemaStatus = 200
+      const query = '?path=/api/decks&redirect=https%3A%2F%2Fevil.example%2F&token=opaque'
+      const before = proxied.length
+      const response = await call('GET', '/schema/slides.json' + query)
+      ok(response.status === 200
+        && (await response.text()) === readFileSync(join(repoRoot, 'schema/slides.json'), 'utf8')
+        && proxied.length === before + 1
+        && proxied.at(-1).url === `https://${PAGES_ORIGIN}/schema/slides.json${query}`,
+        'schema query never selects a private route or another origin')
+    }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')
     eq(r.headers.get('cache-control'), 'public, max-age=300', 'the upstream cache-control survives the proxy')

@@ -97,6 +97,8 @@ export function buildSchema(version: string): JsonSchema {
     docId: str(LIMITS.scalar, 'runtime-minted uuid; omit'),
     title: str(LIMITS.prose),
     meta: obj(MODEL_KEYS.meta, Object.fromEntries(MODEL_KEYS.meta.map((k) => [k, str(LIMITS.prose)]))),
+    // BETA FORK: the design-system stamp Beta's templates carry (model.ts BentoDoc.beta)
+    beta: { type: 'object', additionalProperties: false, description: 'Beta build: which design system the template was built from; provenance, never read at run time', properties: { designSystem: str(LIMITS.scalar), tokens: str(LIMITS.scalar), template: str(LIMITS.scalar) } },
     size: obj(MODEL_KEYS.size, { width: { type: 'number', minimum: 1, maximum: 1e5 }, height: { type: 'number', minimum: 1, maximum: 1e5 } }, ['width', 'height']),
     theme: { $ref: '#/$defs/theme' },
     present: obj(MODEL_KEYS.present, {

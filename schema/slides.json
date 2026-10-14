@@ -2351,6 +2351,25 @@
           },
           "description": "key → data: URI or svg, used as asset:<key>"
         },
+        "beta": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Beta build: which design system the template was built from; provenance, never read at run time",
+          "properties": {
+            "designSystem": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "tokens": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "template": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        },
         "blobs": {
           "type": "object",
           "description": "runtime-written"
