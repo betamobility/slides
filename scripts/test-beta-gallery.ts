@@ -519,5 +519,114 @@ console.log('\nRESERVED_KEYS is what the sync engine refuses')
   ok(!['place', 'zoom', 'label'].some((k) => RESERVED_KEYS.includes(k)), 'ordinary setting names are not reserved')
 }
 
+
+console.log('\nU11 independent round 4: insertion boundaries and receiver state')
+{
+  // Test the raw HTML limit through the actual builder, reader and insert.
+  // Base64 padding must not turn an at-limit page into an oversized one.
+  const raw = clone(manifest).scenes[0]
+  const { id, html: _html, still, stillType: _type, ...metadata } = raw
+  const head = '<!doctype html><!-- bento:init bento:ready -->'
+  const lost: string[] = []
+  // The fix keeps the shell's gate as every shipped shell has it (it counts
+  // base64 padding, R18) and makes the library measure pages the same way
+  // (libraryrules.ts pageTooLarge). So 262144 bytes is refused at the build,
+  // naming the file, and never reaches a shelf; below it, pages insert whole.
+  for (const length of [262142, 262143]) {
+    const html = head + ' '.repeat(length - head.length)
+    const built = validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': html, 'still.svg': still })
+    const scene = g.readManifest(withScenes(built))![0]
+    const store = new Store(deck())
+    const refusal = scene ? g.insertScene(store, scene, scene.presets[0]) : 'not admitted'
+    if (refusal || runtimeSource(store.slide, store.doc)?.html !== html) lost.push(`${length} bytes: ${refusal}`)
+  }
+  ok(lost.length === 0, `R4 runtime HTML up to the gate's measure inserts without padding inflation: ${lost.join('; ')}`)
+  const atCap = head + ' '.repeat(262144 - head.length)
+  let buildRefusal = ''
+  try { validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': atCap, 'still.svg': still }) } catch (e) { buildRefusal = (e as Error).message }
+  ok(buildRefusal.includes('index.html') && g.readManifest(withScenes({ id, ...metadata, html: atCap, still, stillType: 'image/svg+xml' }))!.length === 0,
+    `R4 a page the gate would measure past the budget is refused by the build naming the file, and left off the shelf (${buildRefusal})`)
+}
+{
+  // The existing fuzz checks web inserts against the shape gate, but never
+  // sends them to a second copy. Include prototype-like (nonreserved) names,
+  // XML entities, query delimiters, Unicode, and unrelated duplicate params.
+  const value = 'Oslo & København + 東京 😀 #?%=/'
+  const props = ['toString', 'hasOwnProperty', '_mode'].map((key) => ({ key, label: key, kind: 'text', default: '' }))
+  const scene = g.readManifest(withScenes(web({
+    props, presets: [{ name: 'Chosen', values: Object.fromEntries(props.map((p) => [p.key, value])) }],
+    url: 'https://design.betamobility.ai/scene?untouched=one&untouched=two#view',
+  })))![0]
+  const store = new Store(deck()), remote = deck()
+  const a = new SyncState('r4-web-A'), b = new SyncState('r4-web-B')
+  a.adopt(store.doc); b.adopt(remote)
+  const before = clone(store.doc)
+  const refusal = scene ? g.insertScene(store, scene, scene.presets[0]) : 'not admitted'
+  b.apply(remote, a.diff(before, store.doc, { text: true }))
+  const got = remote.slides[0].elements[0] as EmbedElement | undefined
+  const query = got?.url ? new URL(got.url).searchParams : null
+  ok(refusal === null && got?.app === 'web' && got.live === true && got.view === scene.still
+    && JSON.stringify(got.doc) === JSON.stringify({ library: { id: scene.id, version: scene.version }, props: scene.props })
+    && props.every((p) => query?.get(p.key) === value) && query?.getAll('untouched').join() === 'one,two',
+    'R4 web insert transports the still, schema and exact Unicode preset to a collaborator')
+}
+{
+  // AE5 after history operations: reused assets are no longer new in the
+  // diff. A reinsert must still resolve its still on the receiving document.
+  const scene = g.readManifest(clone(manifest))!.find((s) => s.id === 'map')!
+  const store = new Store(deck()), remote = deck()
+  store.goTo(store.doc.slides.length - 1)
+  const a = new SyncState('r4-history-A'), b = new SyncState('r4-history-B')
+  a.adopt(store.doc); b.adopt(remote)
+  const problems: string[] = []
+  const edit = (name: string, count: number, fn: () => void) => {
+    const before = clone(store.doc)
+    fn()
+    if (store.doc.slides.filter((s) => s.runtime).length !== count) problems.push(`${name}: count`)
+    b.apply(remote, a.diff(before, store.doc, { text: true }))
+    for (const slide of store.doc.slides.filter((s) => s.runtime)) {
+      const got = remote.slides.find((s) => s.id === slide.id)
+      const key = slide.runtime!.still!.slice(6)
+      if (!got || JSON.stringify(got.runtime) !== JSON.stringify(slide.runtime)
+        || store.doc.assets?.[key] !== g.svgDataUri(scene.still)
+        || remote.assets?.[key] !== g.svgDataUri(scene.still)
+        || (got.elements[0] as { src?: string })?.src !== got.runtime?.still) problems.push(name)
+    }
+    if (remote.slides.map((s) => s.id).join() !== store.doc.slides.map((s) => s.id).join()) problems.push(`${name}: order`)
+  }
+  edit('insert at end', 1, () => { g.insertScene(store, scene, scene.presets[0]) })
+  edit('insert again', 2, () => { g.insertScene(store, scene, scene.presets[1]) })
+  edit('undo second', 1, () => store.undo())
+  edit('undo first', 0, () => store.undo())
+  edit('redo first', 1, () => store.redo())
+  edit('redo second', 2, () => store.redo())
+  ok(problems.length === 0, `R4 AE5 reused stills survive end insertion and undo/redo on the receiver: ${problems.join('; ')}`)
+}
+
+
+{
+  // The shared scanner has two callers: neither may admit XML mechanisms
+  // that cause a picture to resolve resources outside itself.
+  const raw = clone(manifest).scenes[0]
+  const { id, html, still: _still, stillType: _type, ...metadata } = raw
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="16" height="9"/></svg>'
+  const attacks = [
+    '<?xml-stylesheet type="text/css" href="https://evil.invalid/style.css"?>' + svg,
+    '<!DOCTYPE svg [<!ENTITY picture SYSTEM "https://evil.invalid/data">]>' + svg.replace('/></svg>', '/><text>&picture;</text></svg>'),
+    svg.replace('<rect ', '<rect fill="url(&#x2f;&#x2f;evil.invalid/paint.svg#p)" '),
+    svg.replace('<rect width="16" height="9"/>', '<use href="&#35;local&#xA;https://evil.invalid/p.svg"/>'),
+  ]
+  const admitted: string[] = []
+  for (const [i, still] of attacks.entries()) {
+    try {
+      validateScene(id, { 'scene.json': JSON.stringify(metadata), 'index.html': html, 'still.svg': still })
+      admitted.push(`build:${i}`)
+    } catch { /* a rejected picture is the expected outcome */ }
+    if (g.readManifest(withScenes({ ...raw, still }))!.length) admitted.push(`runtime:${i}`)
+    if (g.readManifest(withScenes(web({ view: still })))!.length) admitted.push(`web:${i}`)
+  }
+  ok(admitted.length === 0, `R4 shared scanner rejects XML resource loading on every admission path: ${admitted.join('; ')}`)
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

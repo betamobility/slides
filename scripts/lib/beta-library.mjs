@@ -26,8 +26,8 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 // the rules the gallery applies too: one copy (slides/src/beta/libraryrules.ts)
-import { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillTooLarge, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
-export { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillTooLarge, WEB_HOSTS }
+import { activeSvg, hasLoneSurrogate, pageTooLarge, RESERVED_KEYS, stillTooLarge, WEB_HOSTS } from '../../slides/src/beta/libraryrules.ts'
+export { activeSvg, hasLoneSurrogate, pageTooLarge, RESERVED_KEYS, stillTooLarge, WEB_HOSTS }
 
 export const FORMAT = 'beta/library'
 export const MANIFEST_V = 1
@@ -140,6 +140,8 @@ export function validateScene(id, files) {
   const html = files['index.html']
   if (typeof html !== 'string') fail('index.html', 'is missing')
   if (bytes(html) > HTML_BUDGET) fail('index.html', `is ${kb(bytes(html))}, over the ${HTML_BUDGET / 1024} KB inline budget`)
+  const pageTooBig = pageTooLarge(html)
+  if (pageTooBig) fail('index.html', pageTooBig)
   // the scene contract (plugins/beta-slides skill): it listens for bento:init and says bento:ready
   for (const word of ['bento:init', 'bento:ready']) if (!html.includes(word)) fail('index.html', `never mentions ${word}; a scene waits for bento:init and says bento:ready`)
   return { ...base, html, still, stillType: 'image/svg+xml' }

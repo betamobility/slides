@@ -30,7 +30,7 @@ import type { RuntimeSlide } from '../model.ts'
 import type { Store } from '../store.ts'
 import { sanitizeElement } from '../untrusted.ts'
 import { t } from '../i18n.ts'
-import { activeSvg, hasLoneSurrogate, RESERVED_KEYS, stillDataUri, stillTooLarge, WEB_HOSTS } from './libraryrules.ts'
+import { activeSvg, hasLoneSurrogate, pageTooLarge, RESERVED_KEYS, stillDataUri, stillTooLarge, WEB_HOSTS } from './libraryrules.ts'
 import { applyPreset, coerce, rememberPresets, webSceneOf, writeQueryAll, type Preset } from './scenesettings.ts'
 
 export interface LibraryScene {
@@ -125,7 +125,8 @@ function readScene(raw: unknown): LibraryScene | null {
   if (typeof still !== 'string' || utf8Bytes(still).length > RUNTIME_STILL_BUDGET || activeSvg(still) !== null || stillTooLarge(still) !== null) return null
   const base = { id, version: version as number, name: name as string, description: description as string, kind, steps: steps as number, props, presets, still } as LibraryScene
   if (kind === 'runtime') {
-    if (typeof raw.html !== 'string' || !raw.html || utf8Bytes(raw.html).length > RUNTIME_SRC_BUDGET) return null
+    // measured as the gate measures it (libraryrules.ts): a page the shelf shows is one the insert can write
+    if (typeof raw.html !== 'string' || !raw.html || utf8Bytes(raw.html).length > RUNTIME_SRC_BUDGET || pageTooLarge(raw.html) !== null) return null
     return { ...base, html: raw.html }
   }
   // https, on a host Beta controls, no login and no port: the build's rule (libraryrules.ts)

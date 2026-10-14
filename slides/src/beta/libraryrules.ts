@@ -33,6 +33,23 @@ export function hasLoneSurrogate(v: unknown, depth = 0): boolean {
 }
 
 /**
+ * A runtime scene's page as the shell's gate measures it. The page is stored
+ * base64 (as the splice tool writes it) and slides/src/runtime.ts assetBytes
+ * counts a base64 body as floor(length * 3 / 4), padding included, so it
+ * reads up to two bytes more than the page holds. Every shipped shell counts
+ * that way (R18), so the library adopts the gate's measure rather than the
+ * gate changing: a page the library admits is one every shell keeps.
+ */
+export const PAGE_BUDGET = 256 * 1024
+export const gatePageBytes = (html: string): number => Math.ceil(new TextEncoder().encode(html).length / 3) * 3
+
+/** Why this page would not be kept by the gate, or null when it would. */
+export function pageTooLarge(html: string): string | null {
+  const n = gatePageBytes(html)
+  return n > PAGE_BUDGET ? `measures ${n} bytes as the shell stores it (base64), over the ${PAGE_BUDGET / 1024} KB inline budget` : null
+}
+
+/**
  * The largest data URI an asset may be and still travel INSIDE a sync op:
  * kernel/src/sync/crdt.ts BLOB_INLINE_MAX (64 K characters; scripts/
  * test-beta-gallery.ts checks the two agree). Above it the session sends the

@@ -20,7 +20,8 @@ beta/library/<id>/
   keeps the copy it was given, and the number says which.
 - `index.html` follows the scene contract in the `beta-slides` skill: it
   listens for `bento:init` before it trusts any state, says `bento:ready`, and
-  draws its defaults on its own. At most 256 KB.
+  draws its defaults on its own. At most 256 KB as the shell measures it
+  (base64, padding included): in practice 262,143 bytes.
 - `still.svg` is a picture: no script, no `foreignObject`, no handlers, no
   links out. At most 64 KB on disk, and its data URI (percent-encoded or
   base64, whichever is shorter) at most 64 K characters, so it travels with
