@@ -370,6 +370,117 @@ console.log('\nround 2: keyboard, state identity, and undo (no browser required)
       'R2 file-only drag passes through both grid capture handlers untouched')
   }
 
+  console.log('\nround 4: captured drags, adjacent nested units, and Escape')
+  {
+    // Unlike R3's missing-dragstart case, run the grid's real bubbling
+    // dragstart handler. A slides event may clear selection and rebuild all
+    // thumbnails, but the captured identities must still be usable.
+    const h = harness(plain(8), [1, 4], 1)
+    const event = { dataTransfer: { types: ['text/bento-slide'], getData: () => '[1,4]' },
+      preventDefault() {}, stopPropagation() {} }
+    h.table.picked(event)
+    h.store.doc.slides.unshift({ id: 'X', elements: [] })
+    h.store.emit('slides')
+    h.table.boxes = () => grid(9, 3, { rtl: true })
+    h.table.host.rtl = () => true
+    const last = h.table.boxes()[8]
+    h.table.point = () => ({ x: last.right + 5, y: last.top + 20 })
+    h.table.clearBar = () => {}
+    h.table.dropped(event)
+    const moved = ids(h.store.doc.slides)
+    h.store.undo()
+    const undone = ids(h.store.doc.slides)
+    h.store.redo()
+    ok(moved === 'X,1,3,4,6,7,2,5,8' && undone === 'X,1,2,3,4,5,6,7,8' &&
+      ids(h.store.doc.slides) === moved,
+      `R4 captured AE9 drag survives remote insertion and undo/redo: got ${moved}`)
+  }
+  {
+    const h = harness(plain(8), [1, 4], 1)
+    const event = { dataTransfer: { types: ['text/bento-slide'], getData: () => '[1,4]' },
+      preventDefault() {}, stopPropagation() {} }
+    h.table.picked(event)
+    h.store.doc.slides.splice(4, 1) // collaborator removes one picked-up slide
+    h.store.emit('slides')
+    const before = ids(h.store.doc.slides)
+    h.table.boxes = () => grid(7, 3)
+    h.table.point = () => ({ x: 900, y: 900 })
+    h.table.clearBar = () => {}
+    h.table.dropped(event)
+    h.store.undo()
+    ok(ids(h.store.doc.slides) === before && h.editor.thumbSel.length === 0,
+      'R4 deleting one captured drag member cancels the whole move without an undo entry')
+  }
+  {
+    // The chain itself is deliberately immovable. The selected slides are
+    // ordinary parents, though: moving them past A/B/C need not split or
+    // move that chain. A drag to gap 5 already permits exactly this result.
+    const s: S[] = [{ id: 'X' }, { id: 'Y' }, { id: 'A' },
+      { id: 'B', stateOf: 'A' }, { id: 'C', stateOf: 'B' }, { id: 'D' }]
+    if (lt.splitsUnit(s, [0, 1]) || ids(moveBlock(s, [0, 1], 5)) !== 'A,B,C,X,Y,D') {
+      throw new Error('Fixture must have a safe move past the nested unit')
+    }
+    const h = harness(s, [0, 1], 0)
+    h.key('ArrowRight', true)
+    const moved = ids(h.store.doc.slides)
+    h.store.undo()
+    ok(moved === 'A,B,C,X,Y,D' && ids(h.store.doc.slides) === 'X,Y,A,B,C,D',
+      `R4 two ordinary selected slides move past an intact nested unit and undo: got ${moved}`)
+  }
+  {
+    // Exercise both the drag guard and the Escape fallback on the same
+    // rejected operation; rejection must not leave a phantom selection.
+    const s: S[] = [{ id: 'A' }, { id: 'B', stateOf: 'A' },
+      { id: 'C', stateOf: 'B' }, { id: 'D' }]
+    const h = harness(s, [0], 3)
+    const event = { dataTransfer: { types: ['text/bento-slide'], getData: () => '[0]' },
+      preventDefault() {}, stopPropagation() {} }
+    h.table.picked(event)
+    h.table.boxes = () => grid(4, 2)
+    h.table.point = () => ({ x: 900, y: 900 })
+    h.table.clearBar = () => {}
+    h.table.dropped(event)
+    h.key('Escape')
+    ok(ids(h.store.doc.slides) === 'A,B,C,D' && !h.table.on &&
+      h.store.currentIndex === 0 && h.editor.thumbSel.join(',') === '0',
+      'R4 Escape after a rejected nested-unit drag still opens the first selected slide')
+  }
+  {
+    // A drag that has captured slide identities must not make a later file
+    // drop look like a slide move. Check both capture handlers, with geometry
+    // deliberately unavailable (the file route should never need it).
+    const h = harness(plain(8), [1, 4], 1)
+    h.table.picked({ dataTransfer: { getData: () => '[1,4]' } })
+    let touched = 0
+    h.table.boxes = () => { touched++; throw new Error('File drop requested slide geometry') }
+    const file = { dataTransfer: { types: ['Files', 'text/uri-list'],
+      getData() { touched++; return '' } },
+      preventDefault() { touched++ }, stopPropagation() { touched++ } }
+    h.table.dragOver(file)
+    h.table.dropped(file)
+    ok(touched === 0 && ids(h.store.doc.slides) === '1,2,3,4,5,6,7,8',
+      'R4 file drop bypasses grid capture even with prior captured slide identities')
+  }
+  {
+    // Two hidden parents, each with a hidden state: a backward move must
+    // preserve exact content as well as ordering through undo and redo.
+    const s = [{ id: 'A' }, { id: 'B', hidden: true },
+      { id: 'B1', stateOf: 'B', hidden: true }, { id: 'C', hidden: true },
+      { id: 'C1', stateOf: 'C', hidden: true }, { id: 'D' }]
+    const h = harness(s, [1, 3], 3)
+    const before = JSON.stringify(h.store.doc.slides)
+    h.key('ArrowLeft', true)
+    const moved = JSON.stringify(h.store.doc.slides)
+    const order = ids(h.store.doc.slides)
+    const hidden = h.store.doc.slides.filter((s: any) => s.hidden).map((s: S) => s.id).join(',')
+    h.store.undo()
+    const undone = JSON.stringify(h.store.doc.slides)
+    h.store.redo()
+    ok(order === 'B,B1,C,C1,A,D' && hidden === 'B,B1,C,C1' &&
+      undone === before && JSON.stringify(h.store.doc.slides) === moved,
+      'R4 backward keyboard move preserves two hidden parent/state units through undo/redo')
+  }
+
   console.log('\nround 3: identity during a drag and state relationships (expected behaviour first)')
   {
     // Execute upstream's real dragstart producer and the grid's real drop

@@ -168,7 +168,9 @@ export function keyMove(slides: SlideLike[], selected: Iterable<number>, dir: -1
   const moving = new Set(expand(slides, sel))
   if (!moving.size) return null
   if (splitsUnit(slides, sel)) return null
-  const free = parents(slides, slides.map((_, i) => i)).filter((p) => !moving.has(p))
+  // the units that stay, by the slide that heads each (a state of a state heads nothing:
+  // it stands inside its chain, and the selection goes past the chain as a whole)
+  const free = slides.map((_, i) => i).filter((i) => heads(slides, i) && !moving.has(i))
   let drop: number
   if (dir > 0) {
     // The end of the selection is where its last unit ends IN PLACE: the parent
