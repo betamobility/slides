@@ -128,6 +128,20 @@ console.log('\nkeys inside the dialog stay in the dialog (Codex U11 round 5)')
   await p.waitForTimeout(300)
   const after = await p.evaluate(() => JSON.stringify(window.bento.doc.slides))
   ok(after === before, 'Delete, Backspace and the arrows pressed in the open gallery leave the deck untouched')
+  // Codex U11 round 6: another dialog replacing the gallery (they share the
+  // overlay class and remove each other) must not leave its key listener behind
+  await p.locator('.ed-btn-gallery').click()
+  await waitState(p, 'shelf')
+  await p.evaluate(() => document.querySelector('.ed-about-overlay')?.remove())
+  await p.locator('.ed-stage-scale').click({ position: { x: 5, y: 5 } }).catch(() => {})
+  await p.evaluate(() => document.body.focus())
+  const keyReached = await p.evaluate(() => new Promise((done) => {
+    const seen = () => { document.removeEventListener('keydown', seen); done(true) }
+    document.addEventListener('keydown', seen)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    setTimeout(() => done(false), 200)
+  }))
+  ok(keyReached, 'once something else removes the gallery, keys reach the editor again')
   await ctx.close()
 }
 

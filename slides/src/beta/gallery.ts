@@ -283,6 +283,9 @@ export function openGallery(host: GalleryHost): HTMLElement {
   // phase, so it never reaches that listener; the browser's own handling
   // (Tab, Enter on a button, a select's arrows) is untouched.
   const onKey = (ev: KeyboardEvent) => {
+    // removed by something else (another dialog removes .ed-about-overlay as
+    // it opens): stand down, or every editor key would be swallowed from now on
+    if (!overlay.isConnected) { document.removeEventListener('keydown', onKey, true); return }
     ev.stopPropagation()
     if (ev.key === 'Escape') close()
   }

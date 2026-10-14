@@ -726,5 +726,78 @@ console.log('\nU11 independent round 5: compound limits and failure isolation')
   }
 }
 
+
+console.log('\nU11 independent round 6: refusal and transport boundaries')
+{
+  // A scene was read while writable, but permission was lost before Insert.
+  // Refusal must preserve redo, assets, selection and the current state slide.
+  const scenes = [g.readManifest(clone(manifest))![0], g.readManifest(withScenes(web()))![0]]
+  const problems: string[] = []
+  for (const scene of scenes) {
+    const store = new Store(deck())
+    store.goTo(1)
+    store.commit(() => { store.doc.title = 'pending redo' })
+    store.undo()
+    const before = JSON.stringify({ doc: store.doc, index: store.currentIndex, selection: store.selection })
+    store.readOnly = true
+    const refusal = g.insertScene(store, scene, scene.presets[0])
+    if (!refusal || JSON.stringify({ doc: store.doc, index: store.currentIndex, selection: store.selection }) !== before) problems.push(`${scene.kind}: mutated`)
+    store.readOnly = false
+    store.redo()
+    if (store.doc.title !== 'pending redo') problems.push(`${scene.kind}: lost redo`)
+  }
+  ok(problems.length === 0, `R6 permission lost after selection refuses both insert kinds without consuming redo: ${problems.join('; ')}`)
+}
+{
+  // Query metacharacters are data, even when a value resembles an address
+  // with credentials. Duplicate encoded keys must become one preset value;
+  // omitted settings use defaults, and unrelated duplicates stay untouched.
+  const value = 'https://user:secret@evil.invalid/?x=1&mode=wrong#frag + %26 😀'
+  const scene = g.readManifest(withScenes(web({
+    props: [
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'default' },
+      { key: 'caption', label: 'Caption', kind: 'text', default: '標準 & default' },
+    ],
+    presets: [{ name: 'Hostile-looking text', values: { mode: value } }],
+    url: 'https://design.betamobility.ai/a%2Fb?%6dode=old&mode=older&keep=1&keep=2#original',
+  })))![0]
+  const store = new Store(deck())
+  const refusal = scene ? g.insertScene(store, scene, scene.presets[0]) : 'not admitted'
+  const element = store.slide.elements[0] as EmbedElement | undefined
+  const u = element?.url ? new URL(element.url) : null
+  ok(refusal === null && element?.app === 'web' && element.live === true && element.view === scene.still
+    && webSceneOf(element.doc)?.library.id === scene.id
+    && u?.origin === 'https://design.betamobility.ai' && u.pathname === '/a%2Fb' && u.hash === '#original'
+    && u.searchParams.getAll('mode').length === 1 && u.searchParams.get('mode') === value
+    && u.searchParams.get('caption') === '標準 & default' && u.searchParams.getAll('keep').join() === '1,2',
+    'R6 web preset delimiters cannot replace the host or leak into sibling query keys')
+}
+{
+  // A deck can already have assets named scene/still: they are not the dry
+  // run's scratch assets. Exercise both reuse and collision, and a hidden
+  // parent with a current state, through the receiver's actual CRDT.
+  const scene = g.readManifest(clone(manifest))!.find((s) => s.id === 'map')!
+  const doc = deck()
+  doc.slides[0].hidden = true
+  doc.assets = { scene: 'data:text/html,unrelated', still: 'data:image/svg+xml,unrelated', reusable: g.svgDataUri(scene.still) }
+  const store = new Store(doc), remote = clone(doc)
+  store.goTo(1)
+  const a = new SyncState('r6-A'), b = new SyncState('r6-B')
+  a.adopt(store.doc); b.adopt(remote)
+  const before = clone(store.doc)
+  const refusal = g.insertScene(store, scene, scene.presets[1])
+  b.apply(remote, a.diff(before, store.doc, { text: true }))
+  const inserted = store.slide, got = remote.slides.find((s) => s.id === inserted.id)
+  const image = got?.elements[0] as { src?: string } | undefined
+  ok(refusal === null && store.currentIndex === 2 && !got?.stateOf && !got?.hidden
+    && got?.runtime?.library?.id === scene.id && got.runtime.values?.place === 'Copenhagen'
+    && got.runtime.still === 'asset:reusable' && image?.src === got.runtime.still
+    && remote.assets?.reusable === g.svgDataUri(scene.still)
+    && runtimeSource(got, remote)?.html === scene.html
+    && remote.assets?.scene === before.assets?.scene && remote.assets?.still === before.assets?.still
+    && remote.slides.map((s) => s.id).join() === store.doc.slides.map((s) => s.id).join(),
+    'R6 AE5 hidden-parent insertion reuses the still without overwriting existing assets')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
