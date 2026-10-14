@@ -55,6 +55,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (process.argv.includes('--check')) {
     let current = null
     try { current = readFileSync(OUT, 'utf8') } catch { /* missing = stale */ }
+    // BETA FORK: the version-pinned twin is published beside it, so it is held to the same bytes
+    let pinned = null
+    try { pinned = readFileSync(PINNED, 'utf8') } catch { /* missing = stale */ }
+    if (current === body && pinned !== body) {
+      console.error(`${PINNED} is out of date with schema/slides.json.\nRun: node scripts/build-schema.mjs`)
+      process.exit(1)
+    }
     if (current !== body) {
       console.error('schema/slides.json is out of date with slides/src/schema.ts (or the gate / model keys).\nRun: node scripts/build-schema.mjs')
       process.exit(1)

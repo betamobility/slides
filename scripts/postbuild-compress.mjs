@@ -120,6 +120,10 @@ const titleFallback = flag('title', 'bento/slides')
 // Defaults keep upstream's bytes; Beta's build:single passes its own.
 const failName = flag('fail-name', 'bento/dash spreadsheet')
 const agentsUrl = flag('agents-url', 'https://bento.page/agents.md')
+// BETA FORK: where the tooling comment says the schema and the agent index
+// live. `--llms-url none` leaves the index out (Beta publishes no llms.txt).
+const schemaUrl = flag('schema-url', 'https://bento.page/schema/slides.json')
+const llmsUrl = flag('llms-url', 'https://bento.page/llms.txt')
 // How the inflated runtime is started. `cascade` (the default since 1.1.1):
 // see below. `blob` (the 1.1.0 loader): a module import from a blob: URL. `inline`: an inline <script type="module"> whose
 // textContent is the inflated bundle — no blob: URL at all, so it runs where a
@@ -315,7 +319,7 @@ const SLIDES_TOOLING = `<!--
     (open source, https://bento.page) — no user content, leave them alone.
   · In a running file, window.bento exposes { doc, serialize(), loadDoc(json),
     comments(), updates, i18n }. In the app UI: Save → Copy / Replace JSON.
-  · Schema: https://bento.page/schema/slides.json (= window.bento.schema()); agent index: https://bento.page/llms.txt
+  · Schema: ${schemaUrl} (= window.bento.schema())${llmsUrl === 'none' ? '' : `; agent index: ${llmsUrl}`}
 
   MAKE A GREAT DECK, NOT JUST A CORRECT ONE
   Bento's whole point is motion + interactivity. A wall of text slides wastes

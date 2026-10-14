@@ -136,7 +136,9 @@ export async function run(Miniflare) {
    * here rather than in the outbound stub means the public pass-through
    * assertions, which compare against this function, stay true of it too.
    */
-  const pagesBody = (path) => (path === '/templates/blank.bento.html'
+  const pagesBody = (path) => (path.startsWith('/schema/slides') && existsSync(join(repoRoot, path.slice(1)))
+    ? readFileSync(join(repoRoot, path.slice(1)), 'utf8')
+    : path === '/templates/blank.bento.html'
     ? blankTemplate()
     : `stub bytes for ${path}\n${'x'.repeat(64)}\n`)
 
@@ -144,6 +146,7 @@ export async function run(Miniflare) {
   // real built file — that is the document a colleague's first deck is made
   // from — and fall back to a minimal template so this route is still covered
   // before `node scripts/build-beta-templates.mjs` has run.
+  let schemaStatus = 200 // round 4: an unavailable schema must not become a successful response
   let templateOutage = false
   const builtBlank = join(repoRoot, 'beta', 'templates', 'blank.bento.html')
   const blankTemplate = () => (existsSync(builtBlank)
@@ -198,6 +201,11 @@ export async function run(Miniflare) {
       if (req.url.startsWith(`https://${PAGES_ORIGIN}/`)) {
         proxied.push({ url: req.url, method: req.method, headers: Object.fromEntries(req.headers) })
         const p = new URL(req.url).pathname
+        if (p === '/schema/slides.json' || p === `/schema/slides-${JSON.parse(readFileSync(join(repoRoot, 'slides/package.json'), 'utf8')).version}.json`) {
+          return new Response(schemaStatus === 200 ? readFileSync(join(repoRoot, p.slice(1)), 'utf8') : 'schema unavailable', {
+            status: schemaStatus, headers: { 'content-type': 'application/schema+json', 'cache-control': 'public, max-age=300' },
+          })
+        }
         // Pages 308s an `.html` URL to its extensionless form (KTD3).
         if (p === '/releases/slides/redirected.html') {
           return new Response(null, { status: 308, headers: { location: `https://${PAGES_ORIGIN}/releases/slides/redirected` } })
@@ -301,6 +309,7 @@ export async function run(Miniflare) {
       '/agents.md', '/slides/agents.md',
       '/skills/SKILL.md', '/skills/beta-slides.zip',
       '/logo/favicon-32.png',
+      '/schema/slides.json', '/schema/slides-2026.10.9.json',
       '/robots.txt', '/sitemap.xml', '/LICENSE',
     ]
     for (const p of PUBLIC_PATHS) {
@@ -310,6 +319,107 @@ export async function run(Miniflare) {
       eq(await r.text(), pagesBody(p), `GET ${p} returns the origin's exact bytes`)
       eq(proxied.length - before, 1, `GET ${p} made exactly one subrequest`)
       eq(new URL(proxied[proxied.length - 1].url).host, PAGES_ORIGIN, `GET ${p} fetched PAGES_ORIGIN, not its own host`)
+    }
+    // Independent U3 refusal tests: prefix lookalikes, normalized traversal and writes.
+    for (const path of ['/schema', '/schemaX/slides.json', '/schema%2Fslides.json',
+      '/schema/../api/decks', '/schema/%2e%2e/api/decks', '/schema/..%5capi/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      // Encoded backslashes stay inside the static origin; they must never dispatch an R2 route.
+      const staticPath = path.includes('%5c')
+      eq(response.status, staticPath ? 200 : 401, `schema boundary ${path}`)
+      eq(proxied.length - before, staticPath ? 1 : 0, `schema boundary proxy count ${path}`)
+      await response.text()
+    }
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      const before = proxied.length
+      const response = await call(method, '/schema/slides.json')
+      eq(response.status, 401, `schema write ${method} refuses anonymously`)
+      eq(proxied.length, before, `schema write ${method} never reaches Pages`)
+      await response.text()
+    }
+    for (const path of ['/schema/', '/schema/slides.json', '/schema/a%2Fb.json']) {
+      const before = proxied.length
+      const response = await call('HEAD', path)
+      eq(response.status, 200, `schema HEAD ${path} is public`)
+      eq(await response.text(), '', `schema HEAD ${path} has no body`)
+      eq(proxied.length - before, 1, `schema HEAD ${path} only reaches static Pages`)
+    }
+    // break round 2: URL-normalized traversal must not turn the schema bypass into a store read.
+    for (const path of ['/schema/./../../api/decks', '/schema/%2E%2E/api/decks', '/schema/..\\api/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      eq(response.status, 401, `normalized schema traversal refuses ${path}`)
+      eq(proxied.length, before, `normalized schema traversal never proxies ${path}`)
+      await response.text()
+    }
+    // Break round 3: nested and encoded paths do not broaden the read-only bypass.
+    for (const path of ['/schema/', '/schema/a%2Fb.json', '/schema/%252e%252e/api/decks', '/schema//api/decks']) {
+      for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        eq(response.status, 401, `round 3 schema method boundary: ${method} ${path}`)
+        eq(proxied.length, before, `round 3 schema method boundary never proxies: ${method} ${path}`)
+        eq(await response.text(), '', `round 3 schema method boundary has no private bytes: ${method} ${path}`)
+      }
+    }
+    // Break round 4: fetch real schema bytes, then remove/fail their origin.
+    // A passing allowlist alone cannot establish that an agent got a schema.
+    {
+      const path = '/schema/slides.json'
+      const response = await call('GET', path, { headers: {
+        'cf-access-jwt-assertion': 'expired-or-malformed',
+        'cf-access-client-secret': 'must-not-leave-the-worker', cookie: 'CF_Authorization=expired',
+      } })
+      const body = await response.text()
+      const sub = proxied.at(-1)
+      ok(response.status === 200 && body === readFileSync(join(repoRoot, path.slice(1)), 'utf8')
+        && response.headers.get('content-type') === 'application/schema+json'
+        && !['cf-access-jwt-assertion', 'cf-access-client-secret', 'cookie'].some((h) => h in sub.headers),
+      'round 4 schema bytes survive the public proxy without forwarding stale credentials')
+      for (const [originStatus, expected] of [[404, 404], [500, 502]]) {
+        schemaStatus = originStatus
+        const unavailable = await call('GET', path)
+        const failedBody = await unavailable.text()
+        ok(unavailable.status === expected && !failedBody.includes('"$defs"'),
+          `round 4 unavailable schema is not a success (origin ${originStatus}, observed ${unavailable.status}, expected ${expected})`)
+      }
+      schemaStatus = 200
+    }
+
+    // break round 5: schema failure responses on HEAD, and query strings cannot
+    // redirect this anonymous route into the private deck API.
+    {
+      for (const originStatus of [404, 503]) {
+        schemaStatus = originStatus
+        const before = proxied.length
+        const response = await call('HEAD', '/schema/slides.json')
+        ok(response.status === (originStatus === 404 ? 404 : 502)
+          && (await response.text()) === '' && proxied.length === before + 1,
+          `schema HEAD outage fails closed without a body (${originStatus})`)
+      }
+      schemaStatus = 200
+      const query = '?path=/api/decks&redirect=https%3A%2F%2Fevil.example%2F&token=opaque'
+      const before = proxied.length
+      const response = await call('GET', '/schema/slides.json' + query)
+      ok(response.status === 200
+        && (await response.text()) === readFileSync(join(repoRoot, 'schema/slides.json'), 'utf8')
+        && proxied.length === before + 1
+        && proxied.at(-1).url === `https://${PAGES_ORIGIN}/schema/slides.json${query}`,
+        'schema query never selects a private route or another origin')
+    }
+    // break round 6: fragments and encoded separators never select a private deck route.
+    // Refusal controls first; encoded paths that stay under /schema/ only hit Pages.
+    for (const path of ['/schema%3f/api/decks', '/schema%23/api/decks',
+      '/schema/%2e%2e%2fapi/decks', '/schema/%252e%252e%252fapi/decks']) {
+      const before = proxied.length
+      const response = await call('GET', path)
+      const isStatic = path.startsWith('/schema/')
+      ok(response.status === (isStatic ? 200 : 401)
+        && proxied.length === before + (isStatic ? 1 : 0)
+        && (!isStatic || proxied.at(-1).url === `https://${PAGES_ORIGIN}${path}`),
+        `schema encoded delimiter stays within routing boundary: ${path}`)
+      await response.text()
     }
     r = await call('GET', '/releases/slides/manifest.json')
     eq(r.headers.get('content-type'), 'application/octet-stream', 'the upstream content-type survives the proxy')

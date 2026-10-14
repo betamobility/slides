@@ -19,7 +19,7 @@
 //   1. COMPLETE. Every `PALETTE_SLOTS` entry resolves to a real hex colour,
 //      never to `paletteOf()`'s accent fallback.
 //   2. VALID. A minimal deck carrying the fragment validates with no
-//      `font-not-embedded` and no unknown key except the `beta` provenance
+//      `font-not-embedded` and no unknown key (the `beta` provenance
 //      block, which upstream preserves as an unknown field on purpose.
 //   3. ADDITIVE. Deleting `palette` and `themeRefs` changes no rendered value,
 //      the same property test-theme.ts holds upstream to.
@@ -196,8 +196,10 @@ ok(typeof frag.beta?.tokens === 'string', `beta.tokens carries the tokens versio
   ok(!res.findings.some((f) => f.code === 'font-not-embedded'),
     `no font-not-embedded finding${res.findings.filter((f) => f.code === 'font-not-embedded').map((f) => ` (${f.message})`).join('')}`)
   const unknown = res.findings.filter((f) => f.code === 'unknown-key')
-  ok(unknown.length === 1 && unknown[0].path === 'beta',
-    `the only unknown key is the top-level "beta" provenance block (${unknown.map((f) => f.path).join(', ') || 'none'})`)
+  // The `beta` provenance block is in the format since the v1.2.7 merge
+  // (model.ts BentoDoc.beta), so nothing in a Beta deck is an unknown key.
+  ok(unknown.length === 0 && frag.beta?.designSystem !== undefined,
+    `no unknown key: the top-level "beta" provenance block is part of the format (${unknown.map((f) => f.path).join(', ') || 'none unknown'})`)
   ok(!res.findings.some((f) => f.code === 'missing-asset'), 'every font asset is present in doc.assets')
 }
 

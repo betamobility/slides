@@ -23,7 +23,7 @@
 // never enters the repo or CI (docs/RELEASING.md).
 
 import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto'
-import { APPS } from './apps.mjs'
+import { APPS } from './apps.mjs' // BETA FORK
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'

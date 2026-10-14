@@ -45,7 +45,7 @@ import { isWebUrl, REQUIRED_ELEMENT_KEYS } from './model'
 import { parseThemeRef } from './palette.ts'
 import { MODEL_KEYS } from './modelkeys.generated'
 import { TIP_KINDS } from './tips'
-import { checkRuntime } from './runtime.ts' // BETA FORK: runtime slides
+import { checkRuntime, RUNTIME_SCHEMA } from './runtime.ts' // BETA FORK: runtime slides
 
 /** Reject. JSON has no `undefined`, so it can never collide with a real value. */
 const DROP = undefined
@@ -394,7 +394,8 @@ const chartOption: Check = tag((v) => {
 // where it is a value and never re-parsed as markup (the mediaRef argument).
 const webUrl: Check = tag((v) =>
   typeof v === 'string' && v.length <= LIMITS.prose && isWebUrl(v) ? v : DROP,
-  { type: 'string', maxLength: LIMITS.prose, pattern: '^https?://' })
+  // BETA FORK: any case of the scheme, as isWebUrl (the gate) accepts it; upstream's pattern was lowercase only
+  { type: 'string', maxLength: LIMITS.prose, pattern: '^[hH][tT][tT][pP][sS]?://' })
 // An embedded document is another deck's JSON, and a deck's envelope carries
 // its collaboration secrets: `collab` (room, read key, private halves, and the
 // saved sync state) and `docId`. Neither is content. Left in place they would
@@ -608,7 +609,7 @@ export const SLIDE_CHECKS: Record<string, Check> = {
     ? v.map((el, i) => within(String(i), () => sanitizeElement(el))).filter((el): el is SlideElement => el !== null)
     : DROP), { type: 'array', maxItems: LIMITS.elements, items: { $ref: '#/$defs/element' } }),
   // BETA FORK: the runtime slide record; its shape lives with its helpers
-  runtime: (v) => checkRuntime(v),
+  runtime: tag((v) => checkRuntime(v), RUNTIME_SCHEMA),
 }
 
 /**

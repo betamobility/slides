@@ -162,6 +162,20 @@ export function routeExpectations() {
       why: 'the Bypass destination was entered without its trailing slash, widening the public surface',
     },
     {
+      // upstream-merge plan U3: every saved deck names this URL in `$schema`,
+      // and an agent validating a deck has no login.
+      name: 'GET /schema/slides.json answers with no login at all',
+      method: 'GET', path: '/schema/slides.json',
+      ok: (res) => res.status === 200 && /"\$defs"/.test(res.body || ''),
+      why: 'the Bypass destination /schema/ is missing (or the schema is not published), so a deck names a schema nobody can fetch',
+    },
+    {
+      name: 'bare /schema is still gated',
+      method: 'GET', path: '/schema',
+      ok: isGated,
+      why: 'the /schema/ Bypass destination was entered without its trailing slash, widening the public surface',
+    },
+    {
       name: 'the approval page is still behind Access',
       method: 'GET', path: '/link/0123456789',
       ok: isGated,
@@ -231,6 +245,7 @@ if (args.includes('--selftest')) {
   const healthy = async (c) => {
     if (c.path === '/api/link/start') return { status: 200, body: '{"code":"abc0123456","handle":"h"}', headers: {}, url: 'https://h' + c.path }
     if (c.path.startsWith('/api/publish/')) return { status: 401, body: '', headers: {}, url: 'https://h' + c.path }
+    if (c.path === '/schema/slides.json') return { status: 200, body: '{"$id":"x","$defs":{}}', headers: {}, url: 'https://h' + c.path }
     return { status: 302, body: '', headers: { location: 'https://team.cloudflareaccess.com/login' }, url: 'https://h' + c.path }
   }
   let rt = await sweepRoutes(routeChecks, healthy)
@@ -257,6 +272,16 @@ if (args.includes('--selftest')) {
     ? { status: 429, body: '', headers: {}, url: 'https://h' + c.path }
     : healthy(c)))
   ok(rt.failures === 0, 'while a 429 passes: the endpoint is there and its limiter is working')
+
+  // The schema's Bypass destination, both ways it goes wrong.
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/schema/slides.json'
+    ? { status: 302, body: '', headers: { location: 'https://team.cloudflareaccess.com/login' }, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 1 && /\/schema\/ is missing/.test(rt.results.find((r) => !r.pass).why), 'a schema that asks for a login fails, and the message names the destination')
+  rt = await sweepRoutes(routeChecks, async (c) => (c.path === '/schema'
+    ? { status: 200, body: 'listing', headers: {}, url: 'https://h' + c.path }
+    : healthy(c)))
+  ok(rt.failures === 1 && /\/schema\/ Bypass destination was entered without/.test(rt.results.find((r) => !r.pass).why), 'and a public bare /schema fails the other way round')
 
   console.log(`\n${checks - failures}/${checks} checks passed`)
   process.exit(failures ? 1 : 0)

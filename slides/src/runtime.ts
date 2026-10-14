@@ -127,8 +127,49 @@ const finite = (v: unknown): number | undefined => {
 
 function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | undefined {
   if (kind === 'number') return finite(v)
-  if (kind === 'color') return safeColor(v) ? v : undefined
+  if (kind === 'color') return safeColor(v) ? v.trim() : undefined // trimmed: what safeColor measured is what is kept
   return typeof v === 'string' && v.length <= MAX_TEXT ? v : undefined
+}
+
+/**
+ * What `checkRuntime` accepts, in the JSON Schema vocabulary the published
+ * document schema is built from (slides/src/schema.ts reads it off the
+ * `runtime` entry of SLIDE_CHECKS). Kept beside the gate it describes, built
+ * from the same limits, so the two cannot drift. Two honest gaps. The one the
+ * rest of the schema has: the gate REPAIRS a bad `steps` or prop default (and
+ * trims a colour) where a validator following this reports it. And one of its
+ * own: `values` are held to their props' declared kinds by the gate, which a
+ * schema cannot say, so a value of the wrong kind validates and is dropped.
+ */
+const textSchema = { type: 'string', maxLength: MAX_TEXT }
+// safeColor as a pattern: the colour characters, something that is not a
+// space, and neither url( nor expression (the class already bars @ and \).
+const colorSchema = { type: 'string', maxLength: 64, pattern: '^(?![\\s\\S]*(?:[uU][rR][lL]\\s*\\(|[eE][xX][pP][rR][eE][sS][sS][iI][oO][nN]))(?=[\\s\\S]*\\S)[#a-zA-Z0-9(),.%\\s/-]+$' }
+const valueSchema = { anyOf: [textSchema, { type: 'number' }] }
+const propSchema = (kind: RuntimeProp['kind'], dflt: Record<string, unknown>) => ({
+  type: 'object', additionalProperties: false, required: ['key', 'label', 'kind', 'default'],
+  // the gate drops a prop keyed __proto__, so the schema refuses it
+  properties: { key: { type: 'string', pattern: PROP_KEY.source.replace('^', `^(?!${PROTO}$)`) }, label: { type: 'string', maxLength: 200 }, kind: { const: kind }, default: dflt },
+})
+const assetRefSchema = (description: string) => ({ type: 'string', maxLength: 206, pattern: '^asset:[^"\'<>{};]+$', description })
+export const RUNTIME_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  description: 'Beta build: a runtime slide. One live HTML scene fills the slide in present mode; everywhere else the slide shows its still, an ordinary full-bleed image element in `elements`.',
+  properties: {
+    src: assetRefSchema('the scene: an asset holding its HTML (256 KB at most)'),
+    url: { type: 'string', maxLength: MAX_URL, pattern: '^[hH][tT][tT][pP][sS]://', description: 'a hosted page to frame, in place of src (https only)' },
+    still: assetRefSchema('the picture shown wherever the scene is not running (200 KB at most)'),
+    steps: { type: 'integer', minimum: 0, maximum: MAX_STEPS, description: 'how many arrow presses the scene takes before the slide advances' },
+    props: {
+      type: 'array', maxItems: MAX_PROPS,
+      description: 'the settings the scene declares',
+      // one shape per kind, so a default that does not fit its kind is refused
+      items: { anyOf: [propSchema('text', textSchema), propSchema('number', { type: 'number' }), propSchema('color', colorSchema)] },
+    },
+    values: { type: 'object', maxProperties: MAX_PROPS, additionalProperties: valueSchema, description: 'what a presenter set, by declared key. Checked against each key\'s declared kind by the app, which a schema cannot express: a value for an undeclared key, or of the wrong kind, is dropped on load.' },
+    assets: { type: 'array', maxItems: MAX_ASSETS, items: { type: 'string', pattern: ASSET_NAME.source }, description: 'store-origin files the scene is handed when presented from the store' },
+  },
 }
 
 /**

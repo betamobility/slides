@@ -499,7 +499,7 @@ export interface Slide {
   /** review comment threads (editor-only; see Comment) */
   comments?: Comment[]
   /**
-   * Beta build: this slide is a RUNTIME slide, one live HTML scene that fills
+   * BETA FORK: this slide is a RUNTIME slide, one live HTML scene that fills
    * it (see RuntimeSlide and slides/src/runtime.ts). Its still is also an
    * ordinary full-bleed `image` element in `elements`, which is what an older
    * shell, thumbnails, print and export paint.
@@ -516,7 +516,7 @@ export interface RuntimeProp {
 }
 
 /**
- * Beta build: the runtime record. `src` and `still` are "asset:<key>" refs
+ * BETA FORK: the runtime record. `src` and `still` are "asset:<key>" refs
  * into doc.assets; `url` (https only) is the hosted-page override. `still` is
  * optional because a placeholder the deck author marks for the splice tool is
  * `{ steps: 0, props: [] }` plus its still element and nothing else.
@@ -557,6 +557,18 @@ export interface BentoDoc {
     subject?: string
     event?: string
     keywords?: string
+  }
+  /**
+   * BETA FORK: which Beta design system a template was built from, stamped by
+   * scripts/build-beta-templates.mjs from beta/theme.json. Provenance only:
+   * nothing reads it at run time. It is in the format so the gate keeps it and
+   * the published schema accepts the decks that carry it.
+   */
+  beta?: {
+    designSystem?: string
+    tokens?: string
+    /** the template build a deck started from (the general template stamps one) */
+    template?: string
   }
   /** slide coordinate space, px */
   size: { width: number; height: number }
@@ -1039,7 +1051,7 @@ export function internAsset(doc: BentoDoc, src: string): string {
  *  editor warns — a big embed makes the .bento.html slow to open and save. */
 export const MEDIA_EMBED_BUDGET = 8 * 1024 * 1024 // 8 MB
 
-/** Beta build, runtime slides: inline scene source (the `runtime.src` asset),
+/** BETA FORK, runtime slides: inline scene source (the `runtime.src` asset),
  *  the still, and each heavy asset a scene fetches from the deck store. The
  *  splice tool enforces all three; paste refuses a source above the first. */
 export const RUNTIME_SRC_BUDGET = 256 * 1024 // 256 KB

@@ -27,6 +27,7 @@ import { starterDoc } from '../slides/src/starterdeck.ts'
 import { parseDoc, FORMAT } from '../slides/src/model.ts'
 import { MODEL_KEYS } from '../slides/src/modelkeys.generated.ts'
 import { CHECKED_KEYS } from '../slides/src/untrusted.ts'
+import { checkRuntime } from '../slides/src/runtime.ts' // BETA FORK
 
 let failures = 0
 let checks = 0
@@ -98,7 +99,7 @@ function validate(schema: J, value: unknown, root: J, path = '$'): string[] {
       const props = (schema.properties ?? {}) as Record<string, J>
       for (const k of (schema.required as string[] | undefined) ?? []) if (!(k in (value as J))) e(`missing ${k}`)
       for (const [k, v] of Object.entries(value as J)) {
-        if (k in props) errs.push(...validate(props[k], v, root, `${path}.${k}`))
+        if (Object.prototype.hasOwnProperty.call(props, k)) errs.push(...validate(props[k], v, root, `${path}.${k}`)) // BETA FORK: own keys only, or `constructor` reads as declared
         else if (schema.additionalProperties === false) e(`unknown key ${k}`)
         else if (schema.additionalProperties && typeof schema.additionalProperties === 'object') errs.push(...validate(schema.additionalProperties as J, v, root, `${path}.${k}`))
       }
@@ -113,7 +114,9 @@ console.log('one source\n')
 const built = buildSchema(version)
 const file = JSON.parse(read('schema/slides.json')) as J
 ok(JSON.stringify(built) === JSON.stringify(file), 'schema/slides.json is byte-for-byte what buildSchema(version) returns (build-schema.mjs --check pins it in CI too)')
-ok(file.$id === SCHEMA_URL && file.$id === 'https://bento.page/schema/slides.json', `$id is the published URL (${file.$id})`)
+// BETA FORK: Beta's shell stamps Beta's copy of the schema (it describes slide.runtime).
+const BETA_SCHEMA_URL = 'https://slides.betamobility.ai/schema/slides.json'
+ok(file.$id === SCHEMA_URL && file.$id === BETA_SCHEMA_URL, `$id is the published URL (${file.$id})`)
 ok(file['x-bento-version'] === version, `stamped with the shell version ${version}`)
 ok(existsSync(join(root, `schema/slides-${version}.json`)), 'a version-pinned twin exists')
 const mainSrc = read('slides/src/main.ts')
@@ -172,7 +175,7 @@ console.log('\nthe saved JSON opens with its pointer\n')
   const stamped = stampSchema(live)
   ok(Object.keys(stamped)[0] === '$schema' && stamped.$schema === SCHEMA_URL, 'stampSchema puts $schema FIRST, with the published URL')
   ok(!('$schema' in live), 'the input object is untouched (a new object, not a mutation)')
-  ok(JSON.stringify(stamped).startsWith('{"$schema":"https://bento.page/schema/slides.json",'), 'serialized, the file starts with the pointer (50 B)')
+  ok(JSON.stringify(stamped).startsWith(`{"$schema":"${BETA_SCHEMA_URL}",`), 'serialized, the file starts with the pointer (about 60 B)') // BETA FORK
   const again = parseDoc(JSON.stringify(stamped))
   ok(!!again && !('$schema' in again), 'load → save → load: the live document never carries it')
   const facade = read('slides/src/save.ts')
@@ -188,9 +191,9 @@ for (const dir of ['slides/src', 'kernel/src']) {
       if (f.isDirectory()) walk(p)
       else if (/\.(ts|css|html)$/.test(f.name) && !/\.generated\./.test(f.name)) {
         const src = readFileSync(join(root, p), 'utf8')
-        if (!src.includes('bento.page/schema')) continue
+        if (!src.includes('/schema/slides.json')) continue // BETA FORK: either host's schema URL
         carriers.push(p)
-        const lines = src.split('\n').filter((l) => l.includes('bento.page/schema'))
+        const lines = src.split('\n').filter((l) => l.includes('/schema/slides.json'))
         ok(!lines.some((l) => /fetch\(|import\(|href=|src=|new URL\(/.test(l)), `${p}: the URL is text only (${lines.length} line${lines.length === 1 ? '' : 's'})`)
       }
     }
@@ -202,7 +205,231 @@ const tooling = read('scripts/postbuild-compress.mjs')
 ok(tooling.includes('https://bento.page/schema/slides.json') && tooling.includes('https://bento.page/llms.txt') && tooling.includes('window.bento.schema()'), 'the Tooling comment names the URL, schema() and llms.txt')
 const llms = read('site-src/llms.txt')
 ok(/^# /.test(llms) && llms.includes('https://bento.page/schema/slides.json') && llms.includes('agents.md'), 'llms.txt exists with the schema and the agent guide')
-ok(read('scripts/release.mjs').includes("'llms.txt'") && read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages llms.txt and schema/ into the site')
+// BETA FORK: Beta's site publishes the schema and no llms.txt (scripts/test-beta-schema.ts covers the Beta build's own tooling comment).
+ok(read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages schema/ into the site')
+
+// BETA FORK: the runtime slide in the published schema (upstream-merge plan U3, R4, AE11).
+console.log('\na runtime slide validates; a broken one does not\n')
+{
+  const rt = (defs.slide.properties as Record<string, J>).runtime
+  // BETA FORK, from the independent break round: what the gate hands back validates.
+  const savedCases: Array<[string, J, boolean]> = [
+    ['an uppercase HTTPS url', { url: 'HTTPS://example.com/scene', steps: 0, props: [] }, true],
+    // the gate trims a colour, so the padded input is repaired, not kept
+    ['a colour default padded with spaces', { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: ' '.repeat(4001) + '#fff' }] }, false],
+  ]
+  for (const [name, record, unchanged] of savedCases) {
+    const saved = checkRuntime(record) as unknown as J
+    const d = JSON.parse(JSON.stringify(starter)); d.slides[0].runtime = saved
+    const errors = check(stampSchema(d), file)
+    ok((JSON.stringify(saved) === JSON.stringify(record)) === unchanged && errors.length === 0, `${name}: what the gate keeps validates${unchanged ? ', unchanged' : ', repaired'} (${errors.join('; ')})`)
+  }
+  // BETA FORK, break round 2: a reserved key is expressible in schema, unlike values/props joins.
+  const reserved = { steps: 0, props: [{ key: '__proto__', label: 'Reserved', kind: 'text', default: 'hello' }] }
+  ok(validate(rt, reserved, file).length > 0 && checkRuntime(reserved)!.props.length === 0,
+    'the schema rejects the reserved __proto__ prop that the gate drops')
+  const matrix: J[] = []
+  for (const steps of [-1, 0, 10000, 10001, '3', null]) {
+    for (const kind of ['text', 'number', 'color', 'unknown']) {
+      for (const value of ['', 'hello', '#fff', 'url(x)', 12, null]) {
+        matrix.push({ steps, props: [{ key: 'setting', label: 'Setting', kind, default: value }], values: { setting: value } })
+      }
+    }
+  }
+  const invalidOutputs = matrix.filter((record) => validate(rt, checkRuntime(record), file).length)
+  ok(invalidOutputs.length === 0, `all ${matrix.length} generated repaired runtime records validate (${invalidOutputs.length} failures)`)
+  // BETA FORK, break round 3: independently vary fields that the gate drops.
+  {
+    const cases: Array<[string, unknown]> = [
+      ['src', 'asset:'], ['src', 'asset:bad;key'], ['src', 'asset:' + 'x'.repeat(201)],
+      ['still', 'https://example.com/still.png'], ['url', 'http://example.com/scene'],
+      ['assets', ['../private.json']], ['assets', ['scene/secret.json']],
+      ['props', [{ key: 'bad key', label: 'Bad', kind: 'text', default: '' }]],
+    ]
+    const failures = cases.filter(([key, value]) => {
+      const record = { steps: 0, props: [], [key]: value }
+      const saved = checkRuntime(record)
+      return validate(rt, record, file).length === 0 || validate(rt, saved, file).length !== 0
+    })
+    ok(failures.length === 0, `round 3: invalid runtime field matrix rejects inputs and accepts gate outputs (${JSON.stringify(failures)})`)
+  }
+  {
+    const d = JSON.parse(JSON.stringify(starter))
+    d.slides[0].runtime = { steps: 0, props: [], constructor: { unexpected: true } }
+    ok(check(d, file).some((m) => /unknown key constructor/.test(m)),
+      'round 3: inherited Object keys cannot bypass runtime additionalProperties false in the validator')
+  }
+  // BETA FORK, break round 4: independently cross limits and object shapes.
+  // Refusal is checked on INPUT; every repair/drop must still produce a
+  // schema-valid saved record. Kind/value joins remain the documented gap.
+  {
+    const prop = { key: 'caption', label: 'Caption', kind: 'text', default: '' }
+    const valid: J[] = [
+      { src: 'asset:' + 'x'.repeat(200), steps: 10000, props: [] },
+      { url: 'https://' + 'x'.repeat(3992), steps: 0, props: [] },
+      { steps: 0, props: [{ ...prop, label: 'x'.repeat(200), default: 'x'.repeat(4000) }] },
+      { steps: 0, props: Array.from({ length: 64 }, (_, i) => ({ ...prop, key: `p${i}` })) },
+      { steps: 0, props: [], assets: Array.from({ length: 64 }, (_, i) => `a${i}.json`) },
+    ]
+    const invalid: J[] = [
+      { src: 'asset:' + 'x'.repeat(201), props: [] },
+      { url: 'https://' + 'x'.repeat(3993), props: [] },
+      { props: [{ ...prop, label: 'x'.repeat(201) }] },
+      { props: [{ ...prop, default: 'x'.repeat(4001) }] },
+      { props: Array.from({ length: 65 }, (_, i) => ({ ...prop, key: `p${i}` })) },
+      { assets: Array.from({ length: 65 }, (_, i) => `a${i}.json`) },
+      { assets: ['x'.repeat(81)] }, { props: null }, { values: [] },
+      { steps: 0.5 }, { props: [{ ...prop, extra: true }] },
+      JSON.parse('{"steps":0,"props":[],"__proto__":{"injected":true}}'),
+    ]
+    const badValid = valid.filter((r) => validate(rt, r, file).length || JSON.stringify(checkRuntime(r)) !== JSON.stringify(r))
+    const missed = invalid.filter((r) => validate(rt, r, file).length === 0)
+    const badSaved = [...valid, ...invalid].filter((r) => validate(rt, checkRuntime(r), file).length)
+    ok(!badValid.length && !missed.length && !badSaved.length,
+      `round 4 runtime limit matrix: ${valid.length} exact boundaries and ${invalid.length} refused inputs; mismatches=${JSON.stringify({ badValid, missed, badSaved })}`)
+  }
+  const repairedDefault = { steps: 0, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 'banana' }] }
+  ok(validate(rt, repairedDefault, file).length > 0 && ((checkRuntime(repairedDefault) as unknown as J).props as J[])[0].default === 0, 'a number prop with a text default: the schema refuses what the gate would repair to 0')
+  ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'url(x)' }] }, file).length > 0, 'a colour default that smuggles url() is refused, as the gate refuses it')
+  ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'rgb(10, 20, 30)' }] }, file).length === 0, 'an ordinary colour default validates')
+
+  ok(!!rt && rt.type === 'object' && rt.additionalProperties === false, 'slide.runtime is described, and closed to unknown keys')
+  ok(Object.keys(rt.properties as J).sort().join() === 'assets,props,src,steps,still,url,values', `with the keys the gate accepts (${Object.keys(rt.properties as J).sort().join()})`)
+  const deck = JSON.parse(JSON.stringify(starter))
+  deck.assets = { ...(deck.assets ?? {}), 'scene-src': 'data:text/html;base64,PHA+aGk8L3A+', 'scene-still': 'data:image/svg+xml;base64,PHN2Zy8+' }
+  deck.slides.push({
+    id: 'live', notes: '',
+    elements: [{ id: 'still', type: 'image', x: 0, y: 0, w: 1280, h: 720, rotation: 0, opacity: 1, src: 'asset:scene-still' }],
+    runtime: { src: 'asset:scene-src', still: 'asset:scene-still', steps: 3, props: [{ key: 'zoom', label: 'Zoom', kind: 'number', default: 11 }, { key: 'tint', label: 'Tint', kind: 'color', default: '#1b1b1b' }], values: { zoom: 12 }, assets: ['points.json'] },
+  })
+  const errs = check(deck, file)
+  ok(errs.length === 0, `a deck with a runtime slide validates (${errs.length}${errs.length ? ': ' + errs.slice(0, 3).join('; ') : ''})`)
+  // and what validates loads with nothing dropped: the gate keeps the record whole
+  const kept = parseDoc(JSON.stringify(stampSchema(deck)))?.slides.find((s) => s.id === 'live') as unknown as J
+  ok(JSON.stringify((kept?.runtime as J)) === JSON.stringify(deck.slides.at(-1).runtime), 'and the gate keeps that record byte for byte')
+  ok(check({ ...deck, slides: [{ ...deck.slides.at(-1), runtime: { steps: 0, props: [] } }] }, file).length === 0, 'a placeholder record (no scene yet) validates')
+  const bad = (mutate: (r: J) => void) => { const d = JSON.parse(JSON.stringify(deck)); mutate(d.slides.at(-1).runtime); return check(d, file) }
+  ok(bad((r) => { (r.props as J[])[0].kind = 'select' }).some((m) => /props\[0\]/.test(m)), 'a prop of an unknown kind fails, naming the prop')
+  ok(bad((r) => { r.sandbox = 'allow-same-origin' }).some((m) => /unknown key sandbox/.test(m)), 'a key the record does not have (a sandbox, say) fails with the key named')
+  ok(bad((r) => { r.url = 'http://example.com/' }).some((m) => /url/.test(m)), 'a url that is not https fails')
+  ok(bad((r) => { r.src = 'data:text/html,<p>x</p>' }).some((m) => /src/.test(m)), 'a src that is not an asset ref fails')
+  ok(bad((r) => { r.steps = -1 }).some((m) => /steps/.test(m)), 'a negative step count fails')
+  const typoSlide = JSON.parse(JSON.stringify(deck)); typoSlide.slides.at(-1).runtim = {}
+  ok(check(typoSlide, file).some((m) => /unknown key runtim/.test(m)), 'a slide with an unknown key fails with the key named')
+  ok(check(7 as unknown, rt).length > 0, 'runtime: 7 is refused by the schema, as the gate drops it')
+}
+
+
+// BETA FORK, from break round 5: real save output, not a hand-built fixture.
+{
+  const { serializeFile, capturePristine, embeddedDocBlock } = await import('../slides/src/save.ts')
+  const { sanitizeDoc, guardOpenedDoc } = await import('../slides/src/restoregate.ts')
+  const { betaStarterDoc } = await import('../slides/src/betastarter.ts')
+  class SchemaShell {
+    block = { textContent: '' }
+    title = { textContent: '' }
+    cloneNode() { return new SchemaShell() }
+    querySelectorAll(s: string) { return s === 'script' ? [this.block] : [] }
+    getElementById(id: string) { return id === 'bento-doc' ? this.block : null }
+    querySelector(s: string) { return s === 'title' ? this.title : null }
+    get documentElement() { return { outerHTML: `<html><head><title>${this.title.textContent}</title></head><body><script id="bento-doc">${this.block.textContent}</script></body></html>` } }
+  }
+  const { configureApp } = await import('../kernel/src/app.ts')
+  configureApp({ appId: 'beta-slides', appName: 'beta/slides', manifestUrl: 'https://invalid.example/manifest' })
+  const priorDocument = globalThis.document
+  ;(globalThis as any).document = new SchemaShell()
+  capturePristine()
+  const inputs: Array<[string, any]> = [['starterDoc', starterDoc()], ['betaStarterDoc', betaStarterDoc()]]
+  for (const name of readdirSync(join(root, 'beta/templates')).filter(n => n.endsWith('.bento.html'))) {
+    inputs.push([name, parseDoc(embeddedDocBlock(read(`beta/templates/${name}`))!)])
+  }
+  const runtime = starterDoc()
+  runtime.slides[0].runtime = { steps: 2, props: [{ key: 'caption', label: 'Caption', kind: 'text', default: 'Oslo' }], values: { caption: 'Bergen' } }
+  inputs.push(['runtime deck', runtime])
+  for (const [name, input] of inputs) {
+    guardOpenedDoc(input) // main.ts's actual file-open guard precedes saving
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(input))!)
+    const errs = check(saved, file)
+    const parsed = parseDoc(JSON.stringify(saved))!
+    const gated = sanitizeDoc(parsed as unknown as J)
+    ok(saved.$schema === file.$id && errs.length === 0 && !!gated && gated.dropped.length === 0,
+      `saved ${name}: advertised schema accepts actual save output and reload drops nothing; errors=${JSON.stringify(errs.slice(0, 8))}; dropped=${JSON.stringify(gated?.dropped.slice(0, 8))}`)
+    // Failing-first control: changing a slide key must make these exact saved bytes fail.
+    saved.slides[0].runtim = {}
+    ok(check(saved, file).some(e => e.includes('unknown key runtim')),
+      `saved ${name}: unknown slide key fails with its name`)
+  }
+  ;(globalThis as any).document = priorDocument
+}
+
+// BETA FORK: tests exercise the plugin writers, not copied output shapes.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  // Keep this import external to the bundle: the CLI guard belongs to splice.mjs.
+  const { pathToFileURL } = await import('node:url')
+  const { create, derive, readProject } = await import(pathToFileURL(join(root, 'plugins/beta-slides/scripts/splice.mjs')).href)
+  const { readBlock } = await import(pathToFileURL(join(root, 'plugins/beta-slides/scripts/lib/bento-doc.mjs')).href)
+  const fixture = mkdtempSync(join(tmpdir(), 'beta-schema-round6-'))
+  const priorFetch = globalThis.fetch
+  try {
+    const sceneDir = join(fixture, 'scenes/live-scene')
+    mkdirSync(sceneDir, { recursive: true })
+    writeFileSync(join(fixture, 'deck.json'), JSON.stringify({ title: 'Schema splice probe', slides: [] }))
+    writeFileSync(join(sceneDir, 'index.html'), '<main>Scene</main>')
+    writeFileSync(join(sceneDir, 'still.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"></svg>')
+    writeFileSync(join(sceneDir, 'scene.json'), JSON.stringify({ steps: 2, url: 'https://example.test/scene', props: [
+      { key: 'caption', kind: 'text', default: 'Oslo' },
+      { key: 'amount', kind: 'number', default: 3 },
+      { key: 'color', kind: 'color', default: '#123456' },
+    ] }))
+    const template = read('beta/templates/blank.bento.html')
+    let posted = ''
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url) === 'https://schema-test.invalid/templates/blank.bento.html') return new Response(template)
+      if (String(url) === 'https://schema-test.invalid/api/harness/decks' && init?.method === 'POST') {
+        posted = init.body
+        return Response.json({ id: 'round6', url: 'https://schema-test.invalid/d/round6' }, { status: 201 })
+      }
+      throw new Error('unexpected test request: ' + url)
+    }) as typeof fetch
+    await create(fixture, { skipUrlCheck: true, env: { SLIDES_STORE_URL: 'https://schema-test.invalid', CF_ACCESS_CLIENT_ID: 'test-id', CF_ACCESS_CLIENT_SECRET: 'test-secret' }, log() {} })
+    const created = readBlock(posted)
+    // Failing-first control: this exact writer output with a misspelled slide key fails.
+    const broken = structuredClone(created)
+    broken.slides[0].runtim = broken.slides[0].runtime
+    ok(check(broken, file).some(e => e.includes('unknown key runtim')), 'create: unknown slide key is rejected')
+    ok(check(created, file).length === 0, 'create: actual POST document validates: ' + JSON.stringify(check(created, file)))
+    const project = readProject(fixture)
+    const replaced = derive(created, project).doc
+    const invalid = structuredClone(replaced)
+    invalid.slides[0].runtime.url = 'javascript:alert(1)'
+    ok(check(invalid, file).length > 0 && check(replaced, file).length === 0,
+      'applyScene: replacement validates and invalid runtime URL fails')
+  } finally { globalThis.fetch = priorFetch; rmSync(fixture, { recursive: true, force: true }) }
+}
+
+// BETA FORK: round 6, Beta web embeds must retain every accepted URL on save.
+{
+  const { sanitizeElement } = await import('../slides/src/untrusted.ts')
+  const { serializeFile, embeddedDocBlock } = await import('../slides/src/save.ts')
+  for (const url of ['https://example.test/live', 'HTTPS://example.test/live']) {
+    const embed = { id: 'web-probe', type: 'embed', x: 0, y: 0, w: 1280, h: 720,
+      rotation: 0, opacity: 1, app: 'web', url, live: true, view: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }
+    const bad = { ...embed, accidentalKey: true }
+    ok(validate((file.$defs as J).embed as J, bad, file).length > 0,
+      'web embed: unknown key fails (' + url + ')')
+    const gated = sanitizeElement(embed)
+    const d = starterDoc()
+    d.slides[0].elements = [gated!]
+    // The save rig above captured a minimal shell; use the real serializer.
+    const saved = JSON.parse(embeddedDocBlock(serializeFile(d))!)
+    const errs = check(saved, file)
+    ok(!!gated && (gated as any).url === url && saved.$schema === file.$id
+      && saved.slides[0].elements[0].url === url && errs.length === 0,
+      'web embed: gate-kept URL validates (' + url + '): ' + JSON.stringify(errs))
+  }
+}
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

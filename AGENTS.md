@@ -263,14 +263,20 @@ verbatim; this section is what the fork adds. The plan of record is
 `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md`; where it and
 `docs/PLATFORM.md` disagree, PLATFORM wins.
 
+Upstream base: `v1.2.7` (merged 2026-10-14, #41). `scripts/test-beta-markers.ts` diffs the fork against this tag; change it in the same commit as the next upstream merge.
+
 ## Rules for the fork
 
-1. **Kernel-zone edits are three files, named, and offered upstream.**
-   `kernel/src/app.ts` (the two optional `AppConfig` fields),
-   `kernel/src/update.ts` (signing key from `AppConfig`) and
-   `kernel/src/sync/online.ts` (relay host from `AppConfig`). Any other change
-   under `kernel/src/` stops the unit and becomes an upstream pull request
-   first. Branches for upstream carry no attribution trailers (upstream rule 8).
+1. **Kernel-zone edits are named, and offered upstream.** Since upstream
+   1.2.x took `AppConfig.publicKeyJwk` and `syncHost` itself,
+   `kernel/src/update.ts` and `kernel/src/sync/online.ts` are upstream's bytes
+   and stay that way. What the fork still changes under `kernel/src/` is
+   `kernel/src/app.ts` (the optional `AppConfig.storeHost`), and
+   `kernel/src/charts.ts` with the new `kernel/src/bar-corners.ts`
+   (horizontal bars and rounded bar ends, #39), which have not been offered
+   upstream yet and should be. Any other change under `kernel/src/` stops the
+   unit and becomes an upstream pull request first. Branches for upstream
+   carry no attribution trailers (upstream rule 8).
 2. **Beta additions live where upstream cannot collide with them.** `beta/`
    for tokens, fonts, theme and templates; `plugins/beta-slides/` for the
    skill; `scripts/build-beta-*` and `scripts/test-beta-*` for tooling. Inside
@@ -282,9 +288,24 @@ verbatim; this section is what the fork adds. The plan of record is
 4. **Upstream tracking is weekly, by merge.** `git fetch upstream && git merge
    upstream/main` on `main`, or before a release. The predictable conflicts are
    the three kernel files, `CLAUDE.md`/`AGENTS.md` (see below), `render.ts`, the i18n catalogs, `scripts/release.mjs`, `.github/workflows/ci.yml`, and on every upstream release `slides/package.json` (keep Beta's dated version, see README "Releasing") and `CHANGELOG.md` (keep both sections).
+   The runbook, the checks that only the fork needs, and what to look at
+   when a merge turns a rig red are in `docs/beta-smoke.md`.
 5. **CI is the `beta` job** in `.github/workflows/ci.yml`. Upstream's
    `validate` job is gated off with `if:`, not deleted, so
-   `test-ci-registered.ts` still sees every rig.
+   `test-ci-registered.ts` still sees every rig. That rig only checks that a
+   filename appears somewhere in the workflow, so a rig left in `validate`
+   counts as registered while never running here: an upstream rig whose
+   subject the fork touches is ADDED to the `beta` job. Upstream's
+   `slides-font-browser` job runs in the fork too, with three steps gated to
+   upstream (each says why).
+5a. **Every Beta hook inside an upstream file carries the marker `BETA FORK`**,
+   as a comment on the changed line or within the three lines above it; a run
+   of added lines is one hook, headed by its marker. One spelling.
+   `scripts/test-beta-markers.ts` diffs the fork against the upstream tag
+   named above and fails CI on a hook without it, so `git grep -n "BETA FORK"`
+   lists the fork's footprint in upstream's source, scripts and workflows
+   (prose and site pages are not in the rig's scope). Code upstream takes
+   over loses its marker in the same merge.
 6. **Commits in this fork carry Beta's session attribution** (the
    `Co-Authored-By` and `Claude-Session` trailers Beta's harness requires).
    Upstream's rule 8 applies to the branches offered upstream, not to the
