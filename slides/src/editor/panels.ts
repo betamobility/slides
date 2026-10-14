@@ -24,6 +24,8 @@ import { stepOf } from '../steps'
 import { ICONS } from '../icons'
 import { LayersUI } from './layers'
 import { t } from '../i18n'
+import { settingsForm } from '../beta/settingsform' // BETA FORK: a scene's settings form (U10)
+import { presetsFor, readQuery, valuesOf, webSceneOf, writeQuery, writeQueryAll } from '../beta/scenesettings' // BETA FORK
 import { lsJson, lsSet } from '../../../kernel/src/storage.ts'
 
 // Hover help for panel rows, keyed by the RAW English label (translated at
@@ -2057,36 +2059,76 @@ export class PropsPanel {
       this.host.appendChild(none)
       return
     }
-    // Look the record up again at write time: an undo replaces the slide object.
-    const setValue = (key: string, v: string | number, final: boolean) =>
-      this.edit(() => {
-        const live = this.store.slide.runtime
-        if (!live) return
-        live.values = { ...(live.values ?? {}), [key]: v }
-      }, final)
-    for (const prop of rt.props) {
-      const current = rt.values?.[prop.key] ?? prop.default
-      let input: HTMLElement
-      if (prop.kind === 'number') {
-        input = this.number(typeof current === 'number' ? current : Number(current) || 0, 1, (v, fin) => setValue(prop.key, v, fin))
-      } else if (prop.kind === 'color') {
-        input = this.color(String(current), (v, fin) => setValue(prop.key, v, fin))
-      } else {
-        const text = document.createElement('input')
-        text.type = 'text'
-        text.value = String(current)
-        text.addEventListener('input', () => setValue(prop.key, text.value, false))
-        text.addEventListener('change', () => setValue(prop.key, text.value, true))
-        input = text
-      }
-      input.dataset.runtimeProp = prop.key
-      const row = document.createElement('label')
-      row.className = 'ed-row'
-      const span = document.createElement('span')
-      span.textContent = prop.label
-      row.append(span, input)
-      this.host.appendChild(row)
-    }
+    // U10: the form is drawn from the declared settings and their hints
+    // (beta/settingsform.ts). The record is looked up again at every read and
+    // write: an undo or a remote edit replaces the slide object.
+    const live = () => this.store.slideById(slide.id)?.runtime
+    this.host.appendChild(settingsForm({
+      scope: slide.id,
+      props: rt.props,
+      values: () => valuesOf(live()?.props ?? rt.props, live()?.values),
+      write: (key, v, final) => {
+        this.edit(() => {
+          const r = live()
+          if (r) r.values = { ...(r.values ?? {}), [key]: v }
+        }, final)
+        return null
+      },
+      writeAll: (values) => {
+        this.edit(() => {
+          const r = live()
+          if (!r) return
+          // every declared setting, nothing else (a preset)
+          r.values = Object.fromEntries(r.props.map((p) => [p.key, values[p.key] ?? p.default]))
+        }, true)
+        return null
+      },
+      presets: presetsFor(rt.library),
+      readOnly: this.store.readOnly,
+      color: (value, onEdit) => this.color(value, onEdit),
+    }))
+  }
+
+  /**
+   * BETA FORK (U10, KTD10): a library web scene keeps its declared settings in
+   * the embed's `doc` and their values in the page address's query string.
+   * Only the query is rewritten, from the address as it is at the moment of
+   * the write, so a change made meanwhile (a colleague's) is kept.
+   */
+  private buildWebSceneSettings(el: EmbedElement) {
+    const scene = el.app === 'web' ? webSceneOf(el.doc) : null
+    if (!scene || !scene.props.length) return
+    const id = el.id
+    const liveUrl = () => (this.store.slide.elements.find((e) => e.id === id) as EmbedElement | undefined)?.url
+    this.section(t('Scene settings'))
+    this.host.appendChild(settingsForm({
+      scope: `${this.store.slide.id}/${id}`,
+      props: scene.props,
+      values: () => readQuery(liveUrl(), scene.props),
+      write: (key, v, final) => {
+        const first = writeQuery(liveUrl(), key, v)
+        if ('error' in first) return first.error
+        this.mutate(id, (e) => {
+          const r = writeQuery((e as EmbedElement).url, key, v)
+          if ('url' in r) (e as EmbedElement).url = r.url
+        }, final)
+        return null
+      },
+      writeAll: (values) => {
+        // every declared setting at once, measured on the final address
+        const all = Object.fromEntries(scene.props.map((p) => [p.key, values[p.key] ?? p.default]))
+        const first = writeQueryAll(liveUrl(), all)
+        if ('error' in first) return first.error
+        this.mutate(id, (e) => {
+          const r = writeQueryAll((e as EmbedElement).url, all)
+          if ('url' in r) (e as EmbedElement).url = r.url
+        }, true)
+        return null
+      },
+      presets: presetsFor(scene.library),
+      readOnly: this.store.readOnly,
+      color: (value, onEdit) => this.color(value, onEdit),
+    }))
   }
 
   /**
@@ -2161,6 +2203,7 @@ export class PropsPanel {
     trade.className = 'ed-hint'
     trade.textContent = t('While presenting, a clicked frame keeps the arrow keys until you click outside it. Everyone who presents this deck loads the page from its site.')
     this.host.appendChild(trade)
+    this.buildWebSceneSettings(el) // BETA FORK: a library web scene's settings, in its address (U10)
   }
 
   private buildCodeProps(el: CodeElement) {

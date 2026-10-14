@@ -2974,3 +2974,12 @@ input.ed-toggle { width: 16px; height: 16px; accent-color: #5E7699; cursor: poin
 /* where the slide list is a drawer the grid is not offered */
 @media (max-width: 700px) { .ed-lt-toggle { display: none !important; } }
 
+/* BETA FORK: a scene's settings form (beta/settingsform.ts). The slider and
+   the position share their row with a number field each; both fit the panel. */
+.ed-scene-settings .ed-scene-range,
+.ed-scene-settings .ed-scene-latlon { display: flex; gap: 6px; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+.ed-scene-settings .ed-scene-range input[type='range'] { flex: 1 1 auto; min-width: 0; width: auto; }
+.ed-scene-settings .ed-scene-range input[type='number'] { flex: 0 0 56px; width: 56px; }
+.ed-scene-settings .ed-scene-latlon input[type='number'] { flex: 1 1 0; min-width: 0; width: auto; }
+.ed-scene-settings .ed-scene-note { margin-top: -4px; }
+

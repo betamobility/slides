@@ -133,6 +133,9 @@ const finite = (v: unknown): number | undefined => {
   return typeof n === 'number' && Number.isFinite(n) ? n : undefined
 }
 
+/** A setting's value as the gate keeps it, or undefined (exported for the settings form, U10). */
+export const checkRuntimeValue = (kind: RuntimeProp['kind'], v: unknown): string | number | undefined => checkValue(kind, v)
+
 function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | undefined {
   if (kind === 'number') return finite(v)
   if (kind === 'color') return safeColor(v) ? v.trim() : undefined // trimmed: what safeColor measured is what is kept
