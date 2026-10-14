@@ -156,6 +156,11 @@ console.log('\nthe keyboard move')
     if (g !== null && !lt.gaps(u).includes(g)) ok(false, `keyMove names a legal gap (${sel} ${dir} → ${g})`)
   }
   ok(true, 'every keyboard move names a legal gap')
+  // a state whose parent is gone heads its own unit (slidesel.ts parentOf), so the place before it is a gap
+  const orphan: S[] = [{ id: 'x', stateOf: 'gone' }, { id: '1' }, { id: '2' }]
+  ok(JSON.stringify(lt.gaps(orphan)) === '[0,1,2,3]', `an orphaned state is a unit of its own (${lt.gaps(orphan)})`)
+  const g0 = lt.keyMove(orphan, [1], -1)
+  ok(g0 === 0 && lt.gaps(orphan).includes(g0) && ids(moveBlock(orphan, [1], g0)) === '1,x,2', 'and a slide can be moved before it')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

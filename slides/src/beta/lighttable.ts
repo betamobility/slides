@@ -21,7 +21,7 @@
 // before a parent slide, or the end. There is no gap between a parent and its
 // states, so nothing can be dropped there.
 
-import { expand, moveBlock, parents, type SlideLike } from '../editor/slidesel.ts'
+import { expand, moveBlock, parentOf, parents, type SlideLike } from '../editor/slidesel.ts'
 
 // ---- pure parts (scripts/test-beta-lighttable.ts) ----------------------------
 
@@ -49,10 +49,13 @@ export function rows(rects: Box[]): number[][] {
   return out
 }
 
-/** Every legal drop index: before each parent, and the end. */
+/** A slide that heads a unit: a parent, or a state whose parent is gone (slidesel.ts treats that as its own unit). */
+const heads = (slides: SlideLike[], i: number): boolean => parentOf(slides, i) === i
+
+/** Every legal drop index: before each unit, and the end. */
 export function gaps(slides: SlideLike[]): number[] {
   const out: number[] = []
-  slides.forEach((s, i) => { if (!s.stateOf) out.push(i) })
+  slides.forEach((_, i) => { if (heads(slides, i)) out.push(i) })
   out.push(slides.length)
   return out
 }
@@ -60,7 +63,7 @@ export function gaps(slides: SlideLike[]): number[] {
 /** The first legal gap at or after `i` (a place inside a unit becomes the end of the unit). */
 function legal(slides: SlideLike[], i: number): number {
   let g = Math.max(0, Math.min(slides.length, i))
-  while (g < slides.length && slides[g].stateOf) g++
+  while (g < slides.length && !heads(slides, g)) g++
   return g
 }
 
@@ -170,13 +173,13 @@ export interface LightTableHost {
   current(): number
   /** The multi-selection (parent indices), possibly empty. */
   selection(): number[]
-  /** What an action on thumbnail `index` acts on: the selection when it is in it, else that one. */
-  targets(index: number): number[]
   goTo(index: number): void
   /** Upstream's drop: move the payload's units to sit before `index`, as one commit. */
   drop(payload: string, index: number): void
-  /** Render the thumbnails again (their width follows the mode). */
+  /** Render the thumbnails again (their width follows the mode), and anything that shows the list's state. */
   rebuild(): void
+  /** Drop the canvas selection: the canvas is covered, and keys must not act on what cannot be seen. */
+  deselect(): void
   /** False where the slide list is a drawer (a phone): the grid is not offered there. */
   allowed(): boolean
   rtl(): boolean
@@ -190,6 +193,12 @@ export class LightTable {
   readonly button: HTMLButtonElement
   private readonly host: LightTableHost
   private bar: HTMLElement | null = null
+  /** Whether the list was collapsed when the grid was turned on; put back on leaving. */
+  private wasCollapsed = false
+  /** The last two presses on the grid: which slide, and whether on a thumbnail's own tools. */
+  private presses: { id: string | null; tool: boolean }[] = []
+  /** The active thumbnail the list last scrolled to. */
+  private shown = -1
 
   constructor(host: LightTableHost, on = false, signal?: AbortSignal) {
     this.host = host
@@ -197,10 +206,16 @@ export class LightTable {
     const b = document.createElement('button')
     b.className = 'ed-btn ed-lt-toggle'
     b.type = 'button'
-    b.innerHTML = `${ICON}<span></span>`
-    b.querySelector('span')!.textContent = host.label
+    // Icon only, like undo and redo beside it: a label would cost the bar its
+    // other labels sooner. Folded into a menu, the bar borrows the tooltip.
+    b.innerHTML = ICON
     b.title = host.label
-    b.addEventListener('click', () => this.toggle())
+    b.setAttribute('aria-label', host.label)
+    b.addEventListener('click', () => {
+      // pressed from inside a folded menu: close it, or its open state would hold Escape
+      b.closest('.ed-dropdown')?.classList.remove('open')
+      this.toggle()
+    })
     this.button = b
     const sb = host.sidebar
     // Capture phase: upstream's per-thumbnail handlers mean "insert before
@@ -211,6 +226,7 @@ export class LightTable {
     sb.addEventListener('drop', (ev) => this.dropped(ev), { capture: true, signal })
     sb.addEventListener('dragleave', (ev) => { if (!sb.contains(ev.relatedTarget as Node | null)) this.clearBar() }, { signal })
     sb.addEventListener('dragend', () => this.clearBar(), { signal })
+    sb.addEventListener('mousedown', (ev) => this.pressed(ev), { capture: true, signal })
     sb.addEventListener('dblclick', (ev) => this.opened(ev), { signal })
     // a window made narrow enough for the list to become a drawer leaves the grid
     window.addEventListener('resize', () => { if (this.on && !host.allowed()) this.leave() }, { signal })
@@ -231,8 +247,12 @@ export class LightTable {
   enter(): void {
     if (this.on || !this.host.allowed()) return
     this.on = true
+    this.shown = -1
+    this.presses = []
     // the list may be collapsed; the grid is the list, so it has to show
+    this.wasCollapsed = this.host.sidebar.classList.contains('ed-collapsed')
     this.host.sidebar.classList.remove('ed-collapsed')
+    this.host.deselect()
     this.paint()
     this.host.rebuild()
   }
@@ -242,6 +262,8 @@ export class LightTable {
     if (!this.on) return
     this.on = false
     this.clearBar()
+    this.host.sidebar.classList.toggle('ed-collapsed', this.wasCollapsed)
+    this.wasCollapsed = false
     this.paint()
     this.host.rebuild()
     if (at != null && at >= 0) this.host.goTo(at)
@@ -307,10 +329,41 @@ export class LightTable {
     for (const n of this.thumbs()) n.classList.remove('drop', 'dragging')
   }
 
+  /**
+   * Upstream scrolls the active thumbnail into view every time the selection
+   * repaints. In a column that is harmless; in a scrolled grid a press on a
+   * thumbnail far from the active one made the grid jump under the pointer,
+   * and the second click of a double-click opened another slide. True when
+   * the scroll should be skipped: the grid is on and the active slide is the
+   * one already scrolled to.
+   */
+  holdsScroll(active: number): boolean {
+    if (!this.on) return false
+    if (active === this.shown) return true
+    this.shown = active
+    return false
+  }
+
+  private slideIdAt(target: EventTarget | null): string | null {
+    const thumb = target instanceof Element ? target.closest<HTMLElement>('.ed-thumb') : null
+    return thumb ? this.host.slides()[Number(thumb.dataset.index)]?.id ?? null : null
+  }
+
+  private pressed(ev: MouseEvent): void {
+    if (!this.on) return
+    this.presses = [...this.presses.slice(-1), { id: this.slideIdAt(ev.target), tool: ev.target instanceof Element && !!ev.target.closest('.ed-thumb-tools') }]
+  }
+
   private opened(ev: MouseEvent): void {
     if (!this.on) return
     const thumb = ev.target instanceof Element ? ev.target.closest<HTMLElement>('.ed-thumb') : null
-    if (!thumb || (ev.target as Element).closest('.ed-thumb-tools')) return
+    if (!thumb) return
+    // Both clicks have to be on this slide's thumbnail, and neither on its
+    // tools: a double-click on Duplicate or Delete rebuilds the grid between
+    // the clicks, and whatever thumbnail lands under the pointer is not one
+    // anybody asked to open.
+    const id = this.host.slides()[Number(thumb.dataset.index)]?.id
+    if (this.presses.length < 2 || this.presses.some((p) => p.tool || p.id !== id)) return
     this.leave(Number(thumb.dataset.index))
   }
 
@@ -333,7 +386,8 @@ export class LightTable {
     const cur = this.host.current()
     if (ev.altKey) {
       const dir = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : (key === 'ArrowRight') !== this.host.rtl() ? 1 : -1
-      const sel = this.host.targets(cur)
+      // the painted selection moves; with none, the slide the grid is on
+      const sel = this.host.selection().length ? this.host.selection() : [cur]
       const drop = keyMove(this.host.slides(), sel, dir)
       if (drop !== null) this.host.drop(JSON.stringify(sel), drop)
       return true

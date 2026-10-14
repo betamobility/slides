@@ -143,6 +143,68 @@ await toggle.click(); await settle()
 await p.keyboard.press('['); await settle()
 ok(!(await isGrid()) && await p.evaluate((sb) => !document.querySelector(sb).classList.contains('ed-collapsed'), SB), 'the hide-list key in the grid goes back to the list instead of hiding it')
 
+console.log('\nfound by a local hunt before the first Codex round')
+// a scrolled grid: the press must not make it jump, or the double-click opens another slide
+await p.setViewportSize({ width: 1440, height: 700 })
+await load(plain(60))
+await toggle.click(); await settle()
+await p.evaluate((sb) => { document.querySelector(sb).scrollTop = 900 }, SB); await settle()
+const visible = await p.evaluate((sb) => {
+  const s = document.querySelector(sb).getBoundingClientRect()
+  return [...document.querySelectorAll(sb + ' .ed-thumb')].filter((n) => { const r = n.getBoundingClientRect(); return r.top > s.top + 40 && r.bottom < s.bottom - 40 }).map((n) => Number(n.dataset.index))
+}, SB)
+const far = visible[Math.floor(visible.length / 2)]
+const scrollBefore = await p.evaluate((sb) => document.querySelector(sb).scrollTop, SB)
+await thumb(far).click(); await settle()
+ok(await p.evaluate((sb) => document.querySelector(sb).scrollTop, SB) === scrollBefore, 'a click on a thumbnail far from the active one does not scroll the grid')
+await p.evaluate((sb) => { document.querySelector(sb).scrollTop = 0 }, SB); await settle()
+await thumb(0).click(); await settle()
+await p.evaluate((sb) => { document.querySelector(sb).scrollTop = 900 }, SB); await settle()
+await thumb(far).dblclick(); await settle()
+ok(!(await isGrid()) && (await current()) === far, `double-click in a scrolled grid opens the slide under the pointer (${(await current()) + 1}, wanted ${far + 1})`)
+await p.setViewportSize({ width: 1440, height: 900 })
+
+// keys must not act on a canvas selection the grid covers
+await load(plain(8))
+await p.locator('.ed-stage-scale [data-el-id="t1"]').click(); await settle()
+ok(await p.evaluate(() => document.querySelectorAll('.ed-stage-scale [data-el-id="t1"]').length) === 1, 'an element is selected on the canvas')
+await toggle.click(); await settle()
+await thumb(1).click()
+await thumb(4).click({ modifiers: [MOD] })
+await p.keyboard.press('Delete'); await settle()
+ok((await order()) === '1,3,4,6,7,8' && await p.evaluate(() => window.bento.doc.slides[0].elements.length) === 1, `Delete removes the selected slides, not an element behind the grid (${await order()})`)
+await p.keyboard.press(`${MOD}+z`); await settle()
+
+// Alt+arrow moves what is painted as selected, wherever the arrows have walked to
+await thumb(1).click()
+await thumb(4).click({ modifiers: [MOD] })
+await p.keyboard.press('ArrowRight'); await settle()
+await p.keyboard.press('Alt+ArrowRight'); await settle()
+ok((await order()) === '1,3,4,6,2,5,7,8', `after an arrow, Alt+Right still moves the two selected slides (${await order()})`)
+await p.keyboard.press(`${MOD}+z`); await settle()
+await p.keyboard.press('Escape'); await settle()
+if (!(await isGrid())) { await toggle.click(); await settle() }
+
+// a double-click on a thumbnail's own tool is that tool twice at most, never "open this slide"
+await thumb(2).click(); await settle()
+await thumb(2).hover()
+const dup = thumb(2).locator('.ed-thumb-tools .ed-btn').first()
+await dup.dblclick(); await settle()
+ok(await isGrid(), 'a double-click on Duplicate stays in the grid')
+ok(await p.evaluate(() => window.bento.doc.slides.length) > 8, 'and it duplicated')
+
+// a list that was collapsed is collapsed again afterwards
+await p.keyboard.press('Escape'); await settle()
+await p.keyboard.press('Escape'); await settle()
+ok(!(await isGrid()), 'out of the grid')
+await p.keyboard.press('['); await settle()
+ok(await p.evaluate((sb) => document.querySelector(sb).classList.contains('ed-collapsed'), SB), 'the list is collapsed')
+await toggle.click(); await settle()
+ok(await isGrid() && await p.evaluate((sb) => !document.querySelector(sb).classList.contains('ed-collapsed'), SB), 'the grid shows even so')
+await p.keyboard.press('Escape'); await settle()
+ok(await p.evaluate((sb) => document.querySelector(sb).classList.contains('ed-collapsed'), SB), 'and leaving it puts the list back as it was, collapsed')
+await p.keyboard.press('['); await settle()
+
 console.log('\nstates and hidden slides')
 await load([
   { id: '1', background: '#ffffff', elements: [label('1')] },

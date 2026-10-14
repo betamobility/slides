@@ -502,11 +502,11 @@ export class Editor {
       slides: () => this.store.doc.slides,
       current: () => this.store.currentIndex,
       selection: () => this.thumbSel,
-      targets: (i) => this.thumbTargets(i),
       goTo: (i) => this.store.goTo(i),
       drop: (payload, i) => this.dropSlides(payload, i),
-      rebuild: () => this.rebuildSidebar(),
-      allowed: () => !this.panelsAreDrawers && !this.store.readOnly,
+      rebuild: () => { this.rebuildSidebar(); this.updatePanelChevrons() },
+      deselect: () => this.store.select([]),
+      allowed: () => !this.panelsAreDrawers,
       rtl: () => isRtl(),
       label: t('Slide grid'),
     }, !!this.lightTable?.on, this.buildScope.signal)
@@ -2016,7 +2016,7 @@ export class Editor {
       n.classList.toggle('selected', selected.has(idx))
       if (isActive) active = n
     })
-    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (!this.lightTable?.holdsScroll(this.store.currentIndex)) active?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) // BETA FORK: a scrolled grid must not jump under the pointer
   }
 
   private scheduleThumbs() {
