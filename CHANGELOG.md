@@ -11,9 +11,16 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.10.10] — 2026-10-14
+
+- **Ready-made scenes from Beta's library.** A new Scenes button opens a shelf of reviewed live scenes (a map and a counter to start); pick one and a preset, and it lands as a new slide with its picture in place.
+- **Change a scene's settings in the panel.** A live scene shows its settings as proper controls (a slider, a choice, a position, a colour), with presets; each change is one undo step.
+- **Smoother shows with many live scenes.** Only the slide on screen and its neighbours keep a live scene running, so a deck with many of them stays quick.
+- **The light table.** The slide list opens as a grid for arranging many slides at once, with a drop gap that shows where they will land.
+- **Publishing asks for one click, never a secret, and lasts a week.** The beta-slides skill (0.4.0) starts a browser approval by itself; the approval lasts 7 days, and the Agent access list names which agent holds it.
 - **Current with upstream bento/slides 1.2.7.** Merges 187 upstream commits (1.0.19 to 1.2.7): the generated document schema, sidebar multi-select, reveal steps, export slides as images, the compress-pictures tool, maths, and the hardened loader. Upstream's own entries are below Beta's, under their version numbers.
-- **Publishing asks for one click, never a secret.** The splice tool starts the browser approval by itself when a person has none, and the beta-slides skill (0.3.0) no longer points anyone at a token. The service token is for unattended runs only.
-- **One approval covers a week.** A publishing approval lasts 7 days, and the Agent access list names which agent holds it. Needs the deck store worker deployed.
+- **Claude can place library scenes too.** The splice tool lists the library, inserts a scene by id and changes its settings, and never overwrites the values a person set.
+- **The splash and the deck list on the current Beta design.** White surface, Geist type, and the wordmark as the way home.
 
 ## [2026.10.9] — 2026-10-09
 
