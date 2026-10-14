@@ -513,6 +513,19 @@ export interface RuntimeProp {
   label: string
   kind: 'text' | 'number' | 'color'
   default: string | number
+  /**
+   * BETA FORK (U9): a hint for the settings form, riding on a kind every shell
+   * knows: `bool`, `latlon`, `select:a|b|c`, `range:min:max:step`. A free
+   * string to the format; an older shell drops it and keeps the setting as
+   * plain text or a number, so saving there strips nothing a deck needs.
+   */
+  format?: string
+}
+
+/** BETA FORK (U9): which library scene a runtime slide was inserted from. */
+export interface RuntimeLibrary {
+  id: string
+  version: number
 }
 
 /**
@@ -533,6 +546,8 @@ export interface RuntimeSlide {
   props: RuntimeProp[]
   values?: Record<string, string | number>
   assets?: string[]
+  /** BETA FORK (U9): set when the scene came from the library; the splice tool's ownership rule keys on it. */
+  library?: RuntimeLibrary
 }
 
 export interface BentoDoc {

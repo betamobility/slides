@@ -2013,6 +2013,13 @@
                       "default": {
                         "type": "string",
                         "maxLength": 4000
+                      },
+                      "format": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
                   },
@@ -2039,6 +2046,13 @@
                       },
                       "default": {
                         "type": "number"
+                      },
+                      "format": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
                   },
@@ -2067,6 +2081,13 @@
                         "type": "string",
                         "maxLength": 64,
                         "pattern": "^(?![\\s\\S]*(?:[uU][rR][lL]\\s*\\(|[eE][xX][pP][rR][eE][sS][sS][iI][oO][nN]))(?=[\\s\\S]*\\S)[#a-zA-Z0-9(),.%\\s/-]+$"
+                      },
+                      "format": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
                   }
@@ -2097,6 +2118,26 @@
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
               },
               "description": "store-origin files the scene is handed when presented from the store"
+            },
+            "library": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version"
+              ],
+              "description": "the library scene this slide was inserted from, and which version of it",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,39}$"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                }
+              }
             }
           }
         },

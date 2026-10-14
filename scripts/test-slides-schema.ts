@@ -259,6 +259,28 @@ console.log('\na runtime slide validates; a broken one does not\n')
     ok(check(d, file).some((m) => /unknown key constructor/.test(m)),
       'round 3: inherited Object keys cannot bypass runtime additionalProperties false in the validator')
   }
+  // BETA FORK (U9): the library marker and a setting's format hint
+  {
+    const prop = { key: 'mode', label: 'Mode', kind: 'text', default: 'a' }
+    const valid: J[] = [
+      { steps: 0, props: [{ ...prop, format: 'select:a|b|c' }], library: { id: 'map', version: 1 } },
+      { steps: 2, props: [{ key: 'on', label: 'On', kind: 'number', default: 1, format: 'bool' }, { key: 'p', label: 'P', kind: 'text', default: '59.9, 10.7', format: 'latlon' }], library: { id: 'a-b-' + 'c'.repeat(36), version: 1000000 } },
+      { steps: 0, props: [{ ...prop, format: 'x'.repeat(200) }] },
+    ]
+    const invalid: J[] = [
+      { steps: 0, props: [{ ...prop, format: '' }] }, { steps: 0, props: [{ ...prop, format: 'x'.repeat(201) }] },
+      { steps: 0, props: [{ ...prop, format: 'a\nb' }] }, { steps: 0, props: [{ ...prop, format: 7 }] },
+      { steps: 0, props: [], library: { id: 'Map', version: 1 } }, { steps: 0, props: [], library: { id: 'map', version: 0 } },
+      { steps: 0, props: [], library: { id: 'map', version: 1.5 } }, { steps: 0, props: [], library: { id: 'map' } },
+      { steps: 0, props: [], library: { id: 'map', version: 1, extra: true } }, { steps: 0, props: [], library: 'map' },
+      { steps: 0, props: [], library: { id: 'x'.repeat(41), version: 1 } }, { steps: 0, props: [], library: { id: 'map', version: 1000001 } },
+    ]
+    const badValid = valid.filter((r) => validate(rt, r, file).length || JSON.stringify(checkRuntime(r)) !== JSON.stringify(r))
+    const missed = invalid.filter((r) => validate(rt, r, file).length === 0)
+    const badSaved = [...valid, ...invalid].filter((r) => validate(rt, checkRuntime(r), file).length)
+    ok(!badValid.length && !missed.length && !badSaved.length,
+      `U9 library and format: ${valid.length} kept unchanged, ${invalid.length} refused by the schema, every gate output valid; mismatches=${JSON.stringify({ badValid, missed, badSaved })}`)
+  }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a
   // schema-valid saved record. Kind/value joins remain the documented gap.
@@ -294,7 +316,7 @@ console.log('\na runtime slide validates; a broken one does not\n')
   ok(validate(rt, { steps: 0, props: [{ key: 'tint', label: 'Tint', kind: 'color', default: 'rgb(10, 20, 30)' }] }, file).length === 0, 'an ordinary colour default validates')
 
   ok(!!rt && rt.type === 'object' && rt.additionalProperties === false, 'slide.runtime is described, and closed to unknown keys')
-  ok(Object.keys(rt.properties as J).sort().join() === 'assets,props,src,steps,still,url,values', `with the keys the gate accepts (${Object.keys(rt.properties as J).sort().join()})`)
+  ok(Object.keys(rt.properties as J).sort().join() === 'assets,library,props,src,steps,still,url,values', `with the keys the gate accepts (library since U9) (${Object.keys(rt.properties as J).sort().join()})`)
   const deck = JSON.parse(JSON.stringify(starter))
   deck.assets = { ...(deck.assets ?? {}), 'scene-src': 'data:text/html;base64,PHA+aGk8L3A+', 'scene-still': 'data:image/svg+xml;base64,PHN2Zy8+' }
   deck.slides.push({

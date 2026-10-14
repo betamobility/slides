@@ -1291,5 +1291,76 @@ console.log('\npresent: the frame owner')
   ok(made.every((f) => !f.isConnected), `no stand-in frame is left mounted (${made.filter((f) => f.isConnected).length} of ${made.length})`)
 }
 
+// ------------------------------------------------ 11. library fields (U9)
+// A runtime slide inserted from the library carries `library = {id, version}`
+// and its settings may carry a `format` hint (2026-10-13-2236 plan, U9, KTD9,
+// R12, R18). Both are additive: the gate keeps them, a paste and a save keep
+// them, and an OLDER shell, whose gate does not know them, drops the two keys
+// and keeps everything else, so a hinted setting stays an ordinary text or
+// number setting there and saving on it strips nothing a deck needs.
+console.log('\nlibrary fields: library and format')
+{
+  const rt = await import('../slides/src/runtime.ts')
+  const record = {
+    src: 'asset:scene-map', still: 'asset:still-map', steps: 2,
+    props: [
+      { key: 'place', label: 'Place', kind: 'text', default: 'Oslo' },
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'wide', format: 'select:wide|near' },
+      { key: 'grid', label: 'Grid', kind: 'number', default: 1, format: 'bool' },
+      { key: 'zoom', label: 'Zoom', kind: 'number', default: 5, format: 'range:2:9:1' },
+    ],
+    values: { mode: 'near' },
+    library: { id: 'map', version: 3 },
+  }
+  const kept = rt.checkRuntime(record)
+  ok(JSON.stringify(kept) === JSON.stringify(record), `the gate keeps library and format exactly (${JSON.stringify(kept?.library)}, ${kept?.props.map((p) => p.format ?? '-').join(' ')})`)
+  // the gate drops a malformed marker or hint, never the slide or the setting
+  for (const [lib, why] of [[{ id: 'Map', version: 1 }, 'an upper-case id'], [{ id: 'map', version: 0 }, 'version 0'], [{ id: 'map', version: '3' }, 'a string version'], [{ id: 'map' }, 'no version'], ['map', 'a string'], [{ id: 'map', version: 1, extra: 'x' }, 'an extra key']] as [unknown, string][]) {
+    const out = rt.checkRuntime({ ...record, library: lib })
+    const tidy = lib && typeof lib === 'object' && (lib as { extra?: string }).extra !== undefined
+    ok(tidy ? JSON.stringify(out?.library) === '{"id":"map","version":1}' : out?.library === undefined && out?.props.length === 4, `a library marker with ${why} is ${tidy ? 'cut to its two keys' : 'dropped, the slide kept'}`)
+  }
+  for (const [format, why] of [['', 'empty'], ['x'.repeat(201), 'too long'], ['a\nb', 'two lines'], [7, 'a number']] as [unknown, string][]) {
+    const out = rt.checkRuntime({ ...record, props: [{ key: 'm', label: 'M', kind: 'text', default: 'a', format }] })
+    ok(out?.props.length === 1 && !('format' in out.props[0]), `a format hint that is ${why} is dropped and the setting kept`)
+  }
+
+  // a paste and a save
+  const doc = runtimeDeck()
+  doc.slides[0].runtime = structuredClone(record) as unknown as typeof doc.slides[0]['runtime']
+  const clip = parseClip(serializeSlides([doc.slides[0]], doc))
+  const target = newDoc()
+  const pasted = insertSlides(clip!, target, 1).find((s) => s.runtime)?.runtime
+  ok(JSON.stringify(pasted?.library) === '{"id":"map","version":3}' && pasted?.props.map((p) => p.format ?? '-').join(' ') === '- select:wide|near bool range:2:9:1', 'a copy-paste keeps library and every format hint')
+  const sane = sanitizeSlide(JSON.parse(JSON.stringify(doc.slides[0])))
+  ok(JSON.stringify(sane?.runtime?.library) === '{"id":"map","version":3}' && sane?.runtime?.props[1].format === 'select:wide|near', 'so does the untrusted gate a pasted or loaded slide goes through')
+  const reopened = model.parseDoc(JSON.stringify(doc))
+  ok(JSON.stringify(reopened?.slides[0].runtime) === JSON.stringify(record), 'and a save and reopen keeps the record byte for byte')
+  ok(validateDoc(doc, { measure: false }).findings.filter((f) => f.slide === doc.slides[0].id && f.severity !== 'info').length === 0, 'the validator has nothing to say about either')
+
+  // an older shell: the gate as it was before U9 (scripts/fixtures/beta-runtime-pre-u9.ts.txt)
+  const { createRequire } = await import('node:module')
+  const { fileURLToPath } = await import('node:url')
+  const { dirname, join } = await import('node:path')
+  const { readFileSync } = await import('node:fs')
+  const { existsSync } = await import('node:fs')
+  let repo = dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 8 && !existsSync(join(repo, 'slides/package.json')); i++) repo = join(repo, '..')
+  if (!existsSync(join(repo, 'slides/package.json'))) repo = process.cwd()
+  const req = createRequire(join(repo, 'slides/package.json'))
+  const esbuild = req('esbuild')
+  const old = esbuild.buildSync({
+    stdin: { contents: readFileSync(join(repo, 'scripts/fixtures/beta-runtime-pre-u9.ts.txt'), 'utf8'), resolveDir: join(repo, 'slides/src'), loader: 'ts', sourcefile: 'runtime-pre-u9.ts' },
+    bundle: true, write: false, platform: 'node', format: 'cjs', logLevel: 'error',
+  })
+  const mod = { exports: {} as { checkRuntime: typeof rt.checkRuntime } }
+  new Function('module', 'exports', 'require', old.outputFiles[0].text)(mod, mod.exports, req)
+  const older = mod.exports.checkRuntime(record)
+  ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
+  ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
+    'and keeps every setting, its kind, its default and the chosen value: a select is plain text there, a bool and a range plain numbers')
+  ok(JSON.stringify(rt.checkRuntime(older)) === JSON.stringify(older), 'what the older shell saved opens on this one unchanged (the hints are gone; nothing else is)')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
