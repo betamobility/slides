@@ -165,6 +165,33 @@ console.log('\nindependent adversarial validation')
     `adversarial: a manifest that passes the build fits the upload wire budget (${wireSize} bytes, --check exit ${budgetCheck.status})`)
 }
 
+// Round 2: assert the refusal before changing any implementation.
+console.log('\nround 2: boundary and XML regressions')
+{
+  const base = SVG.replace('</svg>', '<text></text></svg>')
+  const remaining = lib.STILL_BUDGET - Buffer.byteLength(base)
+  const exact = base.replace('<text>', '<text>' + 'é'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2))
+  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && refusal(files({ 'still.svg': exact })) === '' &&
+    refused(files({ 'still.svg': exact.replace('</text>', 'é</text>') }), 'sample/still.svg', '64 KB'),
+    'round2: a UTF-8 still at 65536 bytes builds and at 65538 bytes fails naming the file')
+  const malformed = [
+    SVG.replace('</svg>', '<text>R&D</text></svg>'),
+    SVG.replace('<rect ', '<rect aria-label="&#0;" '),
+    SVG + 'unexpected trailing text',
+  ]
+  const rejected = malformed.map((still) => refused(files({ 'still.svg': still }), 'sample/still.svg'))
+  ok(rejected.every(Boolean),
+    'round2: invalid XML text, forbidden numeric references and text after the root are refused')
+  const wrongNamespace = SVG.replace('http://www.w3.org/2000/svg', 'urn:not-svg')
+  ok(refused(files({ 'still.svg': wrongNamespace }), 'sample/still.svg'),
+    'round2: a root in a non-SVG namespace cannot be published as an SVG picture')
+  const hostile = ['https://slides.betamobility.ai%09.evil.test/x', 'https://slides.betamobility.ai%2f.evil.test/x',
+    'https://slides.betamobility.ai@evil.test/x', 'http://design.betamobility.ai:443/x']
+  ok(hostile.every((url) => refused(files({ 'index.html': undefined }, { kind: 'web', url }), 'scene.json') &&
+    !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
+    'round2: encoded authority delimiters, userinfo and HTTP on port 443 fail both build validators')
+}
+
 console.log('\na web scene')
 {
   const web = (url: unknown, over: Record<string, string | undefined> = {}) => files({ 'index.html': undefined, ...over }, { kind: 'web', url })
@@ -285,13 +312,13 @@ console.log('\nfolders on disk, and the manifest as a whole')
 
   // a stand-in store: what does the upload send?
   const seen: { method?: string; url?: string; headers: Record<string, unknown>; body: string }[] = []
-  let answer = 200, echoSecret = false, redirectTo = ''
+  let answer = 200, echoSecret = false, echoEtag = false, redirectTo = ''
   const server = createServer((req, res) => {
     let body = ''
     req.on('data', (c) => { body += c })
     req.on('end', () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body })
-      res.writeHead(answer, answer === 200 ? { etag: '"abc"' } : redirectTo ? { location: redirectTo } : {}); res.end(echoSecret ? String(req.headers['cf-access-client-secret']) : answer === 400 ? 'shape' : '')
+      res.writeHead(answer, answer === 200 ? { etag: echoEtag ? String(req.headers['cf-access-client-secret']) : '"abc"' } : redirectTo ? { location: redirectTo } : {}); res.end(echoSecret ? String(req.headers['cf-access-client-secret']) : answer === 400 ? 'shape' : '')
     })
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -317,6 +344,11 @@ console.log('\nfolders on disk, and the manifest as a whole')
   u = await upload({ CF_ACCESS_CLIENT_SECRET: 'synthetic-u8-secret-do-not-log' })
   ok(u.status === 1 && ![u.stdout, u.stderr].some((s) => s.includes('synthetic-u8-secret-do-not-log')),
     'adversarial: an upload error reflecting the service secret never prints the credential')
+  echoSecret = false; answer = 200; echoEtag = true
+  u = await upload({ CF_ACCESS_CLIENT_SECRET: 'synthetic-round-two-secret-only-for-local-test' })
+  ok(u.status === 0 && ![u.stdout, u.stderr].some((s) => s.includes('synthetic-round-two-secret-only-for-local-test')),
+    'round2: a successful upload reflecting the secret in ETag never prints the credential')
+  echoEtag = false
   echoSecret = false; answer = 307
   const destinationRequests: string[] = []
   const destination = createServer((req, res) => { destinationRequests.push(req.url || ''); res.end('unexpected') })

@@ -2035,6 +2035,36 @@ export async function run(Miniflare) {
           'adversarial: retired host redirects without exposing manifest bytes')
       }
 
+      // Round 2: reject authority parsing tricks independently at the worker,
+      // and do not let a known validator tag substitute for authorization.
+      {
+        let refusedHosts = true
+        for (const url of ['https://slides.betamobility.ai%09.evil.test/x', 'https://slides.betamobility.ai%2f.evil.test/x',
+          'https://slides.betamobility.ai@evil.test/x', 'http://design.betamobility.ai:443/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400) refusedHosts = false
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(refusedHosts && await r.text() === lib,
+          'round2: worker refuses encoded authority delimiters, userinfo and HTTP on port 443 without changing the library')
+        let conditionalSafe = true
+        for (const [path, opts, expected] of [
+          ['/library/library.json', {}, 401],
+          ['/library/library.json', { as: 'service' }, 403],
+          ['/api/harness/library.json', { headers: asGrant(aliceTok) }, 401],
+          ['/api/publish/library.json', { as: 'alice' }, 401],
+          ['/api/publish/library.json', { as: 'service' }, 401],
+          ['/library/library.json', { as: 'alice' }, 304],
+          ['/api/harness/library.json', { as: 'service' }, 304],
+          ['/api/publish/library.json', { headers: asGrant(aliceTok) }, 304],
+        ]) {
+          r = await call('GET', path, { ...opts, headers: { ...(opts.headers || {}), 'if-none-match': `"other", W/${etag}` } })
+          if (r.status !== expected || await r.text() !== '') conditionalSafe = false
+        }
+        ok(conditionalSafe, 'round2: weak ETag lists revalidate only for each route’s authorized readers')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })

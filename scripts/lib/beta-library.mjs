@@ -69,6 +69,10 @@ const bytes = (s) => Buffer.byteLength(s, 'utf8')
 const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
   'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
 const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/
+/** A numeric reference XML allows: no NUL, no control character but tab and newlines, no surrogate, nothing past U+10FFFF. */
+const xmlChar = (n) => n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n >= 0x10000 && n <= 0x10ffff)
+const badReference = (text) => /&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/.test(text)
+  || [...text.matchAll(/&#(\d{1,7});|&#x([0-9a-fA-F]{1,6});/g)].some(([, d, h]) => !xmlChar(d ? Number(d) : parseInt(h, 16)))
 /** An attribute value as the browser will read it: numeric references decoded, so an encoded "javascript:" is seen as one. */
 const decoded = (v) => v.replace(/&#(\d{1,7});|&#x([0-9a-fA-F]{1,6});/g, (_, d, h) => { const n = d ? Number(d) : parseInt(h, 16); return n <= 0x10ffff ? String.fromCodePoint(n) : '' })
 
@@ -92,6 +96,7 @@ export function activeSvg(svg) {
     }
     if (!open.length && ++roots > 1) return 'more than one root element (not well-formed)'
     if (!open.length && name !== 'svg') return `a <${name}> outside the <svg> element`
+    if (!open.length && !/(?:^|\s)xmlns\s*=\s*(["'])http:\/\/www\.w3\.org\/2000\/svg\1/.test(attrs)) return 'a root <svg> that is not in the SVG namespace'
     if (!/\/\s*$/.test(attrs)) open.push(name)
     const attr = /([^\s=/"']+)\s*=\s*("[^"]*"|'[^']*')/g
     const seen = new Set()
@@ -100,7 +105,7 @@ export function activeSvg(svg) {
       const key = a[1], raw = a[2].slice(1, -1)
       if (seen.has(key)) return `${key} written twice on one <${name}> (not well-formed)`
       seen.add(key)
-      if (SVG_ENTITY.test(raw)) return `an encoded value in ${key}`
+      if (SVG_ENTITY.test(raw) || badReference(raw)) return `an encoded value in ${key}`
       const value = decoded(raw)
       left = left.replace(a[0], '')
       if (/^on/i.test(key)) return `an ${key} handler attribute`
@@ -113,8 +118,12 @@ export function activeSvg(svg) {
     if (left.replace(/\//g, '').trim()) return `an attribute without a quoted value on <${name}>`
   }
   if (open.length) return `a <${open[open.length - 1]}> never closed (not well-formed)`
+  // nothing after the root closes; text inside it uses only the references XML has
+  const end = body.lastIndexOf('</svg>')
+  if (end >= 0 && body.slice(end + 6).trim()) return 'content after the closing </svg> (not well-formed)'
   rest = body.replace(tag, '')
   if (/[<>]/.test(rest)) return 'markup that does not parse as tags'
+  if (badReference(rest)) return 'a bare "&" or a character reference XML does not allow (not well-formed)'
   return null
 }
 
