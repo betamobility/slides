@@ -119,7 +119,7 @@ function scanSvg(src) {
   }
   if (src.startsWith('<?xml', i)) {
     const end = src.indexOf('?>', i)
-    if (end < 0 || !/^<\?xml[ \t]+version=(["'])1\.[0-9]\1(?:[ \t]+encoding=(["'])UTF-8\2)?[ \t]*$/i.test(src.slice(i, end))) return fail('an XML declaration this check does not read')
+    if (end < 0 || !/^<\?xml[ \t]+version=(["'])1\.0\1(?:[ \t]+encoding=(["'])[Uu][Tt][Ff]-8\2)?[ \t]*$/.test(src.slice(i, end))) return fail('an XML declaration this check does not read')
     i = end + 2
   }
   if (!misc()) return fail('a malformed comment')
@@ -198,6 +198,10 @@ export function activeSvg(svg) {
     for (const [key, value] of attrs) {
       if (/^on/i.test(key)) return `an ${key} handler attribute`
       if (key === 'style') return 'a style attribute (use presentation attributes)'
+      // the namespace declarations a picture needs, each to its one right value
+      if (key === 'xmlns' && value !== SVG_NS) return `a namespace other than SVG's on <${name}>`
+      if (key === 'xmlns:xlink' && value !== 'http://www.w3.org/1999/xlink') return 'an xlink prefix bound to something other than XLink'
+      if (key === 'xml:space' && value !== 'default' && value !== 'preserve') return 'an xml:space that is neither default nor preserve'
       if (key.includes(':') && key !== 'xmlns:xlink' && key !== 'xml:space') return `a ${key} attribute`
       if (key === 'href' && !/^#[\w.-]+$/.test(value)) return 'a link out of the file'
       if (/url\s*\(/i.test(value) && !/^url\(#[\w.-]+\)$/.test(value.trim())) return `a url() in ${key} that leaves the file`

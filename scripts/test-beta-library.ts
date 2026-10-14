@@ -225,6 +225,42 @@ console.log('\nround 3: independent failing-first cases')
     'round3: Unicode dots, percent-encoded hostname and backslash HTTP fail naming the parsed host')
 }
 
+// Round 4: expectations are written against the unmodified implementation.
+console.log('\nround 4: independent refusal cases')
+{
+  // CRLF is two bytes on disk even though XML normalises it to one newline.
+  const dir = mkdtempSync(join(tmpdir(), 'beta-library-r4-budget-'))
+  mkdirSync(join(dir, 'sample'))
+  const base = SVG.replace('</svg>', '<text></text></svg>')
+  const room = lib.STILL_BUDGET - Buffer.byteLength(base)
+  const exact = base.replace('<text>', '<text>' + '\r\n'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2))
+  for (const [name, content] of Object.entries(files({ 'still.svg': exact }))) writeFileSync(join(dir, 'sample', name), content)
+  const atLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  writeFileSync(join(dir, 'sample', 'still.svg'), exact.replace('</text>', 'x</text>'))
+  const overLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
+  ok(Buffer.byteLength(exact) === 65536 && atLimit.status === 0 && overLimit.status === 1 &&
+    overLimit.stderr.includes('sample/still.svg') && overLimit.stderr.includes('64 KB'),
+    'round4: CRLF still is accepted at 65536 wire bytes and refused at 65537 naming its file')
+
+  const urls = ['ftp://slides.betamobility.ai/x', 'https://design.betamobility.ai:0/x',
+    'https://design%2ebetamobility%2eai%2eevil.test/x']
+  ok(urls.every((url) => refused(files({ 'index.html': undefined }, { kind: 'web', url }), new URL(url).host) &&
+    !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
+    'round4: FTP, port zero and an encoded dotted suffix fail naming the host in both build validators')
+
+  // XML declaration pseudo-attribute names are case-sensitive. Only the
+  // encoding value is case-insensitive; VERSION and ENCODING are not XML.
+  const declarations = ['<?xml VERSION="1.0"?>', '<?xml version="1.0" ENCODING="UTF-8"?>']
+  ok(declarations.every((prefix) => refused(files({ 'still.svg': prefix + SVG }), 'sample/still.svg')),
+    'round4: uppercase XML declaration pseudo-attributes are refused')
+
+  // XML Namespaces forbids an empty prefixed binding and binding any prefix
+  // to the xmlns namespace (or a non-xml prefix to the xml namespace).
+  const namespaces = ['', 'http://www.w3.org/2000/xmlns/', 'http://www.w3.org/XML/1998/namespace']
+  ok(namespaces.every((ns) => refused(files({ 'still.svg': SVG.replace('<svg ', `<svg xmlns:xlink="${ns}" `) }), 'sample/still.svg')),
+    'round4: forbidden namespace bindings cannot be published as parseable SVG pictures')
+}
+
 console.log('\na web scene')
 {
   const web = (url: unknown, over: Record<string, string | undefined> = {}) => files({ 'index.html': undefined, ...over }, { kind: 'web', url })

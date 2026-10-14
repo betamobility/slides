@@ -2094,6 +2094,36 @@ export async function run(Miniflare) {
         ok(identitiesSafe, 'round3: an expired Access identity cannot upload, read or revalidate through either Access route')
       }
 
+      // Round 4: a correctly signed token for a different Access application
+      // is still the wrong credential. Cache validators do not upgrade it.
+      {
+        let gated = true
+        for (const claims of [human('alice@betamobility.io', { aud: ['foreign-application'] }),
+          service({ aud: ['foreign-application'] }), service({ iss: 'https://foreign.cloudflareaccess.com' })]) {
+          const token = await sign(k1, 'k1', claims)
+          for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'],
+            ['GET', '/api/publish/library.json'], ['PUT', '/api/harness/library.json']]) {
+            r = await call(method, path + '?round=4', { as: token, headers: { ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && await r.text() === lib,
+          'round4: foreign-audience and foreign-issuer assertions cannot read, revalidate or replace the library')
+
+        let rejected = true
+        for (const url of ['ftp://slides.betamobility.ai/x', 'https://design.betamobility.ai:0/x',
+          'https://design%2ebetamobility%2eai%2eevil.test/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400 || await r.text() !== 'shape') rejected = false
+        }
+        r = await call('GET', '/library/library.json', { as: 'alice' })
+        ok(rejected && await r.text() === lib,
+          'round4: worker refuses FTP, port zero and an encoded dotted suffix without replacing the library')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })
