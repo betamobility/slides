@@ -314,6 +314,34 @@ const invalidPositionInputs = await probeSetting('position').locator('input').ev
 ok(/unknown|Not a position/.test(invalidPositionText) || invalidPositionInputs.includes('unknown'),
   `U10 round 4: unparseable stored position is disclosed instead of fabricated coordinates (inputs=${JSON.stringify(invalidPositionInputs)}, text=${JSON.stringify(invalidPositionText)})`)
 
+// Round 5: the permitted upper endpoint must be shown consistently by both
+// controls, even when it does not lie on the slider's native step lattice.
+await mount('runtime', [{ key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:10:3' }], {}, [])
+await probeType(probeSetting('n').locator('input[type=number]'), '12')
+const endpointSnapshot = await probeSnapshot()
+const endpointNumber = await probeSetting('n').locator('input[type=number]').inputValue()
+const endpointSlider = await probeSetting('n').locator('input[type=range]').inputValue()
+ok(endpointSnapshot.runtime.values.n === 10 && endpointNumber === '10' && endpointSlider === '10',
+  `U10 round 5: clamped uneven endpoint agrees in model, number and slider (model=${endpointSnapshot.runtime.values.n}, number=${endpointNumber}, slider=${endpointSlider})`)
+
+// Keep a focused field alive while a remote mutation deletes its element.
+// Committing it must neither recreate the element nor add an undo checkpoint
+// which could undo that remote deletion; the remaining geometry is untouched.
+await mount('web', props, {}, [], URL0)
+await probeSetting('place').fill('Local after deletion')
+const deletionBaseline = await probe.evaluate(() => {
+  independent.store.slide.elements = []
+  independent.store.emit('doc')
+  return JSON.stringify(independent.store.doc)
+})
+await probeSetting('place').press('Tab')
+await probe.waitForTimeout(50)
+const afterDeletedEdit = await probe.evaluate(() => JSON.stringify(independent.store.doc))
+await probe.evaluate(() => independent.store.undo())
+const afterDeletedUndo = await probe.evaluate(() => JSON.stringify(independent.store.doc))
+ok(afterDeletedEdit === deletionBaseline && afterDeletedUndo === deletionBaseline,
+  'U10 round 5: focused edit after remote deletion is refused without recreating geometry or an undo step')
+
 await probe.close()
 
 ok(errors.length === 0, `no page error (${errors.join(' | ')})`)

@@ -16,7 +16,7 @@
 
 import type { RuntimeProp } from '../model.ts'
 import { t } from '../i18n.ts'
-import { activePreset, applyPreset, coerce, parseHint, parseLatLon, type Note, type Preset, type Value } from './scenesettings.ts'
+import { activePreset, applyPreset, coerce, onStep, parseHint, parseLatLon, type Note, type Preset, type Value } from './scenesettings.ts'
 
 export interface SettingsFormHost {
   /** Which scene instance this is (a slide id, an element id): a note outlives the panel's redraw only for its own scene. */
@@ -185,12 +185,17 @@ function controlFor(prop: RuntimeProp, value: Value, commit: (input: unknown, fi
     slider.type = 'range'
     const num = document.createElement('input')
     num.type = 'number'
+    // A native slider can only show values on its step grid, so a range whose
+    // max is off the grid (range:0:10:3 allows 10), or a stored value off it,
+    // gets a free slider; the step is then kept by coerce, while dragging too.
+    const free = !onStep(prop.format as string, hint.max) || !onStep(prop.format as string, Number(value))
     for (const el of [slider, num]) { el.min = String(hint.min); el.max = String(hint.max); el.step = String(hint.step); el.value = String(value) }
+    if (free) { slider.step = 'any'; slider.value = String(value) }
     const show = (v: Value) => { slider.value = String(v); num.value = String(v) }
     // While dragging only the number follows; the value is written once, when the
     // drag ends: the panel redraws after every write, which would end the drag
     // and split one change into several undo steps.
-    slider.addEventListener('input', () => { num.value = slider.value })
+    slider.addEventListener('input', () => { num.value = free ? String(coerce(prop, slider.value).value ?? slider.value) : slider.value })
     slider.addEventListener('change', () => show(commit(slider.value, true)))
     num.addEventListener('change', () => show(commit(num.value, true)))
     box.append(slider, num)

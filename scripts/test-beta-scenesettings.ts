@@ -282,5 +282,62 @@ console.log('\nU10 round 4 adversarial regressions')
     'U10 round 4: legacy out-of-range values stay visible and never falsely select the default preset')
 }
 
+console.log('\nU10 round 5 adversarial regressions')
+{
+  // An out-of-range finite input must clamp before any enormous quotient is
+  // calculated, including a negative bound and a twenty-decimal step.
+  const narrow: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0,
+    format: 'range:-0.00000000000000000003:0.00000000000000000007:0.00000000000000000002' }
+  const low = ss.coerce(narrow, -Number.MAX_VALUE), high = ss.coerce(narrow, Number.MAX_VALUE)
+  ok(low.value === -3e-20 && high.value === 7e-20 && !!low.note && !!high.note
+    && ss.coerce(narrow, Number.MIN_VALUE).value === 1e-20,
+    'U10 round 5: extreme finite inputs clamp and a subnormal input snaps above the signed midpoint')
+
+  const declared: RuntimeProp[] = [
+    { key: 'constructor', label: 'Constructor', kind: 'text', default: 'default' },
+    { key: 'n', label: 'N', kind: 'number', default: 4, format: 'range:-2:8:2' },
+    { key: 'mode', label: 'Mode', kind: 'text', default: '東京', format: 'select:東京|New York' },
+  ]
+  const inherited = Object.assign(Object.create({ constructor: 'inherited', n: 8 }), { mode: 'New York', extra: 'discard' })
+  const before = JSON.stringify(declared)
+  const applied = ss.applyPreset(declared, { name: 'Own only', values: inherited })
+  ok(same(applied, { constructor: 'default', n: 4, mode: 'New York' }) && JSON.stringify(declared) === before,
+    'U10 round 5: preset ignores inherited values, fills every declared default, and leaves the schema untouched')
+
+  const remote = 'http://u:p@example.test:8080/new%2Fpath?place=Remote&keep=a%2Bb&keep=c#東京'
+  const changed = ss.writeQuery(remote, 'place', 'Local + & 東京')
+  const u = 'url' in changed ? new URL(changed.url) : null, base = new URL(remote)
+  ok(!!u && u.origin === base.origin && u.pathname === base.pathname && u.hash === base.hash
+    && u.username === base.username && u.password === base.password
+    && u.searchParams.get('place') === 'Local + & 東京' && same(u.searchParams.getAll('keep'), ['a+b', 'c'])
+    && ss.readQuery(u.href, [P('place')]).place === 'Local + & 東京',
+    'U10 round 5: latest same-key remote URL preserves address components and round-trips reserved Unicode text')
+
+  // Replacing one ASCII character with é grows its serialized query value by
+  // five characters. Measure the completed address, including its fragment.
+  const prefix = 'https://example.test/?keep=1&place=', fragment = '#tail'
+  const old = prefix + 'x'.repeat(ss.MAX_WEB_URL - prefix.length - fragment.length - 5) + fragment
+  const oldValue = new URL(old).searchParams.get('place')!
+  const fits = ss.writeQuery(old, 'place', oldValue.slice(0, -1) + 'é')
+  const over = ss.writeQuery(old, 'place', oldValue + 'é')
+  ok('url' in fits && fits.url.length === ss.MAX_WEB_URL && isWebUrl(fits.url)
+    && 'error' in over && over.error === 'This makes the page address too long',
+    'U10 round 5: encoded replacement fits exactly at URL limit and one extra character refuses')
+
+  const emoji = '😀'.repeat(2000)
+  ok(ss.coerce(P('place'), emoji).value === emoji
+    && ss.coerce(P('place'), emoji + 'x').value === undefined
+    && ss.coerce(P('place'), emoji + 'x').note?.says === 'Too long',
+    'U10 round 5: text refusal counts UTF-16 units at the gate boundary')
+}
+
+console.log('\nU10 round 5: what a native slider can show')
+{
+  ok(ss.onStep('range:0:10:3', 9) && !ss.onStep('range:0:10:3', 10) && ss.onStep('range:0:1:0.1', 0.3) && !ss.onStep('range:0:1:0.1', 0.35),
+    'onStep is exact on decimal steps (0.3 on a 0.1 step is on it)')
+  ok(ss.onStep('range:-9007199254740991:100:1', 2) && !ss.onStep('range:0:10:1', -1) && !ss.onStep('range:0:10:1', Number.NaN),
+    'onStep survives a large negative offset; below min or not a number is off it')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

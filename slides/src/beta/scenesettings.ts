@@ -151,6 +151,16 @@ function snap(n: number, format: string): number {
   return Number(`${s}e${e}`)
 }
 
+/** Whether n is min + k*step exactly, for a range format: what a native slider (step-aligned) can show. */
+export function onStep(format: string, n: number): boolean {
+  const r = RANGE.exec(format)
+  if (!r || !Number.isFinite(n)) return false
+  const [lo, st, x] = [dec(r[1]), dec(r[3]), dec(String(n))]
+  const e = Math.min(lo.e, st.e, x.e)
+  const d = at(x, e) - at(lo, e)
+  return d >= 0n && d % at(st, e) === 0n
+}
+
 const round6 = (n: number) => Number(n.toFixed(6))
 
 /** "59.9, 10.7", "59,9 10,7", "59.9;10.7" → [lat, lon], or null. */
