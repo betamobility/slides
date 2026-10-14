@@ -196,5 +196,49 @@ console.log('\nU10 round 2 adversarial regressions')
     'U10 round 2: URL limit counts percent-encoded Unicode bytes')
 }
 
+console.log('\nU10 round 3 adversarial regressions')
+{
+  // Decimal midpoint ties must use the same upward tie rule as Math.round;
+  // binary division must not make 0.15 round down while 0.25 rounds up.
+  const decimal: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:1:0.1' }
+  const midpoint = ss.coerce(decimal, '0.15')
+  ok(midpoint.value === 0.2 && !!midpoint.note,
+    `U10 round 3: decimal midpoint snapping is consistent (got ${midpoint.value}, expected 0.2)`)
+
+  // Every bound and the desired value is a safe integer. Subtracting the
+  // negative bound nevertheless leaves the safe-integer range before the
+  // step is snapped. Rounding the final result's decimals cannot repair it.
+  const offset: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0,
+    format: 'range:-9007199254740991:100:1' }
+  const applied = ss.applyPreset([offset], { name: 'Two', values: { n: 2, extra: 7 } })
+  ok(applied.n === 2 && Object.keys(applied).join() === 'n',
+    `U10 round 3: preset preserves an exact step across a large negative offset (got ${JSON.stringify(applied)})`)
+
+  // All parsed operands are finite (unlike the round-2 non-finite bound).
+  // The intermediate quotient overflows, so a small in-range input jumps
+  // all the way to the maximum. Web doc.props keeps this valid JSON hint.
+  const huge = '1' + '0'.repeat(308)
+  const hugeScene = ss.webSceneOf({ library: { id: 'finite-range', version: 1 }, props: [
+    { key: 'n', label: 'N', kind: 'number', default: 0, format: `range:0:${huge}:0.1` },
+  ] })!
+  const finiteInput = ss.coerce(hugeScene.props[0], 1e308 / 2)
+  ok(finiteInput.value === 5e307,
+    `U10 round 3: finite range arithmetic keeps an in-range step (got ${finiteInput.value}, expected 5e307)`)
+
+  const remote = 'https://example.test/new%2Fpath?%6E=old&n=older&keep=a%2Bb&keep=c#remote'
+  const changed = ss.writeQuery(remote, 'n', '東京')
+  const u = 'url' in changed ? new URL(changed.url) : null
+  const base = new URL(remote)
+  ok(!!u && u.origin === base.origin && u.pathname === base.pathname && u.hash === base.hash
+    && same(u.searchParams.getAll('n'), ['東京']) && same(u.searchParams.getAll('keep'), ['a+b', 'c']),
+    'U10 round 3: latest remote URL retains its path, fragment and duplicate sibling keys')
+
+  const prefix = 'https://example.test/?n='
+  const fits = ss.writeQuery('https://example.test/', 'n', 'x'.repeat(ss.MAX_WEB_URL - prefix.length))
+  const refused = ss.writeQuery('https://example.test/', 'n', 'x'.repeat(ss.MAX_WEB_URL - prefix.length + 1))
+  ok('url' in fits && isWebUrl(fits.url) && 'error' in refused,
+    'U10 round 3: adjacent URL lengths agree with the gate at the exact boundary')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

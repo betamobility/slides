@@ -203,7 +203,24 @@ function controlFor(prop: RuntimeProp, value: Value, commit: (input: unknown, fi
     return box
   }
   if (prop.kind === 'color') {
-    return host.color(String(value), (v, fin) => { commit(v, fin) })
+    // The picker shows what is stored, not what was picked: a refused colour
+    // (an address grown too long, a colour the gate would not keep) goes back
+    // to the stored one. The host's control is redrawn with it, since only the
+    // host knows how to show a colour that is not #rrggbb.
+    const make = (shown: string): HTMLElement => {
+      const el = host.color(shown, (v, fin) => {
+        const now = String(commit(v, fin))
+        if (now !== v) {
+          const fresh = make(now)
+          fresh.dataset.sceneSetting = el.dataset.sceneSetting
+          el.replaceWith(fresh)
+          fresh.querySelector<HTMLInputElement>('input')?.focus()
+          if (fresh instanceof HTMLInputElement) fresh.focus()
+        }
+      })
+      return el
+    }
+    return make(String(value))
   }
   const input = document.createElement('input')
   input.type = prop.kind === 'number' ? 'number' : 'text'

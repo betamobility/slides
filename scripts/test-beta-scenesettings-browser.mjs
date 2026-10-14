@@ -259,6 +259,43 @@ const clamped = (await probeSnapshot()).runtime.values.n
 const shown = await probeSetting('n').locator('input[type=number]').inputValue()
 ok(clamped === 10 && shown === '10' && /Held at 10/.test(await probe.locator('.ed-scene-settings').innerText()),
   `U10 independent: uneven-step upper clamp is stored and shown (stored=${clamped}, shown=${shown})`)
+// Round 3: the picker callback must use the actual value returned on
+// refusal. A successful colour change is covered separately, including undo.
+const colorProps = [{ key: 'accent', label: 'Accent', kind: 'color', default: '#ff0000' }]
+await mount('runtime', colorProps, { accent: '#ff0000' }, [])
+const beforeColor = await probeSnapshot()
+await probeSetting('accent').focus()
+await probeSetting('accent').evaluate((el) => {
+  el.value = '#00ff00'
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+})
+const afterColor = await probeSnapshot()
+await probe.evaluate(() => independent.store.undo())
+const undoColor = await probeSnapshot()
+await probe.evaluate(() => independent.store.redo())
+const redoColor = await probeSnapshot()
+ok(afterColor.runtime.values.accent === '#00ff00'
+  && JSON.stringify(afterColor.elements) === JSON.stringify(beforeColor.elements)
+  && JSON.stringify(undoColor) === JSON.stringify(beforeColor)
+  && JSON.stringify(redoColor) === JSON.stringify(afterColor),
+  'U10 round 3: colour picker input/change is one undoable edit and preserves geometry')
+
+const colorPrefix = 'https://example.test/?accent=%23f00&pad='
+const fullColorUrl = colorPrefix + 'x'.repeat(2048 - colorPrefix.length)
+await mount('web', colorProps, {}, [], fullColorUrl)
+await probeSetting('accent').focus()
+await probeSetting('accent').evaluate((el) => {
+  el.value = '#00ff00'
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  el.dispatchEvent(new Event('change', { bubbles: true }))
+})
+const colorRefused = await probeSnapshot()
+const colorShown = await probeSetting('accent').inputValue()
+ok(colorRefused.elements[0].url === fullColorUrl && colorShown === '#ff0000'
+  && /too long/i.test(await probe.locator('.ed-scene-settings').innerText()),
+  `U10 round 3: refused colour restores the stored swatch (shown=${colorShown}, expected #ff0000)`)
+
 await probe.close()
 
 ok(errors.length === 0, `no page error (${errors.join(' | ')})`)

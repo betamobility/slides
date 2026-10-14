@@ -35,6 +35,8 @@ export type Hint =
  */
 export const MAX_WEB_URL = 2048
 
+const RANGE = /^range:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/
+
 /** The hint a setting's `format` names, or null for none (or one this build does not read: the plain control is used). */
 export function parseHint(format: unknown, kind: RuntimeProp['kind']): Hint | null {
   if (typeof format !== 'string') return null
@@ -45,7 +47,7 @@ export function parseHint(format: unknown, kind: RuntimeProp['kind']): Hint | nu
     const options = [...new Set(format.slice(7).split('|').filter((o) => o.length > 0))]
     return options.length ? { kind: 'select', options } : null
   }
-  const r = /^range:(-?\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(format)
+  const r = RANGE.exec(format)
   if (r && kind === 'number') {
     const [min, max, step] = [Number(r[1]), Number(r[2]), Number(r[3])]
     // the precision the range is written in: a step lands on min + k*step to that many decimals
@@ -88,12 +90,7 @@ export function coerce(prop: RuntimeProp, input: unknown): { value?: Value; note
     }
     if (!Number.isFinite(n)) return { note: { says: 'Not a number' } }
     if (hint?.kind === 'range') {
-      // At or past an end, that end (it is allowed even when the steps do not
-      // land on it); between them, the nearest step, rounded to the decimals
-      // the range is written in: exact for whole numbers however large, and a
-      // tiny step is kept rather than rounded away.
-      const snapped = Number((hint.min + Math.round((n - hint.min) / hint.step) * hint.step).toFixed(hint.decimals))
-      const held = n >= hint.max ? hint.max : n <= hint.min ? hint.min : Math.min(hint.max, Math.max(hint.min, snapped))
+      const held = snap(n, prop.format as string)
       if (held !== n) return { value: held, note: { says: 'Held at {value}: the scene allows {min} to {max}', value: held, min: hint.min, max: hint.max } }
       return { value: held }
     }
@@ -114,6 +111,44 @@ export function coerce(prop: RuntimeProp, input: unknown): { value?: Value; note
     return lat !== pos[0] || lon !== pos[1] ? { value, note: { says: 'Held at {value}: latitude is -90 to 90, longitude -180 to 180', value } } : { value }
   }
   return checkRuntimeValue('text', s) === undefined ? { note: { says: 'Too long' } } : { value: s }
+}
+
+// ---- range snapping, in exact decimals -------------------------------------
+//
+// A step is min + k*step, and the nearest one is found in exact decimal
+// arithmetic, never in binary doubles: the range is read from the digits it
+// is written in, and the input from its shortest decimal spelling (String(n),
+// the number as it was typed). In doubles three things broke before any
+// rounding could repair them: n - min left the safe-integer range on a large
+// negative offset, the quotient overflowed on a finite huge bound, and a
+// decimal midpoint (0.15 on a 0.1 step) is not a midpoint in binary, so the
+// tie went the wrong way. The one conversion back to a number is the last step.
+
+/** A decimal as m * 10^e, exactly. Reads "-12.50", "1e+308", "1.5e-7". */
+function dec(s: string): { m: bigint; e: number } {
+  const x = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(s)
+  if (!x) throw new Error(`not a decimal: ${s}`)
+  const frac = x[3] ?? ''
+  return { m: BigInt(x[1] + x[2] + frac), e: Number(x[4] ?? 0) - frac.length }
+}
+const at = (d: { m: bigint; e: number }, e: number) => d.m * 10n ** BigInt(d.e - e)
+
+/**
+ * The value a range keeps for n: at or past an end, that end (allowed even
+ * where the steps do not land on it); between them, the nearest step, a tie
+ * going up as Math.round's does, and never past max.
+ */
+function snap(n: number, format: string): number {
+  const r = RANGE.exec(format)!
+  const [lo, hi, st, x] = [dec(r[1]), dec(r[2]), dec(r[3]), dec(String(n))]
+  const e = Math.min(lo.e, hi.e, st.e, x.e)
+  const [min, max, step, v] = [at(lo, e), at(hi, e), at(st, e), at(x, e)]
+  if (v >= max) return Number(r[2])
+  if (v <= min) return Number(r[1])
+  const k = (2n * (v - min) + step) / (2n * step) // floor of (v-min)/step + 1/2; both sides positive
+  let s = min + k * step
+  if (s > max) s = max
+  return Number(`${s}e${e}`)
 }
 
 const round6 = (n: number) => Number(n.toFixed(6))
