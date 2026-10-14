@@ -334,6 +334,11 @@ jobs:
         # undo step per change, a held value said, a web scene's address.
         run: node scripts/test-beta-scenesettings-browser.mjs
 
+      - name: Beta plugin library bundle is current
+        # The splice tool runs the gallery's own reading (slides/src/beta/
+        # libraryread.ts), bundled into the plugin (KTD11): stale fails here.
+        run: node scripts/build-beta-plugin-library.mjs --check
+
       - name: Beta scene gallery rig
         # What in a library manifest is trusted (slides/src/beta/gallery.ts),
         # both inserts against the untrusted gate, one undo step, and a

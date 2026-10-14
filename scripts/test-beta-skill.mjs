@@ -340,7 +340,7 @@ console.log('\nthe Beta toolkit copy')
   const { tmpdir } = await import('node:os')
   const { spawnSync } = await import('node:child_process')
   const out = build(join(mkdtempSync(join(tmpdir(), 'toolkit-skill-')), 'beta-slides'))
-  for (const f of ['SKILL.md', 'reveal/shim.js', 'reveal/harness.html', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs', 'SOURCE.md']) {
+  for (const f of ['SKILL.md', 'reveal/shim.js', 'reveal/harness.html', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs', 'scripts/lib/library.mjs', 'scripts/lib/library-core.mjs', 'SOURCE.md']) {
     ok(existsSync(join(out, f)), `the toolkit skill folder carries ${f}`)
   }
   const run = spawnSync(process.execPath, [join(out, 'scripts/splice.mjs')], { encoding: 'utf8' })
