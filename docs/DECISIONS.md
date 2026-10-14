@@ -10793,3 +10793,18 @@ a store-side way to collect an approved pairing without a client-held secret.
 - The label on the Agent access list comes from `SLIDES_GRANT_LABEL`, a string
   the caller chooses. It tells a person's own agents apart; it is not an
   identity and nothing trusts it.
+
+## 2026-10-14 — BETA FORK: a grant lasts 30 days
+
+Supersedes the seven-day figure in the 2026-10-13 entry above. Everything else
+in that entry stands. PR #63.
+
+**A grant lasts 30 days, fixed.** Johan set it after a colleague who builds
+decks with Claude kept meeting approvals. `GRANT_TTL_S` in
+`server/deck-store/src/grant.js` is still the one number, and the rigs still
+cross-check every place that states it. A month of work asks once.
+
+The cost is the risk accepted: a lost laptop's grant stays usable for up to a
+month. The person can end a grant early from Agent access on the deck list,
+and offboarding revokes a person's grants before removing them from Access.
+Grants approved before the deploy keep their seven days.

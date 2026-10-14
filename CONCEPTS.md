@@ -55,6 +55,11 @@ The permission a pairing produces, good for 30 days and never renewed. It lets a
 
 A write made with a grant is a service write.
 
+### Service token
+The machine credential an unattended run, such as CI or a scheduled pipeline, uses to reach the deck store; a person is never asked for one and never holds one, which is what a grant is for.
+
+A write made with a service token is a service write.
+
 ## Scene library
 
 ### Library scene
