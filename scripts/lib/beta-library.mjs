@@ -68,7 +68,9 @@ const bytes = (s) => Buffer.byteLength(s, 'utf8')
 // is refused naming the file instead of being cleaned somewhere unseen.
 const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
   'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
-const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos);)/
+const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});)/
+/** An attribute value as the browser will read it: numeric references decoded, so an encoded "javascript:" is seen as one. */
+const decoded = (v) => v.replace(/&#(\d{1,7});|&#x([0-9a-fA-F]{1,6});/g, (_, d, h) => { const n = d ? Number(d) : parseInt(h, 16); return n <= 0x10ffff ? String.fromCodePoint(n) : '' })
 
 /** Why this SVG is not a plain picture, or null when it is one. */
 export function activeSvg(svg) {
@@ -77,25 +79,40 @@ export function activeSvg(svg) {
   if (/<!|<\?/.test(body)) return 'a doctype, CDATA or processing instruction'
   const tag = /<(\/?)([^\s<>/]*)((?:"[^"]*"|'[^']*'|[^<>"'])*)>/g
   let m, rest = body
+  // well-formed too: a picture the browser cannot parse is not drawn at all
+  const open = []
+  let roots = 0
   while ((m = tag.exec(body))) {
     const [, close, name, attrs] = m
     if (!SVG_ELEMENTS.has(name)) return `a <${name || '?'}> element`
-    if (close) { if (attrs.trim()) return `a malformed </${name}> tag`; continue }
+    if (close) {
+      if (attrs.trim()) return `a malformed </${name}> tag`
+      if (open.pop() !== name) return `a </${name}> that closes nothing open (not well-formed)`
+      continue
+    }
+    if (!open.length && ++roots > 1) return 'more than one root element (not well-formed)'
+    if (!open.length && name !== 'svg') return `a <${name}> outside the <svg> element`
+    if (!/\/\s*$/.test(attrs)) open.push(name)
     const attr = /([^\s=/"']+)\s*=\s*("[^"]*"|'[^']*')/g
+    const seen = new Set()
     let a, left = attrs
     while ((a = attr.exec(attrs))) {
-      const key = a[1], value = a[2].slice(1, -1)
+      const key = a[1], raw = a[2].slice(1, -1)
+      if (seen.has(key)) return `${key} written twice on one <${name}> (not well-formed)`
+      seen.add(key)
+      if (SVG_ENTITY.test(raw)) return `an encoded value in ${key}`
+      const value = decoded(raw)
       left = left.replace(a[0], '')
       if (/^on/i.test(key)) return `an ${key} handler attribute`
       if (key === 'style') return 'a style attribute (use presentation attributes)'
       if (key.includes(':') && key !== 'xmlns:xlink' && key !== 'xml:space') return `a ${key} attribute`
       if (key === 'href' && !/^#[\w.-]+$/.test(value)) return 'a link out of the file'
-      if (SVG_ENTITY.test(value)) return `an encoded value in ${key}`
       if (/url\s*\(/i.test(value) && !/^url\(#[\w.-]+\)$/.test(value.trim())) return `a url() in ${key} that leaves the file`
       if (/javascript:|data:|https?:|^\s*\/\//i.test(value) && key !== 'xmlns' && key !== 'xmlns:xlink') return `a link out of the file in ${key}`
     }
     if (left.replace(/\//g, '').trim()) return `an attribute without a quoted value on <${name}>`
   }
+  if (open.length) return `a <${open[open.length - 1]}> never closed (not well-formed)`
   rest = body.replace(tag, '')
   if (/[<>]/.test(rest)) return 'markup that does not parse as tags'
   return null
@@ -192,7 +209,8 @@ export function manifestOf(scenes) {
     ids.add(s.id)
   }
   const manifest = { format: FORMAT, v: MANIFEST_V, scenes: [...scenes].sort((a, b) => (a.id < b.id ? -1 : 1)) }
-  const size = bytes(JSON.stringify(manifest))
+  // measured on the bytes that are sent: serialize() escapes every "<" to six characters
+  const size = bytes(serialize(manifest))
   if (size > MANIFEST_BUDGET) throw new LibraryError(`the manifest is ${kb(size)}, over the ${MANIFEST_BUDGET / 1024 / 1024} MB the store accepts`)
   return manifest
 }

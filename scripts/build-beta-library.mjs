@@ -34,6 +34,8 @@ const value = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i +
 const known = new Set(['--check', '--upload', '--out', '--dir'])
 for (const [i, a] of args.entries()) {
   if (a.startsWith('--') ? !known.has(a) : !['--out', '--dir'].includes(args[i - 1])) { console.error(`build-beta-library: unknown argument ${a}`); process.exit(2) }
+  // a flag that takes a path, given none: never fall back to the default without saying so
+  if ((a === '--out' || a === '--dir') && (args[i + 1] === undefined || args[i + 1].startsWith('--'))) { console.error(`build-beta-library: ${a} needs a path`); process.exit(2) }
 }
 if (flag('--check') && flag('--upload')) { console.error('build-beta-library: --check uploads nothing; pass one or the other'); process.exit(2) }
 const dir = value('--dir') ?? join(root, 'beta/library')
@@ -59,6 +61,9 @@ mkdirSync(dirname(out), { recursive: true })
 writeFileSync(out, body)
 console.log(`wrote ${out}`)
 
+/** A refusal the store wrote itself, or a placeholder: nothing else from the response reaches the terminal. */
+const storeWord = (body) => /^[a-z-]{1,24}$/.test(body.trim()) ? body.trim() : '(a reply that is not the store\'s own; not shown)'
+
 if (flag('--upload')) {
   const { CF_ACCESS_CLIENT_ID: id, CF_ACCESS_CLIENT_SECRET: secret } = process.env
   if (!id || !secret) {
@@ -80,7 +85,10 @@ if (flag('--upload')) {
   if (res.status !== 200) {
     const why = res.status === 404 ? 'the store does not have the library route yet (deploy server/deck-store first)'
       : res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400) ? 'the service token was not accepted'
-      : (await res.text().catch(() => '')).slice(0, 200)
+      // The store's own refusals are one word (shape, json, type, size). Anything
+      // else came from something in between, and may echo what was sent, the
+      // service token included: it is never printed.
+      : storeWord(await res.text().catch(() => ''))
     console.error(`build-beta-library: the store answered ${res.status}: ${why}`)
     process.exit(1)
   }

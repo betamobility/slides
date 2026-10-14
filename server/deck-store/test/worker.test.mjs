@@ -1986,6 +1986,55 @@ export async function run(Miniflare) {
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: lib })
       eq(r.status, 200, 'and the real manifest goes back in')
 
+      // Independent adversarial review: authorization must precede conditional
+      // reads, and alternate spellings/methods must not reach the stored object.
+      {
+        const identities = [
+          ['anonymous', {}, [401, 401, 401]],
+          ['person', { as: 'alice' }, [200, 200, 401]],
+          ['service', { as: 'service' }, [403, 200, 401]],
+          ['grant', { headers: asGrant(aliceTok) }, [401, 401, 200]],
+        ]
+        const paths = ['/library/library.json', '/api/harness/library.json', '/api/publish/library.json']
+        let readsSafe = true, methodsSafe = true, variantsSafe = true
+        for (const [identity, opts, expected] of identities) {
+          for (const [idx, path] of paths.entries()) {
+            const response = await call('GET', path + '?cache=independent', {
+              ...opts, headers: { ...(opts.headers || {}), 'if-none-match': '*' },
+            })
+            const want = expected[idx] === 200 ? 304 : expected[idx]
+            if (response.status !== want || await response.text() !== '') readsSafe = false
+            for (const method of ['HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'PUT']) {
+              if (method === 'PUT' && identity === 'service' && idx === 1) continue
+              const response = await call(method, path, {
+                ...opts, headers: { ...(opts.headers || {}), ...J },
+                ...(method === 'HEAD' ? {} : { body: lib }),
+              })
+              if (![401, 403, 404, 405].includes(response.status)) methodsSafe = false
+            }
+            for (const variant of [path + '/', path.replace('library.json', 'Library.json'), path.replace('library.json', '%6cibrary.json')]) {
+              const response = await call('GET', variant, opts)
+              if (![401, 403, 404].includes(response.status)) variantsSafe = false
+            }
+          }
+        }
+        ok(readsSafe, 'adversarial: every identity is gated before wildcard conditional GET with a query')
+        ok(methodsSafe, 'adversarial: every non-writer identity and alternate method is refused on all library routes')
+        ok(variantsSafe, 'adversarial: trailing slash, case and percent encoding cannot bypass any library gate')
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(await r.text() === lib, 'adversarial: refused method matrix leaves the stored manifest byte-identical')
+        let hostsSafe = true
+        for (const url of ['https://slides.betamobility.ai%2eevil.test/x', 'https://design.betamobility.ai./x', 'https://design.betamobility.ai:444/x']) {
+          const value = { format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: serialize(value) })
+          if (r.status !== 400 || manifestShape(value)) hostsSafe = false
+        }
+        ok(hostsSafe, 'adversarial: worker and build shape check reject encoded suffix, trailing dot and alternate port hosts')
+        r = await call('GET', '/library/library.json', { origin: OLD_ORIGIN })
+        ok(r.status === 301 && await r.text() === '' && r.headers.get('location') === ORIGIN + '/library/library.json',
+          'adversarial: retired host redirects without exposing manifest bytes')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })

@@ -98,7 +98,8 @@ console.log('\nthe still')
     ['<script>alert(1)</' + 'script>', 'a script'], ['<foreignObject><p>x</p></foreignObject>', 'a foreignObject'],
     ['<rect onload="x()"/>', 'a handler'], ['<image href="https://example.com/x.png"/>', 'a remote image'], ['<a href="javascript:x()"><rect/></a>', 'a javascript link'],
   ]) ok(refused(files({ 'still.svg': SVG.replace('</svg>', bad + '</svg>') }), 'still.svg', 'a still is a picture'), `a still carrying ${what} fails`)
-  ok(refusal(files({ 'still.svg': SVG.replace('<rect', '<linearGradient id="g"/><rect fill="url(#g)"') })) === '', 'a gradient referenced inside the file is still a picture')
+  // (the fill is replaced, not added: written twice on one element it would not be well-formed)
+  ok(refusal(files({ 'still.svg': SVG.replace('<rect', '<linearGradient id="g"/><rect').replace('fill="#fff"', 'fill="url(#g)"') })) === '', 'a gradient referenced inside the file is still a picture')
   // found by a local pass before the first Codex round: the check is an allowlist now
   for (const [bad, what] of [
     ['<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>', 'a namespaced script'],
@@ -121,6 +122,47 @@ console.log('\nthe still')
     [SVG.replace('</svg>', '<text x="1" y="2">pay once = 5 &amp; done</text></svg>'), 'text that reads like an attribute'],
     [SVG.replace('</svg>', '<defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><use href="#c"/><g clip-path="url(#c)"><path d="M0 0L1 1"/></g></svg>'), 'a use and a clip path inside the file'],
   ] as [string, string][]) ok(refusal(files({ 'still.svg': good })) === '', `a still with ${what} builds`)
+}
+
+// Independent adversarial review: assertions describe required behaviour,
+// deliberately left red when the current implementation accepts broken input.
+console.log('\nindependent adversarial validation')
+{
+  const overBytes = SVG.replace('</svg>', '<text>' + 'é'.repeat(33000) + '</text></svg>')
+  ok(overBytes.length < lib.STILL_BUDGET && refused(files({ 'still.svg': overBytes }), 'sample/still.svg', '64 KB'),
+    'adversarial: multibyte still budget counts bytes and names the file')
+  const broken = SVG.replace('</svg>', '</g>')
+  ok(refused(files({ 'still.svg': broken }), 'sample/still.svg'),
+    'adversarial: mismatched SVG closing tag is refused before publishing a broken picture')
+  const duplicate = SVG.replace('<rect ', '<rect width="3" ')
+  ok(refused(files({ 'still.svg': duplicate }), 'sample/still.svg'),
+    'adversarial: duplicate XML attributes are refused before publishing a broken picture')
+  const numeric = SVG.replace('<rect ', '<rect aria-label="59&#176; north" ')
+  ok(refusal(files({ 'still.svg': numeric })) === '',
+    'adversarial: harmless numeric entity in a picture label is accepted')
+  const web = (url: string) => files({ 'index.html': undefined }, { kind: 'web', url })
+  const hostile = ['https://slides.betamobility.ai%2eevil.test/x', 'https://slides.betamobility.ai\\@evil.test/x', 'http://design.betamobility.ai/x']
+  // A backslash before @ terminates the authority, so that case is SAFE:
+  // assert the parsed hostname rather than treating the spelling as a bypass.
+  ok(hostile.every((url) => {
+    const u = new URL(url)
+    return lib.WEB_HOSTS.includes(u.hostname) && u.protocol === 'https:'
+      ? refusal(web(url)) === '' : refused(web(url), u.hostname)
+  }), 'adversarial: encoded host and backslash URL cases follow the actual authority')
+  const page = HTML + '<div></div>'.repeat(20000)
+  const scenes = Array.from({ length: 24 }, (_, i) => lib.validateScene('s-' + i, files({ 'index.html': page })))
+  let rejected = false, wireSize = 0
+  try { wireSize = Buffer.byteLength(lib.serialize(lib.manifestOf(scenes))) }
+  catch (e) { if (!(e instanceof lib.LibraryError)) throw e; rejected = true }
+  const budgetDir = mkdtempSync(join(tmpdir(), 'beta-library-wire-budget-'))
+  for (let i = 0; i < scenes.length; i++) {
+    const folder = join(budgetDir, 's-' + i)
+    mkdirSync(folder)
+    for (const [name, text] of Object.entries(files({ 'index.html': page }))) writeFileSync(join(folder, name), text)
+  }
+  const budgetCheck = spawnSync(process.execPath, [script, '--check', '--dir', budgetDir], { encoding: 'utf8' })
+  ok(rejected ? budgetCheck.status === 1 : wireSize <= lib.MANIFEST_BUDGET && budgetCheck.status === 0,
+    `adversarial: a manifest that passes the build fits the upload wire budget (${wireSize} bytes, --check exit ${budgetCheck.status})`)
 }
 
 console.log('\na web scene')
@@ -227,6 +269,8 @@ console.log('\nfolders on disk, and the manifest as a whole')
   ok(r.status === 0 && existsSync(out) && readFileSync(out, 'utf8') === lib.serialize(lib.buildManifest(join(root, 'beta/library'))), 'without --check it writes the manifest where asked')
   r = run(['--check', '--dir', dir])
   ok(r.status === 1 && r.stderr.includes('beta/library/a-scene/notes.txt') && r.stdout === '', `a library that does not validate exits 1 naming the file (${r.status})`)
+  r = run(['--check', '--dir'])
+  ok(r.status === 2, 'adversarial: --dir without a value is a usage error, not a successful check of another library')
   r = run(['--chekc'])
   ok(r.status === 2 && r.stderr.includes('unknown argument'), 'a misspelt flag is refused, not ignored')
   r = run(['--check', '--upload'], { CF_ACCESS_CLIENT_ID: 'id.access', CF_ACCESS_CLIENT_SECRET: 'shhh', SLIDES_STORE_URL: 'http://127.0.0.1:1' })
@@ -241,13 +285,13 @@ console.log('\nfolders on disk, and the manifest as a whole')
 
   // a stand-in store: what does the upload send?
   const seen: { method?: string; url?: string; headers: Record<string, unknown>; body: string }[] = []
-  let answer = 200
+  let answer = 200, echoSecret = false, redirectTo = ''
   const server = createServer((req, res) => {
     let body = ''
     req.on('data', (c) => { body += c })
     req.on('end', () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body })
-      res.writeHead(answer, answer === 200 ? { etag: '"abc"' } : {}); res.end(answer === 400 ? 'shape' : '')
+      res.writeHead(answer, answer === 200 ? { etag: '"abc"' } : redirectTo ? { location: redirectTo } : {}); res.end(echoSecret ? String(req.headers['cf-access-client-secret']) : answer === 400 ? 'shape' : '')
     })
   })
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -269,6 +313,19 @@ console.log('\nfolders on disk, and the manifest as a whole')
     u = await upload({})
     ok(u.status === 1 && u.stderr.includes(String(status)) && u.stderr.includes(words), `the store answering ${status} fails the command and says why (${words})`)
   }
+  answer = 500; echoSecret = true
+  u = await upload({ CF_ACCESS_CLIENT_SECRET: 'synthetic-u8-secret-do-not-log' })
+  ok(u.status === 1 && ![u.stdout, u.stderr].some((s) => s.includes('synthetic-u8-secret-do-not-log')),
+    'adversarial: an upload error reflecting the service secret never prints the credential')
+  echoSecret = false; answer = 307
+  const destinationRequests: string[] = []
+  const destination = createServer((req, res) => { destinationRequests.push(req.url || ''); res.end('unexpected') })
+  await new Promise<void>((done) => destination.listen(0, '127.0.0.1', done))
+  redirectTo = `http://127.0.0.1:${(destination.address() as { port: number }).port}/stolen`
+  u = await upload({})
+  ok(u.status === 1 && destinationRequests.length === 0,
+    'adversarial: a 307 redirect cannot forward service credentials to another origin')
+  await new Promise<void>((done) => destination.close(() => done()))
   await new Promise<void>((done) => server.close(() => done()))
   u = await upload({ SLIDES_STORE_URL: 'http://127.0.0.1:1' })
   ok(u.status === 1 && u.stderr.includes('could not reach'), 'a store that cannot be reached fails the command')
