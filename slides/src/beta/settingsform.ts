@@ -79,7 +79,20 @@ export function settingsForm(host: SettingsFormHost): HTMLElement {
     sel.addEventListener('change', () => {
       const preset = host.presets!.find((p) => p.name === sel.value)
       if (!preset) return
+      // A preset value the scene holds to a limit, or refuses, is said beside
+      // its setting just as a typed one is: kept before the write, which
+      // redraws the panel; taken back if the write is refused.
+      const said: string[] = []
+      for (const p of host.props) {
+        if (!Object.prototype.hasOwnProperty.call(preset.values, p.key)) continue
+        const r = coerce(p, preset.values[p.key])
+        if (!r.note) continue
+        const key = `${host.scope}\u001f${p.key}`
+        notes.set(key, { value: r.value ?? p.default, text: noteText(r.note) })
+        said.push(key)
+      }
       const refused = host.writeAll(applyPreset(host.props, preset))
+      if (refused) for (const key of said) notes.delete(key)
       // refused: say why, and show the preset that is really in force
       presetNote.textContent = refused ? t(refused) : ''
       presetNote.hidden = !refused
@@ -101,6 +114,11 @@ export function settingsForm(host: SettingsFormHost): HTMLElement {
     const kept = notes.get(id)
     if (kept && (kept.value === undefined || kept.value === now[prop.key])) say(kept.text, kept.value)
     else notes.delete(id)
+    // a stored position the form cannot read (an older copy, a hand edit) is
+    // said, and its boxes left empty, rather than shown as a made-up 0, 0
+    if (!notes.has(id) && parseHint(prop.format, prop.kind)?.kind === 'latlon' && !parseLatLon(String(now[prop.key]))) {
+      say(noteText({ says: 'Not a position. Write latitude, longitude' }), now[prop.key])
+    }
     /** Coerce, then write; returns what the control should now show. */
     const commit = (input: unknown, final: boolean): Value => {
       const r = coerce(prop, input)
@@ -181,17 +199,17 @@ function controlFor(prop: RuntimeProp, value: Value, commit: (input: unknown, fi
   if (hint?.kind === 'latlon') {
     const box = document.createElement('span')
     box.className = 'ed-scene-latlon'
-    const [lat, lon] = parseLatLon(String(value)) ?? [0, 0]
-    const mk = (v: number, label: string) => {
+    const pos = parseLatLon(String(value))
+    const mk = (v: number | undefined, label: string) => {
       const i = document.createElement('input')
       i.type = 'number'
       i.step = 'any'
-      i.value = String(v)
+      i.value = v === undefined ? '' : String(v)
       i.title = label
       i.setAttribute('aria-label', label)
       return i
     }
-    const a = mk(lat, t('Latitude')), b = mk(lon, t('Longitude'))
+    const a = mk(pos?.[0], t('Latitude')), b = mk(pos?.[1], t('Longitude'))
     const send = () => {
       const v = commit(`${a.value}, ${b.value}`, true)
       const pos = parseLatLon(String(v))

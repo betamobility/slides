@@ -296,6 +296,24 @@ ok(colorRefused.elements[0].url === fullColorUrl && colorShown === '#ff0000'
   && /too long/i.test(await probe.locator('.ed-scene-settings').innerText()),
   `U10 round 3: refused colour restores the stored swatch (shown=${colorShown}, expected #ff0000)`)
 
+// Round 4: preset coercion must report the same clamp as a manual edit.
+await mount('runtime', [{ key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:10:1' }], {},
+  [{ name: 'Beyond limit', values: { n: 12 } }])
+await probePreset().selectOption('Beyond limit')
+const presetClamp = await probeSnapshot()
+const presetClampText = await probe.locator('.ed-scene-settings').innerText()
+ok(presetClamp.runtime.values.n === 10 && /Held at 10/.test(presetClampText),
+  `U10 round 4: preset clamping is stored and explained inline (stored=${presetClamp.runtime.values.n}, text=${JSON.stringify(presetClampText)})`)
+
+// A hand-edited value is valid text to the gate. A position control must
+// disclose that it cannot interpret it rather than showing a fabricated 0,0.
+await mount('runtime', [{ key: 'position', label: 'Position', kind: 'text', default: '59, 10', format: 'latlon' }],
+  { position: 'unknown' }, [])
+const invalidPositionText = await probe.locator('.ed-scene-settings').innerText()
+const invalidPositionInputs = await probeSetting('position').locator('input').evaluateAll((els) => els.map((el) => el.value))
+ok(/unknown|Not a position/.test(invalidPositionText) || invalidPositionInputs.includes('unknown'),
+  `U10 round 4: unparseable stored position is disclosed instead of fabricated coordinates (inputs=${JSON.stringify(invalidPositionInputs)}, text=${JSON.stringify(invalidPositionText)})`)
+
 await probe.close()
 
 ok(errors.length === 0, `no page error (${errors.join(' | ')})`)

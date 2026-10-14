@@ -240,5 +240,47 @@ console.log('\nU10 round 3 adversarial regressions')
     'U10 round 3: adjacent URL lengths agree with the gate at the exact boundary')
 }
 
+console.log('\nU10 round 4 adversarial regressions')
+{
+  const tiny: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0,
+    format: 'range:-0.00000000000000000002:0.00000000000000000002:0.00000000000000000001' }
+  const low = ss.coerce(tiny, -1), high = ss.coerce(tiny, 1)
+  ok(low.value === -2e-20 && high.value === 2e-20 && !!low.note && !!high.note
+    && ss.coerce(tiny, -5e-21).value === 0 && ss.coerce(tiny, 5e-21).value === 1e-20,
+    'U10 round 4: twenty-decimal bounds clamp with notes and signed midpoint ties go up')
+
+  const choice: RuntimeProp = { key: 'mode', label: 'Mode', kind: 'text', default: 'New York',
+    format: 'select:New York|東京| blå ' }
+  const declared: RuntimeProp[] = [choice, { key: 'constructor', label: 'Constructor', kind: 'number', default: 3 }]
+  const before = JSON.stringify(declared)
+  const preset = ss.applyPreset(declared, { name: 'Unicode', values: { mode: '東京', constructor: 7, hidden: 'no' } })
+  ok(same(preset, { mode: '東京', constructor: 7 }) && JSON.stringify(declared) === before
+    && ss.coerce(choice, ' blå ').value === ' blå ' && ss.coerce(choice, 'New York').value === 'New York',
+    'U10 round 4: Unicode and spaced preset choices preserve exactly the declared keys')
+
+  const remote = 'http://user:pass@example.test:8080/new%2Fpath?%6Dode=old&mode=older&keep=a%2Bb&keep=c#new'
+  const changed = ss.writeQuery(remote, 'mode', 'New York 東京')
+  const base = new URL(remote), url = 'url' in changed ? new URL(changed.url) : null
+  ok(!!url && url.origin === base.origin && url.pathname === base.pathname && url.hash === base.hash
+    && url.username === base.username && url.password === base.password
+    && same(url.searchParams.getAll('mode'), ['New York 東京']) && same(url.searchParams.getAll('keep'), ['a+b', 'c']),
+    'U10 round 4: encoded duplicate target rewrites preserve remote address and duplicate siblings')
+
+  const prefix = 'https://example.test/?mode='
+  const old = prefix + 'x'.repeat(ss.MAX_WEB_URL - prefix.length)
+  const refused = ss.writeQuery(old, 'mode', '東京'.repeat(120))
+  const fits = ss.writeQueryAll(old, { mode: 'New York 東京' })
+  ok('error' in refused && 'url' in fits && isWebUrl(fits.url)
+    && new URL(fits.url).searchParams.get('mode') === 'New York 東京',
+    'U10 round 4: encoded expansion refuses while an atomic shorter replacement fits')
+
+  const original = { n: 99, mode: 'retired' }
+  const legacyProps: RuntimeProp[] = [{ key: 'n', label: 'N', kind: 'number', default: 3, format: 'range:0:10:1' }, choice]
+  ok(same(ss.valuesOf(legacyProps, original), original)
+    && same(ss.readQuery('https://example.test/?n=99&mode=retired', legacyProps), original)
+    && ss.activePreset(legacyProps, original, [{ name: 'Default', values: {} }]) === null,
+    'U10 round 4: legacy out-of-range values stay visible and never falsely select the default preset')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
