@@ -1635,6 +1635,106 @@ try {
       `a click in the pairing's final second is not collected, and the run says to run again (remaining ${advertisedDeadline - lateApprovalAt} ms, exit ${late.code})`)
   }
 
+  console.log('\nthe scene library (U12: --library, a library insert, a values edit, AE6)')
+  {
+    const { buildManifest, serialize } = await import('./lib/beta-library.mjs')
+    const manifest = buildManifest(join(root, 'beta', 'library'))
+    const map = manifest.scenes.find((x: { id: string }) => x.id === 'map')
+    const up = await store('PUT', '/api/harness/library.json', { body: serialize(manifest), headers: { 'content-type': 'application/json' } })
+    ok(up.ok, `the rig uploads the library manifest (${up.status})`)
+    const editsFile = (list: unknown) => {
+      const dir = mkdtempSync(join(tmpdir(), 'splice-lib-edits-'))
+      temps.push(dir)
+      const f = join(dir, 'edits.json')
+      writeFileSync(f, JSON.stringify(list))
+      return f
+    }
+
+    // --library, with the service token and with an approval
+    let r = await runTool(['--library'])
+    ok(r.code === 0 && /counter\s+v1\s+runtime scene/.test(r.out) && /map\s+v1\s+runtime scene/.test(r.out)
+      && /setting zoom: number \(range:2:9:1\), default 5/.test(r.out) && /preset "Copenhagen": place="Copenhagen"/.test(r.out),
+      `--library lists each scene with its settings and presets${r.code ? `: ${r.err}` : ''}`)
+
+    // a library insert
+    const id = await seed()
+    r = await runTool([id, '--edits', editsFile([{ library: 'map', id: 'cph', insertAfter: 's1', preset: 'Copenhagen', values: { zoom: 7 } }])])
+    eq(r.code, 0, `a library insert exits 0${r.code ? `: ${r.err}` : ''}`)
+    let d = (await readDeck(id)).doc
+    const cph = slideOf(d, 'cph')
+    ok(d.slides.map((x: { id: string }) => x.id).join() === 's1,cph,map,demo,numbers', 'the new slide is after s1, and no other slide moved')
+    ok(cph?.runtime?.library?.id === 'map' && cph.runtime.library.version === map.version, 'it carries the library marker')
+    ok(cph?.runtime?.values?.place === 'Copenhagen' && cph.runtime.values.position === '55.6761, 12.5683' && cph.runtime.values.zoom === 7 && cph.runtime.values.grid === 1,
+      `the preset's values, the edit's value over them, and every other setting its default (${JSON.stringify(cph?.runtime?.values)})`)
+    ok(cph?.runtime?.props?.find((p: { key: string }) => p.key === 'zoom')?.format === 'range:2:9:1', 'the settings keep their format hints')
+    ok(cph?.elements?.length === 1 && cph.elements[0].src === cph.runtime.still, 'one element: the still')
+    ok(rt ? rt.runtimeSource(cph, d)?.html === map.html : false, `the page is the library's, byte for byte${rt ? '' : ` (runtime.ts: ${rtError})`}`)
+    ok(rt ? JSON.stringify(rt.checkRuntime(structuredClone(cph.runtime), d.assets)) === JSON.stringify(cph.runtime) : false, "the shell's gate keeps the record as written")
+
+    // what a library insert refuses
+    const refusals: Array<[string, unknown, RegExp]> = [
+      ['an id the library does not have', { library: 'harbour', id: 'h', insertAfter: 'end' }, /"harbour" is not in the scene library/],
+      ['a setting the scene does not declare', { library: 'map', id: 'h', insertAfter: 'end', values: { zom: 4 } }, /"zom" is not one of its settings/],
+      ['a value outside its range', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 12 } }, /"zoom" 12 is outside 2 to 9/],
+      ['a value off its steps', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 4.5 } }, /"zoom" 4.5 is not on the range's steps/],
+      ['a preset it does not have', { library: 'map', id: 'h', insertAfter: 'end', preset: 'Bergen' }, /no preset "Bergen"/],
+      ['an id already in the deck', { library: 'map', id: 'demo', insertAfter: 'end' }, /"demo": a slide with that id is already in the deck/],
+      ['an anchor not in the deck', { library: 'map', id: 'h', insertAfter: 'nope' }, /insertAfter "nope" is not a slide in the deck/],
+    ]
+    for (const [why, edit, want] of refusals) {
+      const before = (await readDeck(id)).etag
+      r = await runTool([id, '--edits', editsFile([edit])])
+      ok(r.code !== 0 && want.test(r.err) && (await readDeck(id)).etag === before, `a library insert with ${why} is refused, naming it, and nothing is written (${r.err.trim().slice(0, 140)})`)
+    }
+
+    // AE6, first half: a person changed the values; a values edit changes one, the rest survive
+    const doc0 = (await readDeck(id)).doc
+    slideOf(doc0, 'cph').runtime.values = { ...slideOf(doc0, 'cph').runtime.values, place: 'Helsingør', grid: 0 }
+    const id2 = await seed(doc0)
+    r = await runTool([id2, '--edits', editsFile([{ slideId: 'cph', values: { zoom: 3 } }])])
+    eq(r.code, 0, `a values edit exits 0${r.code ? `: ${r.err}` : ''}`)
+    d = (await readDeck(id2)).doc
+    const v = slideOf(d, 'cph').runtime.values
+    ok(v.zoom === 3 && v.place === 'Helsingør' && v.grid === 0 && v.position === '55.6761, 12.5683', `AE6: the changed value lands and the person's values survive (${JSON.stringify(v)})`)
+    ok(JSON.stringify(slideOf(d, 'cph').elements) === JSON.stringify(slideOf(doc0, 'cph').elements) && slideOf(d, 'cph').runtime.src === slideOf(doc0, 'cph').runtime.src, 'and nothing else of the slide changed')
+
+    for (const [why, edit, want] of [
+      ['an undeclared setting', { slideId: 'cph', values: { colour: 'red' } }, /"colour" is not one of its settings/],
+      ['a wrong kind', { slideId: 'cph', values: { zoom: 'seven' } }, /"zoom" "seven" is not a number/],
+      ['a slide that is not a library scene', { slideId: 'demo', values: { title: 'Tromsø' } }, /"demo" is not a library scene/],
+      ['a position the form would rewrite', { slideId: 'cph', values: { position: '59.9,10.7' } }, /write "59.9, 10.7"/],
+    ] as Array<[string, unknown, RegExp]>) {
+      const before = (await readDeck(id2)).etag
+      r = await runTool([id2, '--edits', editsFile([edit])])
+      ok(r.code !== 0 && want.test(r.err) && (await readDeck(id2)).etag === before, `a values edit naming ${why} is refused, naming it, and nothing is written (${r.err.trim().slice(0, 140)})`)
+    }
+
+    // AE6, second half: a folder that does not declare the library id cannot replace the slide
+    let before = (await readDeck(id2)).etag
+    r = await runTool([id2, project({ cph: {} })])
+    ok(r.code !== 0 && /slide "cph" is the library scene "map"/.test(r.err) && (await readDeck(id2)).etag === before,
+      `AE6: replacing a library slide from a folder that does not declare it is refused, naming the slide (${r.err.trim().slice(0, 140)})`)
+    r = await runTool([id2, project({ cph: { manifest: { steps: 2, library: 'map', props: [{ key: 'place', label: 'Place', kind: 'text', default: 'Oslo' }] } } })])
+    eq(r.code, 0, `a folder that declares "library": "map" may replace it${r.code ? `: ${r.err}` : ''}`)
+    d = (await readDeck(id2)).doc
+    ok(slideOf(d, 'cph').runtime.library?.id === 'map', 'and the slide stays marked as that library scene')
+
+    // --read lists library slides with their ids and values
+    r = await runTool(['--read', id, '--out', join(mkdtempSync(join(tmpdir(), 'splice-read-')), 'd.bento.html')])
+    ok(r.code === 0 && /cph\s+\(library scene "map" v1: change its settings with a values edit\): place="Copenhagen", position="55\.6761, 12\.5683", zoom=7/.test(r.out),
+      `--read lists a library slide with its id and values${r.code ? `: ${r.err}` : ''}`)
+
+    // the ownership check itself: a values edit may not touch a setting it does not name
+    const { checkOwnership } = await import(pathToFileURL(TOOL).href)
+    const readDoc = (await readDeck(id)).doc
+    const outDoc = structuredClone(readDoc)
+    slideOf(outDoc, 'cph').runtime.values.place = 'Malmö'
+    slideOf(outDoc, 'cph').runtime.values.zoom = 4
+    let refused = ''
+    try { checkOwnership(readDoc, outDoc, { scenes: new Set(), edits: new Map(), valued: new Map([['cph', new Set(['zoom'])]]) }) } catch (e) { refused = (e as Error).message }
+    ok(/setting "place" would change, and no values edit names it/.test(refused), `the ownership check refuses a change to a setting no values edit names (${refused})`)
+  }
+
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
   {
     const copy = mkdtempSync(join(tmpdir(), 'beta-slides-plugin-'))
@@ -1644,7 +1744,7 @@ try {
     const r = await runTool([id, project({ map: {} })], { tool: join(copy, 'beta-slides', 'scripts', 'splice.mjs') })
     eq(r.code, 0, `the copied tool exits 0${r.code ? `: ${r.err}` : ''}`)
     ok(typeof slideOf((await readDeck(id)).doc, 'map').runtime.src === 'string', 'and the splice landed')
-    const sources = ['splice.mjs', 'lib/bento-doc.mjs'].map((f) => readFileSync(join(root, 'plugins/beta-slides/scripts', f), 'utf8'))
+    const sources = ['splice.mjs', 'lib/bento-doc.mjs', 'lib/library.mjs'].map((f) => readFileSync(join(root, 'plugins/beta-slides/scripts', f), 'utf8'))
     const specifiers = sources.flatMap((s) => [...s.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1] || m[2]))
     const bad = specifiers.filter((s) => !s.startsWith('node:') && !s.startsWith('./'))
     ok(specifiers.length > 0 && bad.length === 0, `only node: built-ins and ./ imports (${bad.join(', ') || 'none foreign'})`)

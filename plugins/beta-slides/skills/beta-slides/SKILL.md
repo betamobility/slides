@@ -544,6 +544,9 @@ node splice.mjs --link
 # a stored deck as it is now, and the ids an edit needs
 node splice.mjs --read <deckId> [--out current.bento.html]
 
+# the scene library: each scene's id, settings and presets
+node splice.mjs --library
+
 # a new deck: the published blank template, deck.json's slides, then the scenes
 node splice.mjs --create <projectDir> [--dry-run] [--skip-url-check]
 
@@ -606,7 +609,9 @@ upload then fails, the error carries the deck id, and you finish with
   cannot reach (an internal one, say) prints a warning and the run goes on.
   `--skip-url-check` skips the check; use it only when you know the page
   allows framing.
-- **`edits.json`** changes the content of native elements by id:
+- **`edits.json`** is a list of edits. Besides content edits (below) it holds
+  library inserts and settings edits (next section). Content edits change
+  the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
   key per type is `html` (text), `src` (image, media), `option` (chart) and
   `rows` (table). Anything else is refused.
@@ -615,6 +620,55 @@ upload then fails, the error carries the deck id, and you finish with
 - An encrypted deck is refused; the tool does not decrypt. A deck that is in
   a live session while the tool writes is unsupported: collaborators are not
   told the store copy changed.
+
+### The scene library: insert a reviewed scene, change its settings
+
+Beta keeps reviewed, reusable scenes (a counter, a map, …) in a library on
+the store. Prefer one over writing a scene from nothing when it fits: it is
+already reviewed, it has a still, and the person can change its settings in
+the editor's panel without you.
+
+```bash
+node splice.mjs --library      # what there is: ids, settings (kind, format, default) and presets
+```
+
+Insert one as a new runtime slide with a `library` edit in `edits.json`:
+
+```json
+[{ "library": "map", "id": "cph", "insertAfter": "s3", "preset": "Copenhagen", "values": { "zoom": 7 } }]
+```
+
+- `id` names the new slide (no slide in the deck may use it); `insertAfter`
+  is the id of a slide in the deck, or `"end"`. The slide goes after that
+  slide and its states.
+- `preset` is a preset's name from `--library` (the first preset when you
+  leave it out); `values` go over the preset's. Every setting you do not name
+  keeps the preset's value or its default.
+- The slide is exactly what the editor's Scenes gallery writes: the scene's
+  page inlined, its still, its settings and a library marker. Only runtime
+  scenes can be inserted this way; a web scene goes on a slide the person
+  owns, so tell them to insert it from the editor's **Scenes** button.
+
+Change a library slide's settings with a `values` edit, never by replacing
+it from a folder:
+
+```json
+[{ "slideId": "cph", "values": { "place": "Malmö", "position": "55.605, 13.0038" } }]
+```
+
+- Only the settings you name change; every other value, including what the
+  person set in the panel, stays. `--read` lists library slides with their
+  current values.
+- A value must be one the setting keeps as given, or the run is refused,
+  naming the key: the right kind, one of a `select:` list's choices, `0` or
+  `1` for `bool`, inside a `range:min:max:step` and on its steps, and a
+  position written `"latitude, longitude"` with a comma and a space and at
+  most six decimals.
+- A slide carrying a library marker is replaced from a scene folder only
+  when that folder's `scene.json` declares the same `"library": "<id>"`.
+  Without it the run is refused, naming the slide: the replace would discard
+  what the person set. Declared, the replace is a normal replace (values are
+  dropped, as for any replace) and the marker stays.
 
 ### Publishing: one click in a browser
 

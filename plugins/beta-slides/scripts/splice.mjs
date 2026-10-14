@@ -8,6 +8,7 @@
 //
 //   node splice.mjs --link
 //   node splice.mjs --read <deckId> [--out <file>]
+//   node splice.mjs --library
 //   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
 //   node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
 //   node splice.mjs <deckId> --title "<title>" [--dry-run]
@@ -60,7 +61,24 @@
 //                                    the store's asset route, never inlined
 //                                    (<projectDir>/assets/<name> also found)
 //
-// edits.json is a list of { slideId, elementId, html | src | option | rows }.
+// edits.json is a list of edits, each one of three kinds:
+//   { slideId, elementId, html | src | option | rows }   content of a native element
+//   { slideId, values: { key: value } }                    settings of a library scene
+//   { library, id, insertAfter, preset?, values? }         a new library scene slide
+//
+// THE SCENE LIBRARY (2026-10-13-2236 plan, U12, KTD9, KTD13). `--library`
+// prints the scenes the store offers, read with the run's own credential
+// (/api/harness/library.json or /api/publish/library.json). A `library` edit
+// inserts scene `library` as a new runtime slide `id` after `insertAfter` (a
+// slide id, or "end"): the slide the editor's gallery writes, with the
+// preset's values (by name; the first when none is named) and `values` over
+// them. Only a runtime scene can be inserted here; a web scene goes on a slide
+// the person owns, so it is inserted from the editor. A `values` edit changes
+// the named settings of a slide carrying runtime.library, declared keys only,
+// each a value its setting keeps as given; every other value, the person's,
+// stays. A slide carrying runtime.library is replaced from a scene folder
+// only when that folder's scene.json declares the same `library` id; it then
+// keeps the marker, and the replace drops values as any replace does (R14).
 //
 // A scene folder names a runtime slide already in the deck, which it replaces.
 // To add a new one, scene.json sets insertAfter to the id of a slide in the
@@ -91,6 +109,7 @@ import { join, extname, dirname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { readBlock, writeBlock, isEncrypted } from './lib/bento-doc.mjs'
+import { checkValues, LIBRARY_ID, librarySlide, readLibrary, valuesFor } from './lib/library.mjs'
 
 // slides/src/model.ts RUNTIME_*_BUDGET; restated because this file cannot
 // import the app.
@@ -217,8 +236,10 @@ function readScene(projectDir, sd, id) {
     if (!['text', 'number', 'color'].includes(p.kind)) throw new Refusal(`scene "${id}": prop "${p.key}" kind must be text, number or color`)
     if (p.label !== undefined && (typeof p.label !== 'string' || p.label.length > 200)) throw new Refusal(`scene "${id}": prop "${p.key}" label must be text of at most 200 characters`)
     if (p.default !== undefined && !validValue(p.kind, p.default)) throw new Refusal(`scene "${id}": prop "${p.key}" default ${JSON.stringify(p.default)} is not a valid ${p.kind}`)
+    if (p.format !== undefined && (typeof p.format !== 'string' || !p.format || [...p.format].length > 200 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(p.format))) throw new Refusal(`scene "${id}": prop "${p.key}" format must be one line of at most 200 characters`)
     keys.add(p.key)
   }
+  if (m.library !== undefined && (typeof m.library !== 'string' || !LIBRARY_ID.test(m.library))) throw new Refusal(`scene "${id}": library must be a library scene id (lower case, digits and hyphens)`)
   if (m.insertAfter !== undefined && (typeof m.insertAfter !== 'string' || !m.insertAfter)) throw new Refusal(`scene "${id}": insertAfter must be the id of a slide in the deck, or "end"`)
   if (m.url !== undefined && (typeof m.url !== 'string' || m.url.length > MAX_URL || !/^https:\/\//i.test(m.url))) throw new Refusal(`scene "${id}": url must be https`)
 
@@ -236,7 +257,7 @@ function readScene(projectDir, sd, id) {
     if (size > ASSET_BUDGET) throw new Refusal(`scene "${id}": asset ${name} is ${kb(size)}, over the 16 MB asset budget`)
     assets.push({ name, path, type, size, hash: createHash('sha256').update(readFileSync(path)).digest('hex') })
   }
-  return { id, src, still, stillType, steps, props, url: m.url, assets, insertAfter: m.insertAfter }
+  return { id, src, still, stillType, steps, props, url: m.url, assets, insertAfter: m.insertAfter, library: m.library }
 }
 
 /** edits.json, validated for shape; whether each target exists is checked per read. */
@@ -244,9 +265,27 @@ export function readEdits(file) {
   if (!file) return []
   let list
   try { list = JSON.parse(readFileSync(file, 'utf8')) } catch (e) { throw new Refusal(`edits file does not parse: ${e.message}`) }
-  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of { slideId, elementId, html | src | option | rows }')
+  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of edits: { slideId, elementId, html | src | option | rows }, { slideId, values }, or { library, id, insertAfter, preset?, values? }')
+  const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
   for (const e of list) {
-    if (!e || typeof e.slideId !== 'string' || typeof e.elementId !== 'string') throw new Refusal('every edit needs slideId and elementId')
+    if (!plain(e)) throw new Refusal('every edit is an object')
+    if (e.library !== undefined) {
+      if (typeof e.library !== 'string' || !LIBRARY_ID.test(e.library)) throw new Refusal(`library insert: ${JSON.stringify(e.library)} is not a library scene id`)
+      if (typeof e.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(e.id)) throw new Refusal(`library insert of "${e.library}": id must name the new slide (letters, digits, - and _)`)
+      if (typeof e.insertAfter !== 'string' || !e.insertAfter) throw new Refusal(`library insert "${e.id}": insertAfter must be the id of a slide in the deck, or "end"`)
+      if (e.preset !== undefined && typeof e.preset !== 'string') throw new Refusal(`library insert "${e.id}": preset must be a preset's name`)
+      if (e.values !== undefined && !plain(e.values)) throw new Refusal(`library insert "${e.id}": values must be an object of setting: value`)
+      const extra = Object.keys(e).filter((k) => !['library', 'id', 'insertAfter', 'preset', 'values'].includes(k))
+      if (extra.length) throw new Refusal(`library insert "${e.id}": ${extra.map((k) => JSON.stringify(k)).join(', ')} is not part of a library insert`)
+      continue
+    }
+    if (typeof e.slideId !== 'string') throw new Refusal('every edit needs slideId (or library, for a library insert)')
+    if (e.values !== undefined) {
+      if (e.elementId !== undefined || Object.keys(e).length !== 2) throw new Refusal(`values edit for ${e.slideId}: { slideId, values } and nothing else`)
+      if (!plain(e.values) || !Object.keys(e.values).length) throw new Refusal(`values edit for ${e.slideId}: values must name at least one setting`)
+      continue
+    }
+    if (typeof e.elementId !== 'string') throw new Refusal('every content edit needs slideId and elementId')
     if (Object.keys(e).length < 3) throw new Refusal(`edit for ${e.slideId}/${e.elementId} changes nothing`)
   }
   return list
@@ -287,7 +326,7 @@ function applyScene(doc, slide, scene) {
   if (scene.url) rec.url = scene.url
   rec.still = intern(doc, dataUri(scene.stillType, scene.still), 'still')
   rec.steps = scene.steps
-  rec.props = scene.props.map((p) => ({ key: p.key, label: typeof p.label === 'string' ? p.label : p.key, kind: p.kind, default: p.default ?? KIND_DEFAULT[p.kind] }))
+  rec.props = scene.props.map((p) => ({ key: p.key, label: typeof p.label === 'string' ? p.label : p.key, kind: p.kind, default: p.default ?? KIND_DEFAULT[p.kind], ...(typeof p.format === 'string' ? { format: p.format } : {}) }))
   if (scene.assets.length) rec.assets = scene.assets.map((a) => a.name)
 
   const holder = stillHolder(slide)
@@ -318,7 +357,7 @@ function prune(doc, keys) {
  * The document to write, from the one read. Pure; throws Refusal. Returns the
  * new document and the plan lines `--dry-run` prints.
  */
-export function derive(read, { scenes }, edits = [], { title } = {}) {
+export function derive(read, { scenes }, edits = [], { title, library } = {}) {
   const doc = structuredClone(read)
   if (!Array.isArray(doc.slides)) throw new Refusal('the deck has no slides list')
   const plan = []
@@ -331,6 +370,27 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
   const sceneIds = new Set()
   const inserted = new Set()
   const inserts = new Map() // anchor id, or "end", to the scenes that go after it
+  const contentEdits = edits.filter((e) => e.library === undefined && e.values === undefined)
+  const valueEdits = edits.filter((e) => e.library === undefined && e.values !== undefined)
+  const libraryInserts = edits.filter((e) => e.library !== undefined)
+  const anchorCheck = (what, anchor) => {
+    if (anchor === 'end') return
+    const at = read.slides.filter((s) => s && s.id === anchor).length
+    if (at !== 1) throw new Refusal(`${what}: insertAfter "${anchor}" ${at ? 'is ambiguous' : 'is not a slide in the deck'}; nothing was written`)
+  }
+  for (const e of libraryInserts) {
+    if (!library) throw new Refusal(`library insert "${e.id}": the scene library was not read; nothing was written`)
+    const scene = library.scenes.get(e.library)
+    if (!scene) throw new Refusal(`library insert "${e.id}": "${e.library}" is not in the scene library (${[...library.scenes.keys()].join(', ') || 'it is empty'}; splice.mjs --library lists it); nothing was written`)
+    if (scene.kind !== 'runtime') throw new Refusal(`library insert "${e.id}": "${e.library}" is a web scene, which goes on a slide the person owns; insert it from the editor's Scenes gallery; nothing was written`)
+    if (byId(e.id).length || sceneIds.has(e.id)) throw new Refusal(`library insert "${e.id}": a slide with that id is already in the deck; nothing was written`)
+    anchorCheck(`library insert "${e.id}"`, e.insertAfter)
+    let values
+    try { values = valuesFor(scene, { preset: e.preset, values: e.values ?? {} }) } catch (err) { throw new Refusal(`library insert "${e.id}": ${err.message}; nothing was written`) }
+    inserts.set(e.insertAfter, [...(inserts.get(e.insertAfter) || []), { libraryInsert: true, id: e.id, scene, values, preset: e.preset }])
+    inserted.add(e.id)
+    sceneIds.add(e.id)
+  }
   for (const scene of scenes) {
     const hits = byId(scene.id)
     if (!hits.length && scene.insertAfter !== undefined) {
@@ -347,6 +407,11 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
     if (!hits.length) throw new Refusal(`slide "${scene.id}" is not in the deck (scenes/${scene.id}); set insertAfter in its scene.json to add it as a new slide; nothing was written`)
     if (hits.length > 1) throw new Refusal(`slide id "${scene.id}" is used by ${hits.length} slides in the deck, so scenes/${scene.id} is ambiguous; nothing was written`)
     if (!isRuntime(hits[0])) throw new Refusal(`slide "${scene.id}" is a native slide; the splice tool never converts one (a scene needs a runtime slide, or a runtime: {} placeholder, with that id); nothing was written`)
+    // AE6: a library scene a person set up is replaced only by a folder that says it is that scene
+    const marker = hits[0].runtime.library
+    if (marker && typeof marker === 'object' && scene.library !== marker.id) {
+      throw new Refusal(`slide "${scene.id}" is the library scene "${marker.id}"; scenes/${scene.id}/scene.json does not declare "library": "${marker.id}", so replacing it would discard what the person set. Change its settings with a values edit, or declare the library id to replace it; nothing was written`)
+    }
     sceneIds.add(scene.id)
   }
   if (inserts.size) {
@@ -355,6 +420,7 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
     const out = []
     const place = (anchor, neighbour) => {
       for (const scene of inserts.get(anchor) || []) {
+        if (scene.libraryInsert) { out.push(librarySlide(doc, scene.scene, scene.values, scene.id, intern)); continue }
         const slide = { id: scene.id, elements: [] }
         if (neighbour && neighbour.background !== undefined) slide.background = structuredClone(neighbour.background)
         out.push(slide)
@@ -372,11 +438,17 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
     place('end', doc.slides[doc.slides.length - 1])
     doc.slides = out
   }
+  for (const e of libraryInserts) {
+    const where = e.insertAfter === 'end' ? 'the last slide' : `"${e.insertAfter}"`
+    plan.push(`  ${e.id}: new library scene "${e.library}" inserted after ${where}${e.preset !== undefined ? `, preset ${JSON.stringify(e.preset)}` : ''}${e.values && Object.keys(e.values).length ? `, ${Object.entries(e.values).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}` : ''}`)
+  }
   const pruneKeys = []
   for (const scene of scenes) {
     const slide = byId(scene.id)[0]
     const values = isRuntime(slide) && slide.runtime.values && typeof slide.runtime.values === 'object' ? slide.runtime.values : {}
+    const marker = isRuntime(slide) ? slide.runtime.library : undefined
     pruneKeys.push(...applyScene(doc, slide, scene))
+    if (marker && scene.library === marker.id) slide.runtime.library = structuredClone(marker)
     if (inserted.has(scene.id)) { plan.push(`  ${scene.id}: new runtime slide inserted after ${scene.insertAfter === 'end' ? 'the last slide' : `"${scene.insertAfter}"`} (source ${kb(scene.src.length)}, still ${kb(scene.still.length)}, ${scene.steps} steps)`); continue }
     plan.push(`  ${scene.id}: runtime slide replaced (source ${kb(scene.src.length)}, still ${kb(scene.still.length)}, ${scene.steps} steps, ${scene.props.length} props${scene.assets.length ? `, assets ${scene.assets.map((a) => `${a.name} ${kb(a.size)}`).join(', ')}` : ''})`)
     // R14 drops them by design; the person who set them should hear about it.
@@ -384,8 +456,24 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
     if (dropped.length) plan.push(`  ${scene.id}: presenter values dropped by the replace: ${dropped.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}`)
   }
 
+  const valued = new Map()
+  for (const e of valueEdits) {
+    const hits = byId(e.slideId)
+    if (hits.length !== 1) throw new Refusal(`values edit: slide "${e.slideId}" ${hits.length ? 'is ambiguous' : 'is not in the deck'}; nothing was written`)
+    const slide = hits[0]
+    if (!isRuntime(slide) || !slide.runtime.library) throw new Refusal(`values edit: slide "${e.slideId}" is not a library scene (it carries no runtime.library); nothing was written`)
+    if (sceneIds.has(e.slideId)) throw new Refusal(`values edit: slide "${e.slideId}" is also replaced by a scene folder in this run; do one or the other; nothing was written`)
+    try { checkValues(Array.isArray(slide.runtime.props) ? slide.runtime.props : [], e.values, `values edit on slide "${e.slideId}"`) } catch (err) { throw new Refusal(`${err.message}; nothing was written`) }
+    const before = slide.runtime.values && typeof slide.runtime.values === 'object' ? slide.runtime.values : {}
+    slide.runtime.values = { ...before, ...structuredClone(e.values) }
+    const keys = valued.get(e.slideId) || new Set()
+    for (const k of Object.keys(e.values)) keys.add(k)
+    valued.set(e.slideId, keys)
+    plan.push(`  ${e.slideId}: settings ${Object.entries(e.values).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}; every other value kept`)
+  }
+
   const edited = new Map()
-  for (const e of edits) {
+  for (const e of contentEdits) {
     const hits = byId(e.slideId)
     if (hits.length !== 1) throw new Refusal(`edit: slide "${e.slideId}" ${hits.length ? 'is ambiguous' : 'is not in the deck'}; nothing was written`)
     if (isRuntime(hits[0]) || sceneIds.has(e.slideId)) throw new Refusal(`edit: slide "${e.slideId}" is a runtime slide; change its scene folder instead; nothing was written`)
@@ -403,7 +491,7 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
 
   const gone = prune(doc, pruneKeys)
   if (gone.length) plan.push(`  assets no longer referenced, removed: ${gone.join(', ')}`)
-  checkOwnership(read, doc, { scenes: sceneIds, edits: edited, inserted, title })
+  checkOwnership(read, doc, { scenes: sceneIds, edits: edited, inserted, title, valued })
   return { doc, plan }
 }
 
@@ -415,7 +503,7 @@ export function derive(read, { scenes }, edits = [], { title } = {}) {
  * slide ids, the only slides the output may have that the read did not.
  * `title` is the --title value; only then may doc.title change, and only to it.
  */
-export function checkOwnership(read, out, { scenes, edits, inserted = new Set(), title }) {
+export function checkOwnership(read, out, { scenes, edits, inserted = new Set(), title, valued = new Map() }) {
   for (const k of new Set([...Object.keys(read), ...Object.keys(out)])) {
     if (k === 'assets' || k === 'slides') continue
     if (k === 'title' && title !== undefined && out.title === title) continue
@@ -435,6 +523,17 @@ export function checkOwnership(read, out, { scenes, edits, inserted = new Set(),
     for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
       if (k === 'elements') continue
       if (k === 'runtime' && scenes.has(sid)) continue
+      if (k === 'runtime' && valued.has(sid)) {
+        // a values edit: the record is the same but for the named settings
+        const allowed = valued.get(sid)
+        const { values: bv = {}, ...brest } = before.runtime || {}
+        const { values: av = {}, ...arest } = after.runtime || {}
+        if (!same(brest, arest)) throw new Refusal(`slide "${sid}": a values edit would change more of the scene than its settings; nothing was written`)
+        for (const vk of new Set([...Object.keys(bv), ...Object.keys(av)])) {
+          if (!allowed.has(vk) && !same(bv[vk], av[vk])) throw new Refusal(`slide "${sid}": setting "${vk}" would change, and no values edit names it; nothing was written`)
+        }
+        continue
+      }
       if (!same(before[k], after[k])) throw new Refusal(`slide "${sid}": "${k}" would change; only element content may change on a native slide`)
     }
     if (scenes.has(sid)) {
@@ -897,6 +996,39 @@ export async function link({ env = process.env, log = console.log, force = false
   throw new Refusal(lapsed(answered, again))
 }
 
+// ---- the scene library -------------------------------------------------------------------
+
+/**
+ * The scene library, read with the run's credential from the route that
+ * credential reaches (KTD8): /api/harness/library.json for the service token,
+ * /api/publish/library.json for an approval. A store with no library yet
+ * answers 404.
+ */
+async function fetchLibrary(cfg) {
+  const ms = cfg.timeout('store')
+  const url = `${cfg.api}/library.json`
+  const res = await harness(url, { headers: { ...cfg.auth, accept: 'application/json' } }, ms)
+  if (res.status === 404) throw new Refusal('the store has no scene library yet (its manifest has not been uploaded)')
+  if (!res.ok) throw await failed(res, 'reading the scene library', cfg)
+  let json
+  try { json = JSON.parse(await bodyText(res, 'GET', url, ms)) } catch (e) { throw new Refusal(`the scene library does not parse: ${e.message}`) }
+  try { return readLibrary(json) } catch (e) { throw new Refusal(e.message) }
+}
+
+/** `--library`: what the store offers, as the skill needs it to write a library insert. */
+export async function listLibrary({ env = process.env, log = console.log } = {}) {
+  const cfg = await access(env, log)
+  const { scenes, skipped } = await fetchLibrary(cfg)
+  log(`scene library (read with ${cfg.credential}): ${scenes.size} scene${scenes.size === 1 ? '' : 's'}`)
+  for (const s of scenes.values()) {
+    log(`\n${s.id}  v${s.version}  ${s.kind === 'web' ? 'web scene (insert it from the editor)' : 'runtime scene'}  ${JSON.stringify(s.name)}`)
+    if (s.description) log(`  ${s.description}`)
+    for (const p of s.props) log(`  setting ${p.key}: ${p.kind}${p.format ? ` (${p.format})` : ''}, default ${JSON.stringify(p.default)}  ${JSON.stringify(p.label)}`)
+    for (const pr of s.presets) log(`  preset ${JSON.stringify(pr.name)}${Object.keys(pr.values ?? {}).length ? `: ${Object.entries(pr.values).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}` : ' (the defaults)'}`)
+  }
+  for (const x of skipped) log(`\nnot offered: ${x}`)
+}
+
 // ---- read ---------------------------------------------------------------------------------
 
 /**
@@ -934,6 +1066,12 @@ export async function read(id, { out, env = process.env, log = console.log } = {
   }
   log(`title: ${doc.title || '(untitled)'}`)
   for (const s of Array.isArray(doc.slides) ? doc.slides : []) {
+    if (isRuntime(s) && s.runtime.library && typeof s.runtime.library === 'object') {
+      const v = s.runtime.values && typeof s.runtime.values === 'object' ? s.runtime.values : {}
+      const shown = (Array.isArray(s.runtime.props) ? s.runtime.props : []).map((p) => `${p.key}=${JSON.stringify(Object.prototype.hasOwnProperty.call(v, p.key) ? v[p.key] : p.default)}`)
+      log(`  ${s.id}  (library scene "${s.runtime.library.id}" v${s.runtime.library.version}: change its settings with a values edit)${shown.length ? `: ${shown.join(', ')}` : ''}`)
+      continue
+    }
     if (isRuntime(s)) { log(`  ${s.id}  (runtime slide: replace it with a scene folder)`); continue }
     const els = (Array.isArray(s.elements) ? s.elements : [])
       .filter((e) => e && CONTENT_KEY[e.type])
@@ -956,6 +1094,8 @@ export async function update(id, dir, { edits: editsFile, title, dryRun = false,
   if (!skipUrlCheck) await checkUrls(project.scenes, storeEnv(env), warn)
   const cfg = await access(env, log)
   const ms = cfg.timeout('store')
+  // read once: the manifest does not change between retries
+  const library = edits.some((e) => e.library !== undefined) ? await fetchLibrary(cfg) : undefined
   const deckUrl = `${cfg.api}/decks/${id}`
   let uploadsDone = false
   const uploaded = []
@@ -972,7 +1112,7 @@ export async function update(id, dir, { edits: editsFile, title, dryRun = false,
       try { read = readBlock(html) } catch (e) { throw new Refusal(`deck ${id}: ${e.message}`) }
       if (isEncrypted(read)) throw new Refusal(`deck ${id} is encrypted (a bento/enc envelope); the splice tool does not decrypt, so it cannot change it`)
       if (read.format !== 'bento/slides') throw new Refusal(`deck ${id} is not a bento/slides document`)
-      const { doc, plan } = derive(read, project, edits, { title })
+      const { doc, plan } = derive(read, project, edits, { title, library })
       if (dryRun) {
         log(`dry run, deck ${id}; would write:`)
         for (const l of plan) log(l)
@@ -1090,6 +1230,7 @@ export async function create(dir, { dryRun = false, skipUrlCheck = false, env = 
 const USAGE = `usage:
   node splice.mjs --link
   node splice.mjs --read <deckId> [--out <file>]
+  node splice.mjs --library
   node splice.mjs <deckId> <projectDir> [--edits edits.json] [--title "<title>"] [--dry-run] [--skip-url-check]
   node splice.mjs <deckId> --edits edits.json [--title "<title>"] [--dry-run]
   node splice.mjs <deckId> --title "<title>" [--dry-run]
@@ -1103,6 +1244,7 @@ export async function main(argv) {
   const dryRun = flag('--dry-run')
   const isLink = flag('--link')
   const isRead = flag('--read')
+  const isLibrary = flag('--library')
   const isCreate = flag('--create')
   const skipUrlCheck = flag('--skip-url-check')
   const edits = value('--edits')
@@ -1113,6 +1255,8 @@ export async function main(argv) {
     // `--link` takes nothing else: it is the pairing, not a deck operation.
     if (isLink && !isCreate && !isRead && args.length === 0 && edits === undefined && title === undefined && !dryRun) await link({})
     else if (isLink) { console.error(USAGE); return 2 }
+    else if (isLibrary && !isRead && !isCreate && args.length === 0 && edits === undefined && title === undefined && out === undefined && !dryRun) await listLibrary({})
+    else if (isLibrary) { console.error(USAGE); return 2 }
     else if (isRead && !isCreate && args.length === 1 && edits === undefined && title === undefined && !dryRun) await read(args[0], { out })
     else if (isRead) { console.error(USAGE); return 2 }
     else if (isCreate && args.length === 1 && edits === undefined && title === undefined) await create(args[0], { dryRun, skipUrlCheck })

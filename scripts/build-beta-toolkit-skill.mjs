@@ -9,6 +9,7 @@
 //   <out>/SKILL.md, reveal/…          from plugins/beta-slides/skills/beta-slides/
 //   <out>/scripts/splice.mjs          from plugins/beta-slides/scripts/
 //   <out>/scripts/lib/bento-doc.mjs   (splice.mjs imports ./lib/bento-doc.mjs)
+//   <out>/scripts/lib/library.mjs     (and ./lib/library.mjs, the scene library)
 //
 // This repo stays the source; the toolkit copy is regenerated, never edited.
 //
@@ -29,6 +30,7 @@ export function build(out) {
   cpSync(join(plugin, 'skills/beta-slides'), out, { recursive: true })
   cpSync(join(plugin, 'scripts/splice.mjs'), join(out, 'scripts/splice.mjs'))
   cpSync(join(plugin, 'scripts/lib/bento-doc.mjs'), join(out, 'scripts/lib/bento-doc.mjs'))
+  cpSync(join(plugin, 'scripts/lib/library.mjs'), join(out, 'scripts/lib/library.mjs'))
   let sha = 'unknown'
   try { sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() } catch {}
   writeFileSync(join(out, 'SOURCE.md'),
@@ -43,7 +45,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const out = process.argv[2]
   if (!out) { console.error('usage: node scripts/build-beta-toolkit-skill.mjs <out-dir>'); process.exit(2) }
   const dir = build(out)
-  for (const f of ['SKILL.md', 'reveal/shim.js', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs']) {
+  for (const f of ['SKILL.md', 'reveal/shim.js', 'scripts/splice.mjs', 'scripts/lib/bento-doc.mjs', 'scripts/lib/library.mjs']) {
     if (!existsSync(join(dir, f))) { console.error(`missing ${f}`); process.exit(1) }
   }
   console.log(`built ${dir}`)

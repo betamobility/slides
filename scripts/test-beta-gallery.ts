@@ -16,6 +16,8 @@ import { Store } from '../slides/src/store.ts'
 import { SyncState, BLOB_INLINE_MAX } from '../slides/src/sync/crdt.ts'
 import { RESERVED_KEYS, STILL_INLINE_MAX, stillDataUri, stillTooLarge } from '../slides/src/beta/libraryrules.ts'
 import * as g from '../slides/src/beta/gallery.ts'
+// the splice tool's own copy (it may import nothing outside plugins/beta-slides/): compared below
+import * as spliceLib from '../plugins/beta-slides/scripts/lib/library.mjs'
 import { presetsFor, webSceneOf } from '../slides/src/beta/scenesettings.ts'
 import { fetchLibrary, StoreSignedOutError } from '../slides/src/beta/store.ts'
 import { configureApp } from '../kernel/src/app.ts'
@@ -374,7 +376,7 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
   // Mutate the real scenes (and a web scene) at random; for every scene the
   // reader admits, both inserts must succeed, survive the gate unchanged and
   // keep the still inline. GALLERY_FUZZ_N sets the count.
-  let seed = 7
+  let seed = Number(process.env.GALLERY_FUZZ_SEED ?? 7)
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648)
   const pick = <T>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)]
   const values: unknown[] = [null, undefined, 0, -1, 1.5, 1e308, Number.NaN, '', ' ', 'x'.repeat(250), '<b>', '\n', '地', true, [], {}, { a: 1 }, '__proto__', '#ff0000', 'red', '59.9, 10.7', 'wide', 'near', 'constructor', 'prototype', '\ud800x']
@@ -383,7 +385,7 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
   const bases = [...clone(manifest).scenes, web()]
   // key order is the gate's business, not a difference: compare canonically
   const canon = (v: unknown): string => JSON.stringify(v, (_k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x)
-  let admitted = 0, bad = 0
+  let admitted = 0, bad = 0, disagree = 0
   const N = Number(process.env.GALLERY_FUZZ_N ?? 3000)
   for (let i = 0; i < N; i++) {
     const scene = clone(pick(bases)) as Record<string, unknown>
@@ -402,6 +404,9 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
       } else delete scene[pick(fields)]
     }
     const read = g.readManifest(withScenes(scene))
+    // the splice tool offers exactly what the gallery offers (U12)
+    const spliceAdmits = spliceLib.readLibrary(withScenes(scene)).scenes.size === 1
+    if (spliceAdmits !== !!(read && read.length)) { if (disagree++ < 5 || (spliceAdmits === false && disagree < 40)) console.log('    gallery and splice disagree on:', JSON.stringify({ ...scene, html: undefined, still: undefined, view: undefined }).slice(0, 900), 'gallery', !!(read && read.length), 'splice', spliceAdmits, spliceLib.readLibrary(withScenes(scene)).skipped.join('; ')) }
     if (!read || !read.length) continue
     admitted++
     const sc = read[0]
@@ -429,6 +434,7 @@ console.log('\nfuzz: whatever the shelf admits, an insert writes as read')
     }
   }
   ok(bad === 0 && admitted > 0, `${N} mutated scenes, ${admitted} admitted, ${bad} that did not insert as read`)
+  ok(disagree === 0, `the splice tool's library reader admits exactly the scenes the gallery admits (${disagree} disagreements)`)
 }
 
 
@@ -797,6 +803,35 @@ console.log('\nU11 independent round 6: refusal and transport boundaries')
     && remote.assets?.scene === before.assets?.scene && remote.assets?.still === before.assets?.still
     && remote.slides.map((s) => s.id).join() === store.doc.slides.map((s) => s.id).join(),
     'R6 AE5 hidden-parent insertion reuses the still without overwriting existing assets')
+}
+
+console.log('\nthe splice tool writes the slide the gallery writes (U12)')
+{
+  const scenes = g.readManifest(clone(manifest))!
+  const fromSplice = spliceLib.readLibrary(clone(manifest)).scenes
+  const decodeAsset = (uri: string) => uri.startsWith('data:') && /;base64,/.test(uri.slice(0, uri.indexOf(',') + 1))
+    ? Buffer.from(uri.slice(uri.indexOf(',') + 1), 'base64').toString('utf8') : decodeURIComponent(uri.slice(uri.indexOf(',') + 1))
+  // ids and asset keys are minted differently; everything else, and every asset's bytes, must match
+  const shape = (slide: Slide, doc: BentoDoc) => JSON.parse(JSON.stringify(slide, (k, v) => typeof v === 'string' && v.startsWith('asset:') ? `asset=${decodeAsset(doc.assets![v.slice(6)])}` : k === 'id' && typeof v === 'string' && v.startsWith('slide') ? 'ID' : v))
+  let compared = 0
+  for (const sc of scenes) {
+    const spliceScene = fromSplice.get(sc.id)
+    for (const preset of sc.presets) {
+      const d1 = deck(), d2 = deck()
+      const a = g.runtimeSlide(d1, sc, preset)!
+      const values = spliceLib.valuesFor(spliceScene, { preset: preset.name })
+      let n = 0
+      const intern = (doc: BentoDoc, value: string) => { const k = `k${n++}`; (doc.assets ??= {})[k] = value; return `asset:${k}` }
+      const b = spliceLib.librarySlide(d2, spliceScene, values, a.id, intern) as Slide
+      const same = JSON.stringify(shape(a, d1)) === JSON.stringify(shape(b, d2))
+      if (!same) console.log('    differ:', sc.id, preset.name, JSON.stringify(shape(a, d1)).slice(0, 200), JSON.stringify(shape(b, d2)).slice(0, 200))
+      ok(same, `${sc.id}, preset ${preset.name}: the same slide, field for field, assets decoded`)
+      compared++
+    }
+  }
+  ok(compared >= 6, `every scene and preset in the library compared (${compared})`)
+  ok(spliceLib.STILL_INLINE_MAX === STILL_INLINE_MAX && JSON.stringify(spliceLib.RESERVED_KEYS) === JSON.stringify(RESERVED_KEYS),
+    "the splice tool's restated limits are libraryrules.ts's")
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
