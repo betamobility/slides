@@ -420,7 +420,7 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
     const out = []
     const place = (anchor, neighbour) => {
       for (const scene of inserts.get(anchor) || []) {
-        if (scene.libraryInsert) { out.push(librarySlide(doc, scene.scene, scene.values, scene.id, intern)); continue }
+        if (scene.libraryInsert) { out.push(librarySlide(doc, scene.scene, scene.values, scene.id)); continue }
         const slide = { id: scene.id, elements: [] }
         if (neighbour && neighbour.background !== undefined) slide.background = structuredClone(neighbour.background)
         out.push(slide)

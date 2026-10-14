@@ -192,6 +192,7 @@ let log: Logged[] = []
 let stripEtag = false
 let bumps = 0
 let bumpX = 300
+let panelRace: ((doc: any) => void) | undefined
 /** How many of the tool's next asset uploads get no answer at all. */
 let hangAssets = 0
 /** Requests the proxy is deliberately never answering, ended at teardown. */
@@ -258,6 +259,7 @@ async function robertSaves(id: string) {
   const doc = docOf(await r.text())
   const t = doc.slides.find((s: { id: string }) => s.id === 's1')?.elements.find((e: { id: string }) => e.id === 't-04')
   if (t) t.x = bumpX++
+  panelRace?.(doc)
   const w = await store('PUT', `/api/decks/${id}`, { as: 'robert', body: deckHtml(doc) })
   if (w.status !== 200) throw new Error(`robert's save failed: ${w.status}`)
 }
@@ -1671,12 +1673,61 @@ try {
     ok(rt ? rt.runtimeSource(cph, d)?.html === map.html : false, `the page is the library's, byte for byte${rt ? '' : ` (runtime.ts: ${rtError})`}`)
     ok(rt ? JSON.stringify(rt.checkRuntime(structuredClone(cph.runtime), d.assets)) === JSON.stringify(cph.runtime) : false, "the shell's gate keeps the record as written")
 
+    // U12 independent round 1: assert the full transaction, not just derive().
+    {
+      const raceId = await seed(d)
+      log = []; bumps = 1
+      panelRace = (fresh) => { slideOf(fresh, 'cph').runtime.values.place = 'Panel race'; slideOf(fresh, 'cph').runtime.values.grid = 0 }
+      let raced
+      try {
+        raced = await runTool([raceId, '--edits', editsFile([
+          { slideId: 'cph', values: { zoom: 4 } },
+          { slideId: 's1', elementId: 't-04', html: 'Mixed edit' },
+          { library: 'counter', id: 'new-counter', insertAfter: 'end' },
+        ])])
+      } finally { panelRace = undefined; bumps = 0 }
+      const fresh = (await readDeck(raceId)).doc
+      const values = slideOf(fresh, 'cph').runtime.values
+      ok(raced.code === 0 && putsTo(raceId).map(x => x.status).join() === '412,200'
+        && values.zoom === 4 && values.place === 'Panel race' && values.grid === 0
+        && slideOf(fresh, 's1').elements[0].html === 'Mixed edit'
+        && fresh.slides.filter((x: any) => x.id === 'new-counter').length === 1,
+        `U12-R1 AE6 mixed transaction rederives after panel race: ${raced.err}`)
+
+      for (const [name, bad, expected] of [
+        ['undeclared key', { slideId: 'cph', values: { typoZoom: 2 } }, /typoZoom/],
+        ['missing library id', { library: 'missing-scene', id: 'missing', insertAfter: 'end' }, /missing-scene/],
+      ] as const) {
+        const before = await readDeck(raceId)
+        log = []
+        const refused = await runTool([raceId, '--edits', editsFile([
+          { slideId: 'cph', values: { zoom: 8 } },
+          { slideId: 's1', elementId: 't-04', html: 'Must not land' }, bad,
+        ])])
+        ok(refused.code !== 0 && expected.test(refused.err) && putsTo(raceId).length === 0
+          && (await readDeck(raceId)).etag === before.etag,
+          `U12-R1 atomic refusal for ${name}: ${refused.err.trim()}`)
+      }
+      const before = await readDeck(raceId)
+      log = []
+      const refused = await runTool([raceId, project({ cph: { manifest: { library: 'counter', props: [] } } }),
+        '--edits', editsFile([{ slideId: 's1', elementId: 't-04', html: 'Must not land' }])])
+      ok(refused.code !== 0 && /slide "cph"/.test(refused.err) && putsTo(raceId).length === 0
+        && (await readDeck(raceId)).etag === before.etag,
+        'U12-R1 AE6 wrong-library folder refuses whole transaction naming slide')
+      const out = join(project({}), 'read.bento.html')
+      const listed = await runTool(['--read', raceId, '--out', out])
+      ok(listed.code === 0 && /cph.*library scene "map".*place="Panel race".*zoom=4.*grid=0/.test(listed.out)
+        && /new-counter.*library scene "counter"/.test(listed.out),
+        'U12-R1 read lists both library ids and post-race values')
+    }
+
     // what a library insert refuses
     const refusals: Array<[string, unknown, RegExp]> = [
       ['an id the library does not have', { library: 'harbour', id: 'h', insertAfter: 'end' }, /"harbour" is not in the scene library/],
       ['a setting the scene does not declare', { library: 'map', id: 'h', insertAfter: 'end', values: { zom: 4 } }, /"zom" is not one of its settings/],
-      ['a value outside its range', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 12 } }, /"zoom" 12 is outside 2 to 9/],
-      ['a value off its steps', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 4.5 } }, /"zoom" 4.5 is not on the range's steps/],
+      ['a value outside its range', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 12 } }, /"zoom" 12: would be kept as 9, not as given/],
+      ['a value off its steps', { library: 'map', id: 'h', insertAfter: 'end', values: { zoom: 4.5 } }, /"zoom" 4.5: would be kept as 5, not as given/],
       ['a preset it does not have', { library: 'map', id: 'h', insertAfter: 'end', preset: 'Bergen' }, /no preset "Bergen"/],
       ['an id already in the deck', { library: 'map', id: 'demo', insertAfter: 'end' }, /"demo": a slide with that id is already in the deck/],
       ['an anchor not in the deck', { library: 'map', id: 'h', insertAfter: 'nope' }, /insertAfter "nope" is not a slide in the deck/],
@@ -1700,9 +1751,9 @@ try {
 
     for (const [why, edit, want] of [
       ['an undeclared setting', { slideId: 'cph', values: { colour: 'red' } }, /"colour" is not one of its settings/],
-      ['a wrong kind', { slideId: 'cph', values: { zoom: 'seven' } }, /"zoom" "seven" is not a number/],
+      ['a wrong kind', { slideId: 'cph', values: { zoom: 'seven' } }, /"zoom" "seven": Not a number/],
       ['a slide that is not a library scene', { slideId: 'demo', values: { title: 'Tromsø' } }, /"demo" is not a library scene/],
-      ['a position the form would rewrite', { slideId: 'cph', values: { position: '59.9,10.7' } }, /write "59.9, 10.7"/],
+      ['a position the form would rewrite', { slideId: 'cph', values: { position: '59.9,10.7' } }, /would be kept as "59.9, 10.7"/],
     ] as Array<[string, unknown, RegExp]>) {
       const before = (await readDeck(id2)).etag
       r = await runTool([id2, '--edits', editsFile([edit])])
@@ -1744,7 +1795,7 @@ try {
     const r = await runTool([id, project({ map: {} })], { tool: join(copy, 'beta-slides', 'scripts', 'splice.mjs') })
     eq(r.code, 0, `the copied tool exits 0${r.code ? `: ${r.err}` : ''}`)
     ok(typeof slideOf((await readDeck(id)).doc, 'map').runtime.src === 'string', 'and the splice landed')
-    const sources = ['splice.mjs', 'lib/bento-doc.mjs', 'lib/library.mjs'].map((f) => readFileSync(join(root, 'plugins/beta-slides/scripts', f), 'utf8'))
+    const sources = ['splice.mjs', 'lib/bento-doc.mjs', 'lib/library.mjs', 'lib/library-core.mjs'].map((f) => readFileSync(join(root, 'plugins/beta-slides/scripts', f), 'utf8'))
     const specifiers = sources.flatMap((s) => [...s.matchAll(/\bfrom\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1] || m[2]))
     const bad = specifiers.filter((s) => !s.startsWith('node:') && !s.startsWith('./'))
     ok(specifiers.length > 0 && bad.length === 0, `only node: built-ins and ./ imports (${bad.join(', ') || 'none foreign'})`)
