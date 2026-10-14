@@ -109,6 +109,10 @@ const MAX_URL = 4_000
 const MAX_STEPS = 10_000
 /** U9: a format hint's length, and the library marker's shape (the library's own folder-id rule, scripts/lib/beta-library.mjs). */
 const MAX_FORMAT = 200
+/** Characters that break a line, or are invisible controls: a hint is one line. */
+const FORMAT_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+/** A hint the gate keeps: a non-empty string of at most MAX_FORMAT characters (code points, as the schema counts them) on one line. */
+const formatHint = (v: unknown): boolean => typeof v === 'string' && v.length > 0 && [...v].length <= MAX_FORMAT && !FORMAT_BREAKS.test(v)
 export const LIBRARY_ID = /^[a-z][a-z0-9-]{0,39}$/
 const MAX_LIBRARY_VERSION = 1_000_000
 const MAX_ASSETS = 64
@@ -132,7 +136,8 @@ const finite = (v: unknown): number | undefined => {
 function checkValue(kind: RuntimeProp['kind'], v: unknown): string | number | undefined {
   if (kind === 'number') return finite(v)
   if (kind === 'color') return safeColor(v) ? v.trim() : undefined // trimmed: what safeColor measured is what is kept
-  return typeof v === 'string' && v.length <= MAX_TEXT ? v : undefined
+  // characters, as the schema's maxLength counts them (an emoji is one, not two)
+  return typeof v === 'string' && [...v].length <= MAX_TEXT ? v : undefined
 }
 
 /**
@@ -151,7 +156,7 @@ const textSchema = { type: 'string', maxLength: MAX_TEXT }
 const colorSchema = { type: 'string', maxLength: 64, pattern: '^(?![\\s\\S]*(?:[uU][rR][lL]\\s*\\(|[eE][xX][pP][rR][eE][sS][sS][iI][oO][nN]))(?=[\\s\\S]*\\S)[#a-zA-Z0-9(),.%\\s/-]+$' }
 const valueSchema = { anyOf: [textSchema, { type: 'number' }] }
 // U9: a format hint is one printable line; the gate drops anything else
-const formatSchema = { type: 'string', minLength: 1, maxLength: MAX_FORMAT, pattern: '^[^\\u0000-\\u001f\\u007f]+$', description: 'a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step' }
+const formatSchema = { type: 'string', minLength: 1, maxLength: MAX_FORMAT, pattern: '^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$', description: 'a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step' }
 const propSchema = (kind: RuntimeProp['kind'], dflt: Record<string, unknown>) => ({
   type: 'object', additionalProperties: false, required: ['key', 'label', 'kind', 'default'],
   // the gate drops a prop keyed __proto__, so the schema refuses it
@@ -217,10 +222,10 @@ export function checkRuntime(value: unknown, assets?: Record<string, string>): R
       if (!isPlainObject(p) || typeof p.key !== 'string' || !PROP_KEY.test(p.key) || p.key === PROTO) continue
       if (p.kind !== 'text' && p.kind !== 'number' && p.kind !== 'color') continue
       if (out.props.some((q) => q.key === p.key)) continue
-      const label = typeof p.label === 'string' && p.label.length <= 200 ? p.label : p.key
+      const label = typeof p.label === 'string' && [...p.label].length <= 200 ? p.label : p.key
       const prop: RuntimeProp = { key: p.key, label, kind: p.kind, default: checkValue(p.kind, p.default) ?? KIND_DEFAULT[p.kind] }
       // U9: a hint is kept when it is one printable line, and dropped (not the setting) otherwise
-      if (typeof p.format === 'string' && p.format.length > 0 && p.format.length <= MAX_FORMAT && !/[\u0000-\u001f\u007f]/.test(p.format)) prop.format = p.format
+      if (formatHint(p.format)) prop.format = p.format as string
       out.props.push(prop)
     }
   }

@@ -1355,11 +1355,95 @@ console.log('\nlibrary fields: library and format')
   })
   const mod = { exports: {} as { checkRuntime: typeof rt.checkRuntime } }
   new Function('module', 'exports', 'require', old.outputFiles[0].text)(mod, mod.exports, req)
+  // Independent U9 test: a setting whose name is also an Object prototype
+  // key, and a non-default Unicode value, must survive OLD -> NEW -> OLD.
+  // Negative control removes the setting: the same oracle must reject it.
+  const compatRecord = { ...record, props: [
+    { key: 'constructor', label: 'Mode', kind: 'text', default: 'Oslo', format: 'select:Oslo|東京' },
+  ], values: { constructor: '東京' } }
+  const compatible = (r: ReturnType<typeof rt.checkRuntime>) =>
+    r?.props.length === 1 && r.props[0].key === 'constructor' && r.props[0].kind === 'text' &&
+    r.props[0].default === 'Oslo' && r.values?.constructor === '東京'
+  ok(!compatible({ steps: 2, props: [], values: {} }), 'U9 independent compatibility: oracle rejects a lost setting')
+  const oldSaved = mod.exports.checkRuntime(JSON.parse(JSON.stringify(compatRecord)))
+  const newOpened = rt.checkRuntime(JSON.parse(JSON.stringify(oldSaved)))
+  const oldReopened = mod.exports.checkRuntime(JSON.parse(JSON.stringify(newOpened)))
+  ok(compatible(oldSaved) && compatible(newOpened) && compatible(oldReopened),
+    'U9 independent compatibility: prototype-named select and chosen Unicode value survive OLD -> NEW -> OLD')
   const older = mod.exports.checkRuntime(record)
   ok(older?.library === undefined && older?.props.every((p) => !('format' in p)), 'an older shell drops library and format, the two keys it does not know')
   ok(older?.props.map((p) => `${p.key}:${p.kind}:${p.default}`).join(' ') === 'place:text:Oslo mode:text:wide grid:number:1 zoom:number:5' && JSON.stringify(older?.values) === '{"mode":"near"}' && older?.steps === 2 && older?.src === record.src && older?.still === record.still,
     'and keeps every setting, its kind, its default and the chosen value: a select is plain text there, a bool and a range plain numbers')
+  // lengths are characters, as the schema counts them, on every text the record holds
+  const bikes = (n: number) => '\u{1F6B2}'.repeat(n)
+  const wide = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(200), kind: 'text', default: bikes(4000), format: 'select:' + bikes(193) }], values: { k: bikes(4000) } })
+  ok(wide?.props[0].label === bikes(200) && wide?.props[0].default === bikes(4000) && wide?.props[0].format === 'select:' + bikes(193) && wide?.values?.k === bikes(4000), 'a label, a default, a hint and a value at their limits in emoji are kept: a limit counts characters')
+  const over = rt.checkRuntime({ steps: 0, props: [{ key: 'k', label: bikes(201), kind: 'text', default: bikes(4001), format: 'select:' + bikes(194) }], values: { k: bikes(4001) } })
+  ok(over?.props[0].label === 'k' && over?.props[0].default === '' && !('format' in over!.props[0]) && over?.values === undefined, 'one character past each limit is refused as before')
   ok(JSON.stringify(rt.checkRuntime(older)) === JSON.stringify(older), 'what the older shell saved opens on this one unchanged (the hints are gone; nothing else is)')
+}
+
+// Independent U9 transport test. Exercise the actual save facade, not just
+// JSON.stringify; the shell stand-in supplies DOM serialization only.
+{
+  const { compactDoc } = await import('../slides/src/compact.ts')
+  const { parseDocInputReport } = await import('../slides/src/compactload.ts')
+  const { capturePristine, serializeFile } = await import('../slides/src/save.ts')
+  const { configureApp } = await import('../kernel/src/app.ts')
+  const doc = runtimeDeck()
+  doc.slides[0].runtime!.library = { id: 'map', version: 1000000 }
+  doc.slides[0].runtime!.props[0].format = 'select:Oslo|Bergen|</script>'
+  const matches = (r: typeof doc.slides[0]['runtime']) =>
+    r?.library?.id === 'map' && r.library.version === 1000000 &&
+    r.props[0].format === 'select:Oslo|Bergen|</script>' && r.values?.title === 'Bergen'
+  const broken = structuredClone(doc.slides[0].runtime)
+  delete broken!.library
+  ok(!matches(broken), 'U9 independent transport: oracle rejects a lost library marker')
+  const expanded = parseDocInputReport(JSON.stringify(compactDoc(doc)), { fit: false })
+  const target = newDoc()
+  target.assets = { 'scene-map': 'data:text/html;base64,T1RIRVI=', 'still-map': 'data:image/png;base64,T1RIRVI=' }
+  const clip = parseClip(serializeSlides(expanded!.doc.slides, expanded!.doc))!
+  const [pasted] = insertSlides(clip, target, 1)
+  class LibraryTestShell {
+    block = { textContent: '' }; title = { textContent: '' }
+    cloneNode() { return new LibraryTestShell() }
+    querySelectorAll(s: string) { return s === 'script' ? [this.block] : [] }
+    getElementById(id: string) { return id === 'bento-doc' ? this.block : null }
+    querySelector(s: string) { return s === 'title' ? this.title : null }
+    get documentElement() { return { outerHTML: `<html><title>${this.title.textContent}</title><script id="bento-doc">${this.block.textContent}</script></html>` } }
+  }
+  const priorDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  configureApp({ appId: 'beta-slides', appName: 'bento/slides', manifestUrl: 'https://invalid.example/manifest' })
+  let saved = ''
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, writable: true, value: new LibraryTestShell() })
+    capturePristine()
+    saved = serializeFile(target)
+  } finally {
+    if (priorDocument) Object.defineProperty(globalThis, 'document', priorDocument)
+    else delete (globalThis as any).document
+  }
+  const body = saved.match(/id="bento-doc">([\s\S]*?)<\/script>/)![1]
+  const reopened = parseDocInputReport(body, { fit: false })!.doc
+  const r = reopened.slides.find(s => s.id === pasted.id)!.runtime!
+  ok(matches(expanded?.doc.slides[0].runtime) && matches(pasted.runtime) && matches(r) &&
+    r.src !== 'asset:scene-map' && r.still !== 'asset:still-map' &&
+    reopened.assets?.[r.src!.slice(6)] === sceneAsset && reopened.assets?.[r.still!.slice(6)] === STILL_PNG &&
+    !body.includes('</script>') && reopened.docId === target.docId,
+    'U9 independent transport: compact load -> colliding clipboard -> actual save -> replace-from-JSON preserves fields, assets and identity')
+}
+
+// Independent malformed-hint test: Unicode line/paragraph separators and
+// C1 next-line are not a printable single line, even though none is ASCII LF.
+{
+  const offenders = ['\u0085', '\u2028', '\u2029'].filter(separator => {
+    const clean = sanitizeSlide({ id: 'unicode', elements: [], runtime: {
+      steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: `select:a${separator}|b` }],
+      values: { mode: 'b' }, library: { id: 'map', version: 1 },
+    } })?.runtime
+    return clean?.props.length !== 1 || clean.props[0].format !== undefined || clean.values?.mode !== 'b' || clean.library?.id !== 'map'
+  })
+  ok(!offenders.length, `U9 independent single-line gate: drop Unicode multiline hints, keep setting and value; accepted=${JSON.stringify(offenders)}`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

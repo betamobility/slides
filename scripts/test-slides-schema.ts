@@ -81,7 +81,9 @@ function validate(schema: J, value: unknown, root: J, path = '$'): string[] {
   } else if (t === 'string') {
     if (typeof value !== 'string') e('not a string')
     else {
-      if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) e('too long')
+      // BETA FORK (U9 break round 1): JSON Schema counts characters (code points), not UTF-16 units
+      if (typeof schema.maxLength === 'number' && [...value].length > schema.maxLength) e('too long')
+      if (typeof schema.minLength === 'number' && [...value].length < schema.minLength) e('too short') // BETA FORK
       if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern).test(value)) e(`fails /${schema.pattern}/`)
     }
   } else if (t === 'boolean') {
@@ -280,6 +282,38 @@ console.log('\na runtime slide validates; a broken one does not\n')
     const badSaved = [...valid, ...invalid].filter((r) => validate(rt, checkRuntime(r), file).length)
     ok(!badValid.length && !missed.length && !badSaved.length,
       `U9 library and format: ${valid.length} kept unchanged, ${invalid.length} refused by the schema, every gate output valid; mismatches=${JSON.stringify({ badValid, missed, badSaved })}`)
+  }
+  // BETA FORK: independent U9 schema/gate differential. JSON Schema counts
+  // Unicode code points, not UTF-16 code units. Keep this oracle separate
+  // from validate(), whose string length implementation is also under test.
+  {
+    const propsSchema = (rt.properties as J).props as J
+    const branch = ((propsSchema.items as J).anyOf as J[])[0]
+    const hintSchema = (branch.properties as J).format as J
+    const acceptsHint = (s: string) => [...s].length >= Number(hintSchema.minLength) &&
+      [...s].length <= Number(hintSchema.maxLength) && new RegExp(String(hintSchema.pattern), 'u').test(s)
+    ok(!acceptsHint('x'.repeat(201)) && !acceptsHint(''),
+      'U9 independent schema: negative controls reject empty and 201-character hints')
+    const hints = [100, 101, 193].map(n => 'select:' + '🚲'.repeat(n))
+    const records = hints.map(format => ({ steps: 0, props: [
+      { key: 'mode', label: 'Mode', kind: 'text', default: 'a', format },
+    ], library: { id: 'map', version: 1 } }))
+    const lost = records.filter(r => acceptsHint(r.props[0].format) &&
+      checkRuntime(r)?.props[0].format !== r.props[0].format)
+    ok(!lost.length,
+      `U9 independent schema: schema-valid astral hints survive gate; lost code-point lengths=${lost.map(r => [...r.props[0].format].length)}`)
+    const falseRejections = records.filter(r => acceptsHint(r.props[0].format) && validate(rt, r, file).length)
+    ok(!falseRejections.length,
+      `U9 independent schema: rig validator agrees with code-point maxLength; falsely rejected=${falseRejections.map(r => [...r.props[0].format].length)}`)
+    const finalTerminators = ['\n', '\r', '\r\n'].filter(suffix => {
+      const record = { steps: 0, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'a', format: 'select:a|b' + suffix }] }
+      return validate(rt, record, file).length === 0 && checkRuntime(record)?.props[0].format === undefined
+    })
+    ok(!finalTerminators.length,
+      `U9 independent schema: schema rejects trailing ASCII newlines that the gate drops; incorrectly accepted=${JSON.stringify(finalTerminators)}`)
+    const multiline = ['\u0085', '\u2028', '\u2029'].filter(c => acceptsHint(`select:a${c}|b`))
+    ok(!multiline.length,
+      `U9 independent schema: published single-line pattern refuses Unicode line separators; accepted=${JSON.stringify(multiline)}`)
   }
   // BETA FORK, break round 4: independently cross limits and object shapes.
   // Refusal is checked on INPUT; every repair/drop must still produce a

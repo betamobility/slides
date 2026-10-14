@@ -2018,7 +2018,7 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 200,
-                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
                         "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
@@ -2051,7 +2051,7 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 200,
-                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
                         "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
@@ -2086,7 +2086,7 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 200,
-                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
                         "description": "a hint for the settings form: bool, latlon, select:a|b|c or range:min:max:step"
                       }
                     }
