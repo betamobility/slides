@@ -26,8 +26,8 @@ export interface SettingsFormHost {
   values(): Record<string, Value>
   /** Write one setting; `final` ends a burst of input as one undo step. Returns a refusal to show, or null. */
   write(key: string, value: Value, final: boolean): string | null
-  /** Write every setting at once, as one change (a preset). */
-  writeAll(values: Record<string, Value>): void
+  /** Write every setting at once, as one change (a preset). Returns a refusal to show, or null. */
+  writeAll(values: Record<string, Value>): string | null
   /** The scene's presets, when the library is at hand. */
   presets: Preset[] | null
   readOnly: boolean
@@ -73,11 +73,19 @@ export function settingsForm(host: SettingsFormHost): HTMLElement {
     }
     sel.value = active ?? ''
     sel.disabled = host.readOnly
+    const presetNote = document.createElement('p')
+    presetNote.className = 'ed-hint ed-scene-note'
+    presetNote.hidden = true
     sel.addEventListener('change', () => {
       const preset = host.presets!.find((p) => p.name === sel.value)
-      if (preset) host.writeAll(applyPreset(host.props, preset))
+      if (!preset) return
+      const refused = host.writeAll(applyPreset(host.props, preset))
+      // refused: say why, and show the preset that is really in force
+      presetNote.textContent = refused ? t(refused) : ''
+      presetNote.hidden = !refused
+      if (refused) sel.value = activePreset(host.props, host.values(), host.presets!) ?? ''
     })
-    wrap.appendChild(row(t('Preset'), sel))
+    wrap.append(row(t('Preset'), sel), presetNote)
   }
 
   for (const prop of host.props) {

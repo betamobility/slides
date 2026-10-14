@@ -144,6 +144,123 @@ const wplace = setting('place')
 await type(wplace, 'x'.repeat(2100)); await settle()
 ok((await url()) === URL0 && /too long/i.test(await note('place')), `a value that would make the address too long is refused in the form (${(await note('place')).slice(0, 60)})`)
 
+// Exercise the actual panel and Store in an isolated browser page. U11 has
+// not shipped yet, so the packaged editor has no way to populate the library
+// cache. Bundle the source modules in memory to call rememberPresets, without
+// adding a testing API to the product or replacing any production callback.
+const { build } = await import('../slides/node_modules/esbuild/lib/main.js')
+const { fileURLToPath } = await import('node:url')
+const harness = await build({
+  stdin: {
+    contents: `export { PropsPanel } from './slides/src/editor/panels.ts';
+      export { Store } from './slides/src/store.ts';
+      export { newDoc } from './slides/src/model.ts';
+      export { rememberPresets } from './slides/src/beta/scenesettings.ts';`,
+    resolveDir: fileURLToPath(new URL('../', import.meta.url)),
+  },
+  bundle: true, platform: 'browser', format: 'iife', globalName: 'U10', write: false,
+})
+const probe = await browser.newPage()
+probe.on('pageerror', (e) => errors.push(e.message))
+await probe.setContent('<div class="ed-props"></div><button id="outside">Outside</button>')
+await probe.addScriptTag({ content: harness.outputFiles[0].text })
+const mount = async (kind, testProps, values, presets, address = URL0) => {
+  await probe.evaluate(({ kind, props, values, presets, address }) => {
+    const doc = U10.newDoc()
+    const slide = doc.slides[0]
+    slide.id = 'independent-' + kind
+    const library = { id: 'independent-' + kind, version: 1 }
+    if (kind === 'runtime') {
+      slide.runtime = { steps: 0, props, values, library }
+    } else {
+      slide.elements = [{ id: 'independent-embed', type: 'embed', app: 'web', live: true,
+        x: 40, y: 50, w: 640, h: 360, opacity: 1, rotation: 0,
+        url: address, doc: { library, props }, view: '<svg xmlns="http://www.w3.org/2000/svg"/>' }]
+    }
+    U10.rememberPresets({ scenes: [{ id: library.id, presets }] })
+    const host = document.createElement('div')
+    host.className = 'ed-props'
+    document.querySelector('.ed-props').replaceWith(host)
+    const store = new U10.Store(doc)
+    if (kind === 'web') store.selection = ['independent-embed']
+    window.independent = { store, panel: new U10.PropsPanel(host, store) }
+  }, { kind, props: testProps, values, presets, address })
+}
+const probeSetting = (key) => probe.locator(`[data-scene-setting="${key}"]`)
+const probePreset = () => probe.locator('[data-scene-preset]')
+const probeSnapshot = () => probe.evaluate(() => JSON.parse(JSON.stringify(independent.store.doc.slides[0])))
+const probeType = async (field, value) => {
+  await field.fill(value)
+  await field.press('Tab')
+  await probe.waitForTimeout(50) // focusout's deferred panel rebuild
+}
+
+console.log('\nU10 independent adversarial browser regressions')
+await mount('runtime', props, { zoom: 6 }, [{ name: 'Bergen', values: { place: 'Bergen', zoom: 8, extra: 'discard' } }])
+const beforePreset = await probeSnapshot()
+await probePreset().selectOption('Bergen')
+const afterPreset = await probeSnapshot()
+await probe.evaluate(() => independent.store.undo())
+const undonePreset = await probeSnapshot()
+await probe.evaluate(() => independent.store.redo())
+const redonePreset = await probeSnapshot()
+ok(JSON.stringify(afterPreset.runtime.values) === JSON.stringify({ place: 'Bergen', position: '59.9139, 10.7522', mode: 'wide', zoom: 8, grid: 1 })
+  && JSON.stringify(afterPreset.elements) === JSON.stringify(beforePreset.elements)
+  && JSON.stringify(undonePreset) === JSON.stringify(beforePreset)
+  && JSON.stringify(redonePreset) === JSON.stringify(afterPreset),
+  'U10 independent: preset sets exactly declared keys, leaves geometry, and is one undo/redo step')
+
+await mount('web', props, {}, [], URL0)
+await probeSetting('place').fill('Bergen')
+const remoteUrl = 'https://slides.betamobility.ai/scenes/revised/?zoom=8&place=Remote&theme=light#remote'
+await probe.evaluate((url) => {
+  independent.store.slide.elements[0].url = url
+  independent.store.emit('doc') // remote mutation: no local undo checkpoint
+}, remoteUrl)
+await probeSetting('place').press('Tab')
+await probe.waitForTimeout(50)
+const afterRemote = await probeSnapshot()
+await probe.evaluate(() => independent.store.undo())
+const undoRemote = await probeSnapshot()
+await probe.evaluate(() => independent.store.redo())
+const redoRemote = await probeSnapshot()
+const remoteWritten = new URL(afterRemote.elements[0].url), remoteBase = new URL(remoteUrl)
+ok(remoteWritten.pathname === remoteBase.pathname && remoteWritten.origin === remoteBase.origin
+  && remoteWritten.hash === remoteBase.hash && remoteWritten.searchParams.get('zoom') === '8'
+  && remoteWritten.searchParams.get('theme') === 'light' && remoteWritten.searchParams.get('place') === 'Bergen'
+  && undoRemote.elements[0].url === remoteUrl && redoRemote.elements[0].url === afterRemote.elements[0].url,
+  'U10 independent: focused web edit retains remote address and siblings through one undo/redo')
+
+const textProps = [
+  { key: 'a', label: 'A', kind: 'text', default: '' },
+  { key: 'b', label: 'B', kind: 'text', default: '' },
+]
+await mount('web', textProps, {}, [{ name: 'Oversized', values: { a: 'x'.repeat(2100) } }])
+await probePreset().selectOption('Oversized')
+const refusedPreset = await probeSnapshot()
+const refusal = await probe.locator('.ed-scene-settings').innerText()
+ok(refusedPreset.elements[0].url === URL0 && /too long/i.test(refusal)
+  && await probePreset().inputValue() !== 'Oversized',
+  `U10 independent: oversized web preset refuses visibly and does not claim it is active (message=${JSON.stringify(refusal)})`)
+
+// Final URL is well below 2048. Only the transient combination (new a + old
+// b) exceeds it. A preset is one atomic edit, so intermediate order must not
+// decide whether it can be applied.
+const longOld = 'https://slides.betamobility.ai/scenes/map/?a=&b=' + 'y'.repeat(1200)
+await mount('web', textProps, {}, [{ name: 'Swap', values: { a: 'x'.repeat(1200), b: '' } }], longOld)
+await probePreset().selectOption('Swap')
+const swapped = new URL((await probeSnapshot()).elements[0].url)
+ok(swapped.href.length < 2048 && swapped.searchParams.get('a') === 'x'.repeat(1200) && swapped.searchParams.get('b') === '',
+  `U10 independent: web preset checks final URL size, not temporary key order (a=${swapped.searchParams.get('a')?.length}, b=${swapped.searchParams.get('b')?.length})`)
+
+await mount('runtime', [{ key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:10:3' }], {}, [])
+await probeType(probeSetting('n').locator('input[type=number]'), '10.1')
+const clamped = (await probeSnapshot()).runtime.values.n
+const shown = await probeSetting('n').locator('input[type=number]').inputValue()
+ok(clamped === 10 && shown === '10' && /Held at 10/.test(await probe.locator('.ed-scene-settings').innerText()),
+  `U10 independent: uneven-step upper clamp is stored and shown (stored=${clamped}, shown=${shown})`)
+await probe.close()
+
 ok(errors.length === 0, `no page error (${errors.join(' | ')})`)
 await browser.close()
 console.log(`\n${checks - failures}/${checks} checks passed`)

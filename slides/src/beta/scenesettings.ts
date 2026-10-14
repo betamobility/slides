@@ -58,7 +58,8 @@ export function valuesOf(props: RuntimeProp[], values?: Record<string, Value>): 
   const out: Record<string, Value> = {}
   for (const p of props) {
     const v = values && Object.prototype.hasOwnProperty.call(values, p.key) ? values[p.key] : undefined
-    out[p.key] = v !== undefined && checkRuntimeValue(p.kind, v) !== undefined ? v : p.default
+    // as the gate keeps it (a stored "1" for a number is the number 1)
+    out[p.key] = (v !== undefined ? checkRuntimeValue(p.kind, v) : undefined) ?? p.default
   }
   return out
 }
@@ -85,8 +86,11 @@ export function coerce(prop: RuntimeProp, input: unknown): { value?: Value; note
     }
     if (!Number.isFinite(n)) return { note: { says: 'Not a number' } }
     if (hint?.kind === 'range') {
-      const snapped = Number((hint.min + Math.round((n - hint.min) / hint.step) * hint.step).toFixed(10))
-      const held = Math.min(hint.max, Math.max(hint.min, snapped))
+      // At or past an end, that end (it is allowed even when the steps do not
+      // land on it); between them, the nearest step, to 12 significant digits
+      // so step arithmetic neither drifts nor erases a tiny step.
+      const snapped = Number((hint.min + Math.round((n - hint.min) / hint.step) * hint.step).toPrecision(12))
+      const held = n >= hint.max ? hint.max : n <= hint.min ? hint.min : Math.min(hint.max, Math.max(hint.min, snapped))
       if (held !== n) return { value: held, note: { says: 'Held at {value}: the scene allows {min} to {max}', value: held, min: hint.min, max: hint.max } }
       return { value: held }
     }
@@ -191,6 +195,15 @@ export function writeQuery(url: string | undefined, key: string, value: Value): 
   u.searchParams.set(key, String(value))
   const out = u.href
   return out.length > MAX_WEB_URL ? { error: 'This makes the page address too long' } : { url: out }
+}
+
+/** The address with every setting written at once (a preset): one length check, on the final address. */
+export function writeQueryAll(url: string | undefined, values: Record<string, Value>): { url: string } | { error: 'Not a web address' | 'This makes the page address too long' } {
+  let u: URL
+  try { u = new URL(url ?? '') } catch { return { error: 'Not a web address' } }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return { error: 'Not a web address' }
+  for (const [k, v] of Object.entries(values)) u.searchParams.set(k, String(v))
+  return u.href.length > MAX_WEB_URL ? { error: 'This makes the page address too long' } : { url: u.href }
 }
 
 /** A web scene's settings record (KTD10: the embed's `doc`), or null when the embed is not a library scene. */

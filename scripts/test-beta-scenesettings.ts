@@ -118,5 +118,40 @@ console.log('\na web scene\'s record')
   ok(ss.webSceneOf(null) === null && ss.webSceneOf({ props: [] }) === null && ss.webSceneOf({ library: { id: 'map' }, props: [] }) === null && ss.webSceneOf('map') === null, 'an embed that is not a library scene has none')
 }
 
+console.log('\nU10 independent adversarial regressions')
+{
+  const uneven: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:10:3' }
+  const above = ss.coerce(uneven, 10.1)
+  ok(above.value === 10 && !!above.note,
+    `U10 independent: out-of-range input clamps to the upper bound with an uneven step (got ${above.value}, expected 10)`)
+
+  // Both the number and the format survive the runtime gate. A preset must
+  // not silently erase precision that the scene explicitly declared.
+  const tiny: RuntimeProp = { key: 'n', label: 'N', kind: 'number', default: 0, format: 'range:0:0.00000000009:0.00000000001' }
+  const preset = ss.applyPreset([tiny], { name: 'Two steps', values: { n: 0.00000000002, extra: 42 } })
+  ok(preset.n === 0.00000000002 && Object.keys(preset).join() === 'n',
+    `U10 independent: preset preserves a declared sub-ten-decimal step and no extra key (got ${JSON.stringify(preset)})`)
+
+  // checkRuntimeValue accepts numeric strings, so valuesOf must return the
+  // normalised number, not the input string (checkboxes compare with === 1).
+  const stored = ss.valuesOf([P('grid')], { grid: '1' })
+  ok(stored.grid === 1 && ss.activePreset([P('grid')], stored, [{ name: 'On', values: { grid: 1 } }]) === 'On',
+    `U10 independent: stored numeric bool agrees with its checkbox and active preset (got ${JSON.stringify(stored)})`)
+
+  const address = 'https://user:pass@x.test:8443/a%2Fb?%70lace=Old&place=Older&keep=a%2Bb&keep=c#part%20one'
+  const written = ss.writeQuery(address, 'place', 'Tromsø & 東京')
+  const u = 'url' in written ? new URL(written.url) : null
+  const before = new URL(address)
+  ok(!!u && isWebUrl(u.href) && u.origin === before.origin && u.pathname === before.pathname
+    && u.hash === before.hash && u.username === before.username && u.password === before.password
+    && same(u.searchParams.getAll('place'), ['Tromsø & 東京']) && same(u.searchParams.getAll('keep'), ['a+b', 'c']),
+    'U10 independent: encoded duplicate setting rewrites only that key and preserves address components')
+
+  const inheritedNames: RuntimeProp[] = ['constructor', 'toString', 'hasOwnProperty'].map((key) => ({ key, label: key, kind: 'text', default: 'default' }))
+  const applied = ss.applyPreset(inheritedNames, { name: 'Own keys', values: JSON.parse('{"constructor":"a","toString":"b","hasOwnProperty":"c","extra":"no"}') })
+  ok(same(applied, { constructor: 'a', toString: 'b', hasOwnProperty: 'c' }),
+    'U10 independent: preset writes every legal prototype-named key and no undeclared key')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

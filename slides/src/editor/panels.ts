@@ -25,7 +25,7 @@ import { ICONS } from '../icons'
 import { LayersUI } from './layers'
 import { t } from '../i18n'
 import { settingsForm } from '../beta/settingsform' // BETA FORK: a scene's settings form (U10)
-import { presetsFor, readQuery, valuesOf, webSceneOf, writeQuery } from '../beta/scenesettings' // BETA FORK
+import { presetsFor, readQuery, valuesOf, webSceneOf, writeQuery, writeQueryAll } from '../beta/scenesettings' // BETA FORK
 import { lsJson, lsSet } from '../../../kernel/src/storage.ts'
 
 // Hover help for panel rows, keyed by the RAW English label (translated at
@@ -2074,12 +2074,15 @@ export class PropsPanel {
         }, final)
         return null
       },
-      writeAll: (values) => this.edit(() => {
-        const r = live()
-        if (!r) return
-        // every declared setting, nothing else (a preset)
-        r.values = Object.fromEntries(r.props.map((p) => [p.key, values[p.key] ?? p.default]))
-      }, true),
+      writeAll: (values) => {
+        this.edit(() => {
+          const r = live()
+          if (!r) return
+          // every declared setting, nothing else (a preset)
+          r.values = Object.fromEntries(r.props.map((p) => [p.key, values[p.key] ?? p.default]))
+        }, true)
+        return null
+      },
       presets: presetsFor(rt.library),
       readOnly: this.store.readOnly,
       color: (value, onEdit) => this.color(value, onEdit),
@@ -2112,13 +2115,15 @@ export class PropsPanel {
         return null
       },
       writeAll: (values) => {
-        let url = liveUrl()
-        for (const p of scene.props) {
-          const r = writeQuery(url, p.key, values[p.key] ?? p.default)
-          if ('error' in r) return
-          url = r.url
-        }
-        this.mutate(id, (e) => { (e as EmbedElement).url = url }, true)
+        // every declared setting at once, measured on the final address
+        const all = Object.fromEntries(scene.props.map((p) => [p.key, values[p.key] ?? p.default]))
+        const first = writeQueryAll(liveUrl(), all)
+        if ('error' in first) return first.error
+        this.mutate(id, (e) => {
+          const r = writeQueryAll((e as EmbedElement).url, all)
+          if ('url' in r) (e as EmbedElement).url = r.url
+        }, true)
+        return null
       },
       presets: presetsFor(scene.library),
       readOnly: this.store.readOnly,
