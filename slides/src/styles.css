@@ -2944,3 +2944,33 @@ input.ed-toggle { width: 16px; height: 16px; accent-color: #5E7699; cursor: poin
 }
 .ed-swatch:hover { transform: scale(1.15); }
 .ed-swatch.is-on { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* BETA FORK: the light table (beta/lighttable.ts). The slide list itself, laid
+   over the canvas as a wrapping grid: same thumbnails, same selection, same
+   drag. Only the layout changes, so there is no second list to keep in step. */
+.ed-main { position: relative; }
+.ed-sidebar.ed-lighttable {
+  position: absolute; inset: 0; z-index: 45; width: auto;
+  flex-direction: row; flex-wrap: wrap;
+  align-items: flex-start; align-content: flex-start; justify-content: flex-start;
+  gap: 18px; padding: 24px;
+  border-inline-end: 0;
+}
+/* a gap in the grid is shown by the drop bar; the hover insert-gaps and the
+   New-slide button belong to the list */
+.ed-sidebar.ed-lighttable .ed-insertgap,
+.ed-sidebar.ed-lighttable .ed-add-slide { display: none; }
+.ed-sidebar.ed-lighttable + .ed-resizer { display: none; }
+/* upstream paints the thumbnail under the pointer as the drop target; in the
+   grid the bar says where the slides will land */
+.ed-sidebar.ed-lighttable .ed-thumb.drop { border-color: var(--line); }
+.ed-sidebar.ed-lighttable .ed-thumb.active.drop,
+.ed-sidebar.ed-lighttable .ed-thumb.selected.drop { border-color: var(--accent); }
+.ed-lt-bar {
+  position: absolute; width: 4px; border-radius: 2px;
+  background: var(--accent); pointer-events: none; z-index: 2;
+}
+.ed-lt-toggle.active { background: var(--chip); color: var(--accent); }
+/* where the slide list is a drawer the grid is not offered */
+@media (max-width: 700px) { .ed-lt-toggle { display: none !important; } }
+

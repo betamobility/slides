@@ -26,6 +26,7 @@ export const zhHans: Catalog = {
   "Insert — text, shapes, images, media, tables, charts": "插入 — 文本、形状、图片、媒体、表格、图表",
   "More actions": "更多操作",
   "Slides — show or hide the slide list": "幻灯片 — 显示或隐藏幻灯片列表",
+  "Slide grid": "幻灯片网格",
   "Format — show or hide the properties panel": "格式 — 显示或隐藏属性面板",
   "Motion path — drag points · click a point for bezier handles · double-click path to insert · double-click point to remove · scroll a point to change its speed": "运动路径 — 拖动点 · 单击点显示贝塞尔手柄 · 双击路径插入 · 双击点删除 · 滚动点改变速度",
   "Slide number": "幻灯片编号",

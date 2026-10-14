@@ -306,6 +306,21 @@ jobs:
         # packaged document: six scenes, the show on the third, three frames.
         run: node scripts/test-beta-liveness.mjs
 
+      - name: Slide multi-select and block move (upstream's rig)
+        # The light table moves slides through upstream's moveBlock; its rig
+        # runs in upstream's validate job, which the fork gates off.
+        run: node scripts/test-slides-multiselect.ts
+
+      - name: Beta light table rig
+        # The slide list as a grid (slides/src/beta/lighttable.ts): rows, the
+        # gap under the pointer, the drop bar, the arrows, the keyboard move.
+        run: node scripts/test-beta-lighttable.ts
+
+      - name: Beta light table rig (browser)
+        # The same in the packaged editor with a real mouse: slides 2 and 5
+        # dragged between 7 and 8, undo, double-click, Escape, a file drop.
+        run: node scripts/test-beta-lighttable-browser.mjs
+
       - name: Beta runtime assets survive a save
         # Upstream prunes doc.assets at save time by walking elements; a
         # runtime slide's scene is named by the slide. Without the fork's hook

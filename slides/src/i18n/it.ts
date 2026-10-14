@@ -26,6 +26,7 @@ export const it: Catalog = {
   "Insert — text, shapes, images, media, tables, charts": "Inserisci — testo, forme, immagini, media, tabelle, grafici",
   "More actions": "Altre azioni",
   "Slides — show or hide the slide list": "Diapositive — mostra o nascondi l’elenco",
+  "Slide grid": "Griglia delle diapositive",
   "Format — show or hide the properties panel": "Formato — mostra o nascondi il pannello proprietà",
   "Motion path — drag points · click a point for bezier handles · double-click path to insert · double-click point to remove · scroll a point to change its speed": "Percorso — trascina i punti · clicca un punto per le maniglie di Bézier · doppio clic sul percorso per inserire · doppio clic su un punto per rimuoverlo · scorri per cambiarne la velocità",
   "Slide number": "Numero diapositiva",

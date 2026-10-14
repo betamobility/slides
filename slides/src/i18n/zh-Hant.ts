@@ -26,6 +26,7 @@ export const zhHant: Catalog = {
   "Insert — text, shapes, images, media, tables, charts": "插入 — 文字、形狀、圖片、媒體、表格、圖表",
   "More actions": "更多操作",
   "Slides — show or hide the slide list": "投影片 — 顯示或隱藏投影片清單",
+  "Slide grid": "投影片網格",
   "Format — show or hide the properties panel": "格式 — 顯示或隱藏屬性面板",
   "Motion path — drag points · click a point for bezier handles · double-click path to insert · double-click point to remove · scroll a point to change its speed": "運動路徑 — 拖曳點 · 按一下點顯示貝茲控制桿 · 按兩下路徑插入 · 按兩下點刪除 · 捲動點改變速度",
   "Slide number": "投影片編號",
