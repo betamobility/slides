@@ -105,6 +105,32 @@ console.log('\non the store origin')
   await ctx.close()
 }
 
+console.log('\nkeys inside the dialog stay in the dialog (Codex U11 round 5)')
+{
+  const { ctx, p } = await storePage()
+  // a slide with an element, the element selected, as a person would leave it
+  const id = await p.evaluate(() => {
+    const i = window.bento.doc.slides.findIndex((s) => !s.runtime && s.elements.length)
+    document.querySelector(`.ed-sidebar .ed-thumb[data-index="${i}"]`).click()
+    return { i, id: window.bento.doc.slides[i].elements[0].id }
+  })
+  await p.evaluate((el) => window.bento.store?.select?.([el]) ?? null, id.id)
+  await p.locator(`.ed-stage-scale [data-el-id="${id.id}"]`).first().click({ force: true }).catch(() => {})
+  const before = await p.evaluate(() => JSON.stringify(window.bento.doc.slides))
+  await p.locator('.ed-btn-gallery').click()
+  await waitState(p, 'shelf')
+  await p.locator('.ed-gallery-card').first().focus()
+  for (const key of ['Delete', 'Backspace', 'ArrowRight', 'ArrowDown', 'Shift+ArrowLeft']) await p.keyboard.press(key)
+  await p.locator('.ed-gallery-card').first().click()
+  await p.locator('.ed-gallery select[data-gallery-preset]').focus()
+  await p.keyboard.press('Delete')
+  await p.keyboard.press('Escape')
+  await p.waitForTimeout(300)
+  const after = await p.evaluate(() => JSON.stringify(window.bento.doc.slides))
+  ok(after === before, 'Delete, Backspace and the arrows pressed in the open gallery leave the deck untouched')
+  await ctx.close()
+}
+
 console.log('\nthe states')
 {
   for (const [mode, want, retry] of [['empty', 'empty', false], ['fail', 'failed', true], ['login', 'signed-out', true]]) {

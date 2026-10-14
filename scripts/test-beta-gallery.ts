@@ -17,6 +17,9 @@ import { SyncState, BLOB_INLINE_MAX } from '../slides/src/sync/crdt.ts'
 import { RESERVED_KEYS, STILL_INLINE_MAX, stillDataUri, stillTooLarge } from '../slides/src/beta/libraryrules.ts'
 import * as g from '../slides/src/beta/gallery.ts'
 import { presetsFor, webSceneOf } from '../slides/src/beta/scenesettings.ts'
+import { fetchLibrary, StoreSignedOutError } from '../slides/src/beta/store.ts'
+import { configureApp } from '../kernel/src/app.ts'
+import { OfflineError, offlineEnabled, setOffline } from '../kernel/src/net.ts'
 
 let checks = 0
 let failures = 0
@@ -626,6 +629,101 @@ console.log('\nU11 independent round 4: insertion boundaries and receiver state'
     if (g.readManifest(withScenes(web({ view: still })))!.length) admitted.push(`web:${i}`)
   }
   ok(admitted.length === 0, `R4 shared scanner rejects XML resource loading on every admission path: ${admitted.join('; ')}`)
+}
+
+console.log('\nU11 independent round 5: compound limits and failure isolation')
+{
+  // The seeded fuzz mutates individual fields; it never combines the maximum
+  // number of settings with maximum-length defaults and a near-limit still.
+  const raw = clone(manifest).scenes[0]
+  const props = Array.from({ length: 64 }, (_, i) => ({ key: `p${i}`, label: `P${i}`, kind: 'text', default: '😀'.repeat(2000) }))
+  const still = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 9"><rect width="16" height="9"/><!--' + 'x'.repeat(60000) + '--></svg>'
+  const scene = g.readManifest(withScenes({ ...raw, props, presets: [{ name: 'Defaults', values: {} }], still }))![0]
+  const store = new Store(deck()), remote = deck()
+  store.doc.size = { width: 720, height: 1280 }
+  remote.size = clone(store.doc.size)
+  const a = new SyncState('r5-max-A'), b = new SyncState('r5-max-B')
+  a.adopt(store.doc); b.adopt(remote)
+  const before = clone(store.doc)
+  const refusal = scene ? g.insertScene(store, scene, scene.presets[0]) : 'not admitted'
+  b.apply(remote, a.diff(before, store.doc, { text: true }))
+  const got = remote.slides.find((s) => s.id === store.slide.id)
+  const image = got?.elements[0] as { src?: string; w?: number; h?: number } | undefined
+  ok(refusal === null && got?.runtime?.props?.length === 64
+    && props.every((p) => got.runtime?.values?.[p.key] === p.default)
+    && image?.w === 720 && image.h === 1280 && image.src === got.runtime?.still
+    && remote.assets?.[image.src!.slice(6)] === g.svgDataUri(still),
+    'R5 AE5 maximum settings and near-limit still arrive together on a portrait slide')
+}
+{
+  // A valid URL becomes too large only once the chosen preset is encoded.
+  // Refusal must preserve an existing redo branch, not just the document.
+  const scene = g.readManifest(withScenes(web({
+    props: [{ key: 'caption', label: 'Caption', kind: 'text', default: '' }],
+    presets: [{ name: 'Long', values: { caption: '地'.repeat(300) } }],
+  })))![0]
+  const store = new Store(deck())
+  const base = JSON.stringify(store.doc)
+  store.commit(() => { store.doc.title = 'redo sentinel' })
+  store.undo()
+  const index = store.currentIndex, selection = JSON.stringify(store.selection)
+  const refusal = scene ? g.insertScene(store, scene, scene.presets[0]) : 'not admitted'
+  const untouched = JSON.stringify(store.doc) === base && store.currentIndex === index && JSON.stringify(store.selection) === selection
+  store.redo()
+  ok(refusal === 'This makes the page address too long' && untouched && store.doc.title === 'redo sentinel',
+    'R5 oversized web preset refuses atomically and preserves redo history')
+}
+{
+  // Hostile JSON, not JS prototype assignment; unknown deep fields must not
+  // throw, poison subsequent scenes, or bypass the per-scene refusal.
+  const real = clone(manifest).scenes[0]
+  let nested: unknown = 'leaf'
+  for (let i = 0; i < 100; i++) nested = { child: nested }
+  const attacks = [
+    { ...real, extra: nested },
+    { ...real, presets: [{ name: 'Injected', values: JSON.parse('{"__proto__":{"polluted":true}}') }] },
+    { ...real, still: '<svg xmlns="http://www.w3.org/2000/svg"><use href="&#x23;local" onload="alert(1)"/></svg>' },
+    web({ view: '<svg xmlns="http://www.w3.org/2000/svg"><g xmlns=""><rect width="16" height="9"/></g></svg>' }),
+  ]
+  const problems: string[] = []
+  for (const [i, bad] of attacks.entries()) {
+    try {
+      const read = g.readManifest(withScenes({ ...bad, id: `r5-bad-${i}` }, real))
+      if (read?.length !== 1 || read[0].id !== real.id || read[0].still !== real.still || read[0].presets[0].name !== real.presets[0].name) problems.push(`${i}: bad shelf`)
+    } catch (e) { problems.push(`${i}: threw ${String(e)}`) }
+  }
+  ok(problems.length === 0 && !Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted'),
+    `R5 malformed runtime and web scenes are isolated from a valid neighbour: ${problems.join('; ')}`)
+}
+{
+  // The actual fetchLibrary wrapper, with only the network boundary mocked.
+  // A 200 Access HTML response must not become a JSON parse error; a manual
+  // redirect must retain the signed-out classification; offline sends nothing.
+  configureApp({ appId: 'beta-slides', appName: 'bento/slides', manifestUrl: 'https://slides.betamobility.ai/releases/manifest.json', storeHost: 'https://slides.betamobility.ai' })
+  const originalFetch = globalThis.fetch, originalOffline = offlineEnabled()
+  let hits = 0
+  const requests: Array<{ url: string; credentials?: string; redirect?: string }> = []
+  let response: Response = new Response('<!doctype html><title>Access login</title>', { headers: { 'content-type': 'text/html; charset=utf-8' } })
+  const results: string[] = []
+  try {
+    setOffline(false)
+    globalThis.fetch = (async (input, init) => {
+      hits++
+      requests.push({ url: String(input), credentials: init?.credentials, redirect: init?.redirect })
+      return response
+    }) as typeof fetch
+    for (const mode of ['html', 'redirect']) {
+      if (mode === 'redirect') response = { type: 'opaqueredirect', status: 0, headers: new Headers() } as Response
+      try { await fetchLibrary(); results.push(`${mode}: accepted`) } catch (e) { if (!(e instanceof StoreSignedOutError)) results.push(`${mode}: ${String(e)}`) }
+    }
+    setOffline(true)
+    try { await fetchLibrary(); results.push('offline: accepted') } catch (e) { if (!(e instanceof OfflineError)) results.push(`offline: ${String(e)}`) }
+    ok(results.length === 0 && hits === 2 && requests.every((r) => r.url === 'https://slides.betamobility.ai/library/library.json' && r.credentials === 'same-origin' && r.redirect === 'manual'),
+      `R5 HTML login and redirect are signed-out; offline makes no request: ${results.join('; ')}, hits=${hits}`)
+  } finally {
+    globalThis.fetch = originalFetch
+    setOffline(originalOffline)
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

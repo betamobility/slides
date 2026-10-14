@@ -277,7 +277,15 @@ export function openGallery(host: GalleryHost): HTMLElement {
   box.setAttribute('aria-label', t('Scene library'))
   overlay.appendChild(box)
   const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true) }
-  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.stopPropagation(); close() } }
+  // Every key pressed while the dialog is open is the dialog's: the editor's
+  // own keydown (on the document, bubbling) would otherwise delete or nudge
+  // the selection behind it on Delete or an arrow. Stopped in the capture
+  // phase, so it never reaches that listener; the browser's own handling
+  // (Tab, Enter on a button, a select's arrows) is untouched.
+  const onKey = (ev: KeyboardEvent) => {
+    ev.stopPropagation()
+    if (ev.key === 'Escape') close()
+  }
   document.addEventListener('keydown', onKey, true)
   overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close() })
   document.body.appendChild(overlay)
