@@ -451,6 +451,37 @@ console.log('\nfolders on disk, and the manifest as a whole')
   ok(u.status === 1 && u.stderr.includes('could not reach'), 'a store that cannot be reached fails the command')
 }
 
+// Round 5: assertions were added against af181273 before any product fix.
+console.log('\nround 5: independent boundary and CSS cases')
+{
+  // XML line-ending normalization must not lower the byte count used for the
+  // inline budget: the manifest carries the original CRLF bytes.
+  const base = SVG.replace('</svg>', '<!--\r\n--></svg>')
+  const padding = lib.STILL_BUDGET - Buffer.byteLength(base)
+  const exact = base.replace('<!--', '<!--' + 'x'.repeat(padding))
+  const over = exact.replace('-->', '\r\n-->')
+  ok(Buffer.byteLength(exact) === 65536 && refusal(files({ 'still.svg': exact })) === '' &&
+    refused(files({ 'still.svg': over }), 'sample/still.svg', '64 KB'),
+    'round5: CRLF still at the byte cap builds and two more bytes fail naming the file')
+
+  const hostile = ['https://design.betamobility.ai\n.evil.test/x',
+    'https://design.betamobility.ai%00.evil.test/x', 'https://design.betamobility.ai:443@evil.test/x']
+  ok(hostile.every((url) => refused(files({ 'index.html': undefined }, { kind: 'web', url }), 'scene.json',
+    url.includes('%00') ? 'design.betamobility.ai%00.evil.test' : 'evil.test') &&
+    !lib.manifestShape({ format: lib.FORMAT, v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] })),
+    'round5: newline, NUL and port-looking userinfo cannot disguise an off-list web host')
+
+  // Presentation attributes are CSS, not just XML. CSS hex escapes spell
+  // function names too: u\72l(...) is url(...), including external resources.
+  // The protocol-relative target also avoids the check for a literal http:.
+  const stills = [
+    SVG.replace('fill="#fff"', String.raw`fill="u\72l(//evil.test/paint.svg#g)"`),
+    SVG.replace('<rect ', String.raw`<rect cursor="u\72l(//evil.test/cursor.png), auto" `),
+  ]
+  ok(stills.every((still) => refused(files({ 'still.svg': still }), 'sample/still.svg')),
+    'round5: CSS-escaped external paint and cursor URLs cannot pass as plain stills')
+}
+
 console.log('\nwhere the library goes')
 {
   const src = readFileSync(script, 'utf8') + readFileSync(join(root, 'scripts/lib/beta-library.mjs'), 'utf8')

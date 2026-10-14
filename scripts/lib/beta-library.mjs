@@ -73,6 +73,18 @@ const bytes = (s) => Buffer.byteLength(s, 'utf8')
 const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
   'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
 const SVG_NS = 'http://www.w3.org/2000/svg'
+/** The attributes a drawing needs. An allowlist too: a property the list does not name
+ *  (cursor, filter, an animation's target) is refused rather than reasoned about. */
+const SVG_ATTRIBUTES = new Set([
+  'xmlns', 'xmlns:xlink', 'xml:space', 'version', 'viewBox', 'preserveAspectRatio', 'width', 'height', 'x', 'y', 'id', 'role', 'aria-label', 'aria-hidden',
+  'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'fx', 'fy', 'd', 'points', 'transform', 'href',
+  'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-miterlimit',
+  'opacity', 'visibility', 'display', 'clip-path', 'clip-rule', 'mask', 'vector-effect', 'shape-rendering', 'paint-order',
+  'offset', 'stop-color', 'stop-opacity', 'gradientUnits', 'gradientTransform', 'spreadMethod',
+  'patternUnits', 'patternContentUnits', 'patternTransform', 'maskUnits', 'maskContentUnits', 'clipPathUnits',
+  'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'letter-spacing', 'word-spacing', 'text-anchor', 'dominant-baseline', 'alignment-baseline',
+  'text-decoration', 'text-rendering', 'dx', 'dy', 'textLength', 'lengthAdjust',
+])
 /** A character XML 1.0 allows in a document, less the C1 controls (a picture has no use for them). */
 const xmlChar = (n) => n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0x7e) || (n >= 0xa0 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n >= 0x10000 && n <= 0x10ffff)
 const WS = /[ \t\n\r]/
@@ -197,6 +209,9 @@ export function activeSvg(svg) {
     if (root && (name !== 'svg' || attrs.get('xmlns') !== SVG_NS)) return 'a root that is not an <svg> in the SVG namespace'
     for (const [key, value] of attrs) {
       if (/^on/i.test(key)) return `an ${key} handler attribute`
+      if (!SVG_ATTRIBUTES.has(key) && key !== 'style') return `a ${key} attribute`
+      // a CSS escape can spell url( or anything else past a check that reads the letters; no picture needs one
+      if (value.includes('\\')) return `a backslash in ${key}`
       if (key === 'style') return 'a style attribute (use presentation attributes)'
       // the namespace declarations a picture needs, each to its one right value
       if (key === 'xmlns' && value !== SVG_NS) return `a namespace other than SVG's on <${name}>`

@@ -2124,6 +2124,25 @@ export async function run(Miniflare) {
           'round4: worker refuses FTP, port zero and an encoded dotted suffix without replacing the library')
       }
 
+      // Round 5: a valid signature is insufficient before nbf. Exercise
+      // reads, conditional reads and upload, then confirm the bytes survived.
+      {
+        let gated = true
+        for (const claims of [human('alice@betamobility.io', { nbf: now() + 3600 }),
+          service({ nbf: now() + 3600 })]) {
+          const token = await sign(k1, 'k1', claims)
+          for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'],
+            ['GET', '/api/publish/library.json'], ['PUT', '/api/harness/library.json']]) {
+            r = await call(method, path + '?round=5', { as: token, headers: { ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && await r.text() === lib,
+          'round5: not-yet-valid person and service assertions cannot read, revalidate or replace the manifest')
+      }
+
       // a second upload replaces the first
       const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
       r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })
