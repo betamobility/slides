@@ -1,0 +1,247 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 The Bento authors
+//
+// Beta build: the scene library's rules that BOTH sides apply (2026-10-13-2236
+// plan, U8 and U11). scripts/lib/beta-library.mjs refuses a scene folder that
+// breaks them before the manifest is built; slides/src/beta/gallery.ts leaves a
+// scene that breaks them off the shelf, so a manifest that did not come from
+// that build is held to the same rules. One copy, imported by both: node runs
+// this file as TypeScript (type stripping), the shell bundles it.
+
+/**
+ * Hosts a WEB scene may point at. A web scene runs whatever its host serves at
+ * show time, so the host has to be one Beta controls. Exact names, no
+ * wildcard: a new host is a reviewed line here.
+ */
+export const WEB_HOSTS: readonly string[] = ['slides.betamobility.ai', 'design.betamobility.ai']
+
+/**
+ * Setting keys a scene may not use: the names that address an object's
+ * prototype. The sync engine drops any op that carries one anywhere
+ * (kernel/src/sync/crdt.ts PROTO_NAMES), so a slide holding such a setting
+ * would never reach a collaborator. Not exported there (kernel zone);
+ * scripts/test-beta-gallery.ts checks the engine really drops each of these.
+ */
+export const RESERVED_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype']
+
+/** A text that is not well-formed UTF-16 (a lone surrogate), anywhere in a value: it cannot be written as UTF-8 or a URL without becoming U+FFFD, which would be a repair. */
+export function hasLoneSurrogate(v: unknown, depth = 0): boolean {
+  if (typeof v === 'string') return /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(v)
+  if (depth > 32 || v === null || typeof v !== 'object') return depth > 32
+  if (Array.isArray(v)) return v.some((x) => hasLoneSurrogate(x, depth + 1))
+  return Object.keys(v).some((k) => hasLoneSurrogate(k) || hasLoneSurrogate((v as Record<string, unknown>)[k], depth + 1))
+}
+
+/**
+ * A runtime scene's page as the shell's gate measures it. The page is stored
+ * base64 (as the splice tool writes it) and slides/src/runtime.ts assetBytes
+ * counts a base64 body as floor(length * 3 / 4), padding included, so it
+ * reads up to two bytes more than the page holds. Every shipped shell counts
+ * that way (R18), so the library adopts the gate's measure rather than the
+ * gate changing: a page the library admits is one every shell keeps.
+ */
+export const PAGE_BUDGET = 256 * 1024
+export const gatePageBytes = (html: string): number => Math.ceil(new TextEncoder().encode(html).length / 3) * 3
+
+/** Why this page would not be kept by the gate, or null when it would. */
+export function pageTooLarge(html: string): string | null {
+  const n = gatePageBytes(html)
+  return n > PAGE_BUDGET ? `measures ${n} bytes as the shell stores it (base64), over the ${PAGE_BUDGET / 1024} KB inline budget` : null
+}
+
+/**
+ * The largest data URI an asset may be and still travel INSIDE a sync op:
+ * kernel/src/sync/crdt.ts BLOB_INLINE_MAX (64 K characters; scripts/
+ * test-beta-gallery.ts checks the two agree). Above it the session sends the
+ * bytes by the relay's blob route, which a collaborator receives after the
+ * slide. A library still has to arrive WITH its slide (AE5), so the rule is
+ * on the still's encoded form, the thing that travels, not on its raw size:
+ * no single encoding keeps every 64 KB picture under 64 K characters
+ * (base64 grows it by a third, percent-encoding grows CJK text ninefold).
+ */
+export const STILL_INLINE_MAX = 64 * 1024
+
+/** A still as a data: URI, in whichever of percent-encoding and base64 is shorter for it. */
+export function stillDataUri(svg: string): string {
+  // % and # would be read as an escape and a fragment; control characters
+  // are stripped by the URL parser; non-ASCII as UTF-8. Code points (the u
+  // flag): a still that passed activeSvg holds no lone surrogate.
+  const pct = 'data:image/svg+xml,' + svg.replace(/[\u0000-\u001f%#\u007f-\u{10ffff}]/gu, (c) => encodeURIComponent(c))
+  const bytes = new TextEncoder().encode(svg)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  const b64 = 'data:image/svg+xml;base64,' + btoa(bin)
+  return pct.length <= b64.length ? pct : b64
+}
+
+/** Why this still cannot travel with its slide, or null when it can. */
+export function stillTooLarge(svg: string): string | null {
+  const n = stillDataUri(svg).length
+  return n > STILL_INLINE_MAX ? `encodes to ${n} characters, over the ${STILL_INLINE_MAX} that travel with a slide` : null
+}
+
+// A still is a PICTURE. The check reads it with a strict scanner for a small
+// subset of XML (elements, double- or single-quoted attributes separated by
+// whitespace, text, comments, one leading XML declaration) and then holds the
+// elements and attributes to an allowlist: what a drawing needs, and nothing
+// that can run, load or link. Anything outside the grammar is refused, so the
+// cost of a gap is a still that has to be re-saved, never one that passes
+// broken or active. The manifest is stored as given, so a still is refused
+// here, naming the file, instead of being cleaned somewhere unseen.
+const SVG_ELEMENTS = new Set(['svg', 'g', 'defs', 'title', 'desc', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path',
+  'text', 'tspan', 'linearGradient', 'radialGradient', 'stop', 'clipPath', 'mask', 'pattern', 'use'])
+const SVG_NS = 'http://www.w3.org/2000/svg'
+/** The attributes a drawing needs. An allowlist too: a property the list does not name
+ *  (cursor, filter, an animation's target) is refused rather than reasoned about. */
+const SVG_ATTRIBUTES = new Set([
+  'xmlns', 'xmlns:xlink', 'xml:space', 'version', 'viewBox', 'preserveAspectRatio', 'width', 'height', 'x', 'y', 'id', 'role', 'aria-label', 'aria-hidden',
+  'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'fx', 'fy', 'd', 'points', 'transform', 'href',
+  'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-miterlimit',
+  'opacity', 'visibility', 'display', 'clip-path', 'clip-rule', 'mask', 'vector-effect', 'shape-rendering', 'paint-order',
+  'offset', 'stop-color', 'stop-opacity', 'gradientUnits', 'gradientTransform', 'spreadMethod',
+  'patternUnits', 'patternContentUnits', 'patternTransform', 'maskUnits', 'maskContentUnits', 'clipPathUnits',
+  'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant', 'letter-spacing', 'word-spacing', 'text-anchor', 'dominant-baseline', 'alignment-baseline',
+  'text-decoration', 'text-rendering', 'dx', 'dy', 'textLength', 'lengthAdjust',
+])
+/** A character XML 1.0 allows in a document, less the C1 controls (a picture has no use for them). */
+const xmlChar = (n: number): boolean => n === 0x9 || n === 0xa || n === 0xd || (n >= 0x20 && n <= 0x7e) || (n >= 0xa0 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd) || (n >= 0x10000 && n <= 0x10ffff)
+const WS = /[ \t\n\r]/
+const NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*/
+
+/** Text or an attribute value as the browser reads it, or null when a reference in it is not one XML has. */
+function unescape(text: string): string | null {
+  let out = ''
+  for (let i = 0; i < text.length;) {
+    const c = text.codePointAt(i)!
+    if (!xmlChar(c)) return null
+    if (text[i] !== '&') { out += String.fromCodePoint(c); i += c > 0xffff ? 2 : 1; continue }
+    const m = /^&(?:(amp|lt|gt|quot|apos)|#(\d{1,7})|#x([0-9a-fA-F]{1,6}));/.exec(text.slice(i))
+    if (!m) return null
+    const n = m[1] ? '&<>"\''.codePointAt(['amp', 'lt', 'gt', 'quot', 'apos'].indexOf(m[1]))! : m[2] ? Number(m[2]) : parseInt(m[3], 16)
+    if (!xmlChar(n)) return null
+    out += String.fromCodePoint(n)
+    i += m[0].length
+  }
+  return out
+}
+
+/** Read the still: its elements with their attributes, or the reason it does not parse. */
+interface Element { name: string; attrs: Map<string, string>; root: boolean }
+
+function scanSvg(src: string): { error: string } | { elements: Element[] } {
+  let i = 0
+  const elements: Element[] = []
+  const fail = (why: string) => ({ error: `${why} (not well-formed)` })
+  const space = () => { while (i < src.length && WS.test(src[i])) i++ }
+  const comment = () => {
+    const end = src.indexOf('-->', i + 4)
+    if (end < 0) return false
+    const body = src.slice(i + 4, end)
+    if (body.includes('--') || body.endsWith('-') || unescape(body.replace(/&/g, '&amp;')) === null) return false
+    i = end + 3
+    return true
+  }
+  /** Whitespace and comments, where the document allows nothing else. */
+  const misc = () => {
+    for (;;) {
+      space()
+      if (!src.startsWith('<!--', i)) return true
+      if (!comment()) return false
+    }
+  }
+  if (src.startsWith('<?xml', i)) {
+    const end = src.indexOf('?>', i)
+    if (end < 0 || !/^<\?xml[ \t]+version=(["'])1\.0\1(?:[ \t]+encoding=(["'])[Uu][Tt][Ff]-8\2)?[ \t]*$/.test(src.slice(i, end))) return fail('an XML declaration this check does not read')
+    i = end + 2
+  }
+  if (!misc()) return fail('a malformed comment')
+  if (src[i] !== '<') return fail('no root element')
+  const stack: string[] = []
+  for (;;) {
+    if (src.startsWith('</', i)) {
+      i += 2
+      const name = NAME.exec(src.slice(i))?.[0]
+      if (!name) return fail('a malformed closing tag')
+      i += name.length
+      space()
+      if (src[i] !== '>') return fail(`a malformed </${name}>`)
+      i++
+      if (stack.pop() !== name) return fail(`a </${name}> that closes nothing open`)
+    } else if (src.startsWith('<!--', i)) {
+      if (!comment()) return fail('a malformed comment')
+    } else if (src[i] === '<') {
+      if (!stack.length && elements.length) return fail('more than one root element')
+      i++
+      const name = NAME.exec(src.slice(i))?.[0]
+      if (!name) return fail('a malformed tag')
+      i += name.length
+      const attrs = new Map<string, string>()
+      let selfClosing = false
+      for (;;) {
+        const before = i
+        space()
+        if (src.startsWith('/>', i)) { i += 2; selfClosing = true; break }
+        if (src[i] === '>') { i++; break }
+        if (i === before) return fail(`attributes on <${name}> not separated by whitespace`)
+        const key = NAME.exec(src.slice(i))?.[0]
+        if (!key) return fail(`a malformed attribute on <${name}>`)
+        i += key.length
+        space()
+        if (src[i] !== '=') return fail(`${key} without a value on <${name}>`)
+        i++
+        space()
+        const q = src[i]
+        if (q !== '"' && q !== "'") return fail(`an unquoted ${key} on <${name}>`)
+        const end = src.indexOf(q, i + 1)
+        if (end < 0) return fail(`an unclosed ${key} on <${name}>`)
+        const raw = src.slice(i + 1, end)
+        const value = raw.includes('<') ? null : unescape(raw)
+        if (value === null) return fail(`a character or reference XML does not allow in ${key}`)
+        if (attrs.has(key)) return fail(`${key} written twice on one <${name}>`)
+        attrs.set(key, value)
+        i = end + 1
+      }
+      elements.push({ name, attrs, root: !stack.length })
+      if (!selfClosing) stack.push(name)
+    } else if (i >= src.length) {
+      return stack.length ? fail(`a <${stack[stack.length - 1]}> never closed`) : fail('no root element')
+    } else {
+      const end = src.indexOf('<', i)
+      const text = src.slice(i, end < 0 ? src.length : end)
+      if (unescape(text) === null || text.includes('>')) return fail('text with a character or reference XML does not allow')
+      i += text.length
+    }
+    if (!stack.length) {
+      // the root is closed: only whitespace and comments may follow
+      if (!misc()) return fail('a malformed comment')
+      if (i < src.length) return fail('content after the root element')
+      return { elements }
+    }
+  }
+}
+
+/** Why this SVG is not a plain picture, or null when it is one. */
+export function activeSvg(svg: string): string | null {
+  const read = scanSvg(svg)
+  if ('error' in read) return read.error
+  for (const { name, attrs, root } of read.elements) {
+    if (!SVG_ELEMENTS.has(name)) return `a <${name}> element`
+    if (root && (name !== 'svg' || attrs.get('xmlns') !== SVG_NS)) return 'a root that is not an <svg> in the SVG namespace'
+    for (const [key, value] of attrs) {
+      if (/^on/i.test(key)) return `an ${key} handler attribute`
+      if (!SVG_ATTRIBUTES.has(key) && key !== 'style') return `a ${key} attribute`
+      // a CSS escape can spell url( or anything else past a check that reads the letters; no picture needs one
+      if (value.includes('\\')) return `a backslash in ${key}`
+      if (key === 'style') return 'a style attribute (use presentation attributes)'
+      // the namespace declarations a picture needs, each to its one right value
+      if (key === 'xmlns' && value !== SVG_NS) return `a namespace other than SVG's on <${name}>`
+      if (key === 'xmlns:xlink' && value !== 'http://www.w3.org/1999/xlink') return 'an xlink prefix bound to something other than XLink'
+      if (key === 'xml:space' && value !== 'default' && value !== 'preserve') return 'an xml:space that is neither default nor preserve'
+      if (key.includes(':') && key !== 'xmlns:xlink' && key !== 'xml:space') return `a ${key} attribute`
+      if (key === 'href' && !/^#[\w.-]+$/.test(value)) return 'a link out of the file'
+      if (/url\s*\(/i.test(value) && !/^url\(#[\w.-]+\)$/.test(value.trim())) return `a url() in ${key} that leaves the file`
+      if (/javascript:|data:|https?:|^\s*\/\//i.test(value) && key !== 'xmlns' && key !== 'xmlns:xlink') return `a link out of the file in ${key}`
+    }
+  }
+  return null
+}

@@ -91,7 +91,9 @@ console.log('\na scene that builds')
 console.log('\nthe still')
 {
   ok(refused(files({ 'still.svg': SVG.replace('</svg>', '<!--' + 'x'.repeat(64 * 1024) + '--></svg>') }), 'beta/library/sample/still.svg', '64 KB'), 'a still over 64 KB fails the build naming the file')
-  ok(refusal(files({ 'still.svg': SVG.replace('</svg>', '<!--' + 'x'.repeat(64 * 1024 - SVG.length - 7) + '--></svg>') })) === '', 'one at exactly 64 KB builds')
+  // U11's inline rule (slides/src/beta/libraryrules.ts) binds before the byte cap: a still must encode
+  // under the 64 K characters an op carries, which no 64 KB still does
+  ok(refused(files({ 'still.svg': SVG.replace('</svg>', '<!--' + 'x'.repeat(64 * 1024 - SVG.length - 7) + '--></svg>') }), 'still.svg', 'travel with a slide'), 'one at exactly 64 KB fails the inline rule, naming the file')
   ok(refused(files({ 'still.svg': undefined }), 'still.svg', 'missing'), 'a missing still fails naming the file')
   ok(refused(files({ 'still.svg': '<html><svg/></html>' }), 'still.svg', '<html>'), 'a still that is not an SVG document fails')
   ok(refused(files({ 'still.svg': SVG.replace(' xmlns="http://www.w3.org/2000/svg"', '') }), 'still.svg', 'SVG namespace'), 'and so does an svg root outside the SVG namespace')
@@ -172,9 +174,9 @@ console.log('\nround 2: boundary and XML regressions')
   const base = SVG.replace('</svg>', '<text></text></svg>')
   const remaining = lib.STILL_BUDGET - Buffer.byteLength(base)
   const exact = base.replace('<text>', '<text>' + 'é'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2))
-  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && refusal(files({ 'still.svg': exact })) === '' &&
+  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && refused(files({ 'still.svg': exact }), 'sample/still.svg', 'travel with a slide') &&
     refused(files({ 'still.svg': exact.replace('</text>', 'é</text>') }), 'sample/still.svg', '64 KB'),
-    'round2: a UTF-8 still at 65536 bytes builds and at 65538 bytes fails naming the file')
+    'round2: a UTF-8 still at 65536 bytes fails the inline rule (U11) and at 65538 bytes the byte cap, naming the file')
   const malformed = [
     SVG.replace('</svg>', '<text>R&D</text></svg>'),
     SVG.replace('<rect ', '<rect aria-label="&#0;" '),
@@ -238,9 +240,12 @@ console.log('\nround 4: independent refusal cases')
   const atLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
   writeFileSync(join(dir, 'sample', 'still.svg'), exact.replace('</text>', 'x</text>'))
   const overLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
-  ok(Buffer.byteLength(exact) === 65536 && atLimit.status === 0 && overLimit.status === 1 &&
-    overLimit.stderr.includes('sample/still.svg') && overLimit.stderr.includes('64 KB'),
-    'round4: CRLF still is accepted at 65536 wire bytes and refused at 65537 naming its file')
+  // U11 added the inline rule (slides/src/beta/libraryrules.ts): no encoding
+  // of a 64 KB still fits the 64 K characters an op carries, so the byte cap
+  // now builds nothing at the cap itself; it still counts CRLF as two bytes.
+  ok(Buffer.byteLength(exact) === 65536 && atLimit.status === 1 && atLimit.stderr.includes('sample/still.svg') && atLimit.stderr.includes('travel with a slide') &&
+    overLimit.status === 1 && overLimit.stderr.includes('sample/still.svg') && overLimit.stderr.includes('64 KB'),
+    'round4: CRLF still at 65536 wire bytes fails the inline rule, at 65537 the byte cap, each naming its file')
 
   const urls = ['ftp://slides.betamobility.ai/x', 'https://design.betamobility.ai:0/x',
     'https://design%2ebetamobility%2eai%2eevil.test/x']
@@ -460,9 +465,12 @@ console.log('\nround 5: independent boundary and CSS cases')
   const padding = lib.STILL_BUDGET - Buffer.byteLength(base)
   const exact = base.replace('<!--', '<!--' + 'x'.repeat(padding))
   const over = exact.replace('-->', '\r\n-->')
-  ok(Buffer.byteLength(exact) === 65536 && refusal(files({ 'still.svg': exact })) === '' &&
+  ok(Buffer.byteLength(exact) === 65536 && refused(files({ 'still.svg': exact }), 'travel with a slide') &&
     refused(files({ 'still.svg': over }), 'sample/still.svg', '64 KB'),
-    'round5: CRLF still at the byte cap builds and two more bytes fail naming the file')
+    'round5: CRLF still at the byte cap fails the inline rule (U11) and two more bytes fail the cap naming the file')
+  // and a still whose encoding does fit builds: the inline rule, not the cap, is what binds
+  const fits = base.replace('<!--', '<!--' + 'x'.repeat(60000))
+  ok(refusal(files({ 'still.svg': fits })) === '', 'a still of about 60 KB that encodes under the inline limit builds')
 
   const hostile = ['https://design.betamobility.ai\n.evil.test/x',
     'https://design.betamobility.ai%00.evil.test/x', 'https://design.betamobility.ai:443@evil.test/x']
@@ -494,9 +502,9 @@ console.log('\nround 6: independent boundary cases')
   const atLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
   writeFileSync(join(dir, 'sample', 'still.svg'), exact.replace('</text>', '🚌</text>'))
   const overLimit = spawnSync(process.execPath, [script, '--check', '--dir', dir], { encoding: 'utf8' })
-  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && atLimit.status === 0 && overLimit.status === 1 &&
+  ok(Buffer.byteLength(exact) === lib.STILL_BUDGET && atLimit.status === 1 && atLimit.stderr.includes('travel with a slide') && overLimit.status === 1 &&
     overLimit.stderr.includes('sample/still.svg') && overLimit.stderr.includes('64 KB'),
-    'round6: supplementary-plane still at 65536 bytes builds; one extra code point fails naming its file')
+    'round6: supplementary-plane still at 65536 bytes fails the inline rule (U11); one extra code point fails the byte cap naming its file')
 
   // WHATWG folds fullwidth ASCII and treats the final @ as the authority
   // delimiter. Test both a legitimate normalization and hostile near-misses.

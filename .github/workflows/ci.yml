@@ -334,6 +334,21 @@ jobs:
         # undo step per change, a held value said, a web scene's address.
         run: node scripts/test-beta-scenesettings-browser.mjs
 
+      - name: Beta scene gallery rig
+        # What in a library manifest is trusted (slides/src/beta/gallery.ts),
+        # both inserts against the untrusted gate, one undo step, and a
+        # collaborator receiving the inserted slide through the sync engine.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-beta-gallery.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-beta-gallery.mjs"
+          node --no-warnings "$RUNNER_TEMP/test-beta-gallery.mjs"
+
+      - name: Beta scene gallery (browser)
+        # The dialog on the store origin (played by routes): shelf, detail,
+        # insert, empty, failed, signed out; file:// fetches nothing; the
+        # button in the phone's ⋯ menu at 320px.
+        run: node scripts/test-beta-gallery-browser.mjs
+
       - name: Beta scene library validates
         # beta/library/<scene>/ folders build into one manifest. --check writes
         # nothing and uploads nothing; the upload is the maintainer's, with the

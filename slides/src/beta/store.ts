@@ -320,6 +320,18 @@ export function reloadChoice(o: { probe: StoreProbe; live: boolean }): boolean {
   return o.probe === 'changed' && !o.live
 }
 
+/**
+ * The scene library's manifest (2026-10-13-2236 plan, U11, KTD8), read from
+ * the store's login route with the tab's Access cookie. Only on the store
+ * origin; a lapsed session rejects with StoreSignedOutError, offline mode
+ * with OfflineError, as every other request here does. The JSON is returned
+ * unread: beta/gallery.ts is the one place that decides what in it to trust.
+ */
+export async function fetchLibrary(): Promise<unknown> {
+  const res = await storeRequest('/library/library.json', { method: 'GET', headers: { accept: 'application/json' } })
+  return res.json()
+}
+
 /** Replace the deck stored under `id`. The worker answers 200 with no body.
  *  Queued per id: each PUT starts after the previous one has settled. */
 export function putDeck(id: string, html: string): Promise<void> {
