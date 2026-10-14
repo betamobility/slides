@@ -214,6 +214,27 @@ ok(read('scripts/release.mjs').includes("'schema'"), 'release.mjs stages schema/
 console.log('\na runtime slide validates; a broken one does not\n')
 {
   const rt = (defs.slide.properties as Record<string, J>).runtime
+  // BETA FORK round 9: reject unknown slide keys even beside a complete
+  // library runtime, then accept saved outputs after repairing each field.
+  {
+    const oracle = structuredClone(file)
+    // Test-only mutation: prove this test detects an accidentally open slide.
+    if (process.env.U34_R9_MUTANT === 'schema') ((oracle.$defs as J).slide as J).additionalProperties = true
+    const misses: string[] = []
+    for (const steps of [-1, '12', 10001]) for (const kind of ['text', 'number', 'color']) {
+      const record = { steps, props: [{ key: 'mode', label: 'Mode', kind, default: null,
+        format: 'select:a|b' }], library: { id: 'map', version: 3 }, assets: ['data.json'] }
+      const d = structuredClone(starter) as unknown as J
+      const slide = (d.slides as J[])[0]
+      slide.runtime = checkRuntime(record)
+      slide.runtimeTypo = true
+      if (!check(stampSchema(d as never), oracle).some(e => e.includes('runtimeTypo'))) misses.push('unknown slide key')
+      delete slide.runtimeTypo
+      const errors = check(stampSchema(d as never), oracle)
+      if (errors.length) misses.push(...errors)
+    }
+    ok(!misses.length, `round 9 closed slide schema rejects unknown keys beside repaired library runtimes; ${misses}`)
+  }
   // BETA FORK, from the independent break round: what the gate hands back validates.
   const savedCases: Array<[string, J, boolean]> = [
     ['an uppercase HTTPS url', { url: 'HTTPS://example.com/scene', steps: 0, props: [] }, true],

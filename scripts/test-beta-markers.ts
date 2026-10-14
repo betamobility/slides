@@ -128,38 +128,77 @@ export function markerLines(file: string, text: string): Set<number> {
       if (fences % 2 === 1) inString = !inString
     })
   } else if (['yml', 'yaml'].includes(ext)) {
-    // Is a line string CONTENT rather than structure? Fail-closed, without
-    // parsing a block scalar's header (rounds 7 and 8 each found one more
-    // header form: `|2-`, then tags and anchors, `!!str &a |2-`). A line is
-    // content when any ANCESTOR (each earlier line with a smaller indent, up
-    // to column 0) has `|` or `>` in its value: whatever the header spells,
-    // a block scalar's text is indented under the line that opens it. A plain
-    // value with a `>` in it (`run: a > b`) is content-bearing too, and its
-    // deeper lines are its continuation, so treating them as content is right.
-    // The cost of the rule is a real marker refused in an odd layout, which
-    // CI reports; never a forgotten marker accepted.
+    // Where a block scalar's text is, by YAML 1.2's own rule (8.1.1.1), not by
+    // guessing (rounds 7, 8 and 9 each found a guess's hole: `|2-`, tags and
+    // anchors, a header on its own line; and the fail-closed guess refused a
+    // real comment between two `- run: |` steps).
+    //   a HEADER is `|` or `>` with up to two indicators (a digit 1-9, `+` or
+    //     `-`, either order), after any tags (`!x`) and anchors (`&x`), ending
+    //     the value of a key, of a sequence item, or a line of its own;
+    //   its OWNER is the node it belongs to: the key (its column; for an item,
+    //     the column after `- `), or, for a header on its own line, the key on
+    //     the nearest earlier structure line with a smaller indent;
+    //   the CONTENT indent is owner + the digit when there is one, else the
+    //     indent of the first non-blank line after the header, which must be
+    //     deeper than the owner (otherwise the scalar is empty);
+    //   the scalar ENDS at the first non-blank line indented less than that.
+    // Every line inside is text; a `#` there is never a marker. A line after
+    // it is structure again, and a `#` comment there counts.
     const indentOf = (l: string) => l.search(/\S/)
-    const unquoted = (l: string) => l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
-    const opensText = (l: string) => {
-      const bare = unquoted(l).replace(/(^|\s)#.*$/, '')
-      // the value: after `- ` for a sequence item, then after the first `:` if there is one
-      const item = /^\s*-(?:\s+|$)(.*)$/.exec(bare)
-      const rest = item ? item[1] : bare
-      const value = rest.includes(':') ? rest.slice(rest.indexOf(':') + 1) : item ? rest : ''
-      return /[|>]/.test(value)
+    const unquoted = (l: string) => l.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => '"' + ' '.repeat(Math.max(0, q.length - 2)) + '"')
+    const HEADER = /^(?:(?:![^\s]*|&[^\s]+)\s+)*[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$/
+    /** For a structure line: the column of the node its value belongs to, and whether that value is a block scalar header. */
+    const headerOf = (l: string): { owner: number; digit: number } | null => {
+      const bare = unquoted(l)
+      let col = indentOf(bare)
+      let rest = bare.slice(col)
+      let item = false
+      // peel `- ` sequence entries (nested `- - x` too)
+      for (let m; (m = /^-(?:\s+|$)/.exec(rest)); ) { col += m[0].length; rest = rest.slice(m[0].length); item = true }
+      // a key: `key:` then a space or the end of the line (a header starts with | > ! or &, never a key)
+      const key = /^[|>!&]/.test(rest) ? null : /^[^#:]*?:(?:\s+|$)/.exec(rest)
+      const value = key ? rest.slice(key[0].length) : rest
+      if (!HEADER.test(value.trim())) return null
+      const digit = Number(/[|>]([^\s#]*)/.exec(value)![1].replace(/[^1-9]/g, '') || 0)
+      // the owner: the key's column, or the item's; a header alone on its line is resolved by the caller (-1)
+      return { owner: key || item ? col : -1, digit }
     }
     const isComment = (l: string) => /^\s*#/.test(l)
-    const insideText = (i: number) => {
-      let floor = indentOf(lines[i])
-      for (let j = i - 1; j >= 0 && floor > 0; j--) {
-        const ind = indentOf(lines[j])
-        if (ind < 0 || isComment(lines[j]) || ind >= floor) continue
-        if (opensText(lines[j])) return true
-        floor = ind
+    const inText = new Set<number>()
+    for (let i = 0; i < lines.length; i++) {
+      if (isComment(lines[i]) || indentOf(lines[i]) < 0) continue
+      const h = headerOf(lines[i])
+      if (!h) continue
+      let owner = h.owner
+      if (owner < 0) {
+        // a header on its own line belongs to the nearest earlier structure line with a smaller indent
+        const here = indentOf(lines[i])
+        owner = -1
+        for (let j = i - 1; j >= 0; j--) {
+          const ind = indentOf(lines[j])
+          if (ind < 0 || isComment(lines[j]) || ind >= here) continue
+          const b = unquoted(lines[j]).slice(ind)
+          const dash = /^(-\s+)+/.exec(b)
+          owner = ind + (dash ? dash[0].length : 0)
+          break
+        }
+        if (owner < 0) owner = 0
       }
-      return false
+      let content = h.digit ? owner + h.digit : -1
+      let j = i + 1
+      for (; j < lines.length; j++) {
+        const ind = indentOf(lines[j])
+        if (ind < 0) { inText.add(j); continue } // blank: part of the scalar while it lasts
+        if (content < 0) {
+          if (ind <= owner) break // an empty scalar
+          content = ind
+        }
+        if (ind < content) break
+        inText.add(j)
+      }
+      i = j - 1
     }
-    lines.forEach((l, i) => { if (hashComment(l) && !insideText(i)) out.add(i + 1) })
+    lines.forEach((l, i) => { if (!inText.has(i) && hashComment(l)) out.add(i + 1) })
   }
   return out
 }
@@ -348,6 +387,27 @@ console.log('the rule itself (no git needed)')
     }
   }
   ok(misses.length === 0, `round 8 tagged/anchored block scalars cannot mark ${file}:1; falsely marked=${misses.join(', ')}`)
+}
+
+// Round 9: a scalar indicator can occupy its own line. Ruby/Psych parses
+// CAPTION as "# BETA FORK\ndata", not as a YAML comment. The content may
+// align with the indicator, or be deeper; neither form marks the new hook.
+{
+  const file = '.github/workflows/ci.yml'
+  const misses: string[] = []
+  for (const header of ['|', '|-', '>', '>-']) for (const pad of ['    ', '      ']) {
+    const lines = ['env:', '  CAPTION:', `    ${header}`, `${pad}# BETA FORK`, `${pad}data`]
+    const h = hooksOf(file, '@@ -0,0 +1,5 @@\n' + lines.map(l => '+' + l).join('\n') + '\n', lines)[0]
+    if (h.marked || h.file !== file || h.line !== 1) misses.push(`${header}/${pad.length}`)
+  }
+  ok(!misses.length, `round 9 separate-line scalar headers cannot mark a forgotten hook at ${file}:1; falsely marked=${misses}`)
+}
+// Round 9: a comment less indented than scalar content terminates that
+// content. This is a real heading comment immediately above the next step.
+{
+  const lines = ['steps:', '  - run: |', '      echo hi', '    # BETA FORK: next step', '  - run: echo next']
+  const h = hooksOf('.github/workflows/ci.yml', '@@ -3,0 +4,2 @@\n+' + lines.slice(3).join('\n+') + '\n', lines)[0]
+  ok(h.marked && h.line === 4, 'round 9 real marker between run steps is accepted after scalar dedent')
 }
 
 console.log('\nthe upstream this fork tracks')

@@ -226,6 +226,13 @@ export async function run(Miniflare) {
       throw new Error(`unexpected outbound fetch: ${req.url}`)
     },
   }
+  // Test-only mutation: route on the complete URL instead of its pathname.
+  // No product file is changed; the round-9 refusal case must catch this.
+  if (process.env.U34_R9_MUTANT === 'worker') {
+    mfOptions.script = readFileSync(mfOptions.scriptPath, 'utf8').replace(
+      "isPublicPath(path) && (m === 'GET' || m === 'HEAD')",
+      "(isPublicPath(path) || url.href.includes('/schema/')) && (m === 'GET' || m === 'HEAD')")
+  }
   const mf = new Miniflare(mfOptions)
 
   // The store's host. OLD_ORIGIN is the retired one, used only by the
@@ -319,6 +326,27 @@ export async function run(Miniflare) {
       eq(await r.text(), pagesBody(p), `GET ${p} returns the origin's exact bytes`)
       eq(proxied.length - before, 1, `GET ${p} made exactly one subrequest`)
       eq(new URL(proxied[proxied.length - 1].url).host, PAGES_ORIGIN, `GET ${p} fetched PAGES_ORIGIN, not its own host`)
+    }
+    // Round 9: suffixes cannot grant access to a private path; URL-normalized
+    // paths that really end up in /schema/ may read only the Pages origin.
+    {
+      const misses = []
+      for (const [path, publicRead] of [
+        ['/api/decks?next=/schema/slides.json', false],
+        ['/api/decks#/schema/slides.json', false],
+        ['/schema/../../api/decks?path=/schema/', false],
+        ['/api/../schema/slides.json', true],
+        ['/schema/slides.json?next=/api/decks', true],
+      ]) for (const method of ['DELETE', 'POST', 'GET', 'HEAD']) {
+        const before = proxied.length
+        const response = await call(method, path)
+        const body = await response.text()
+        const allowed = publicRead && ['GET', 'HEAD'].includes(method)
+        if (response.status !== (allowed ? 200 : 401) || proxied.length - before !== Number(allowed)
+          || (!allowed && body !== '') || (method === 'HEAD' && body !== '')
+          || (allowed && new URL(proxied.at(-1).url).host !== PAGES_ORIGIN)) misses.push(`${method} ${path}`)
+      }
+      ok(!misses.length, 'round 9 schema suffix confusion refuses private routes and writes: ' + misses.join(', '))
     }
     // Independent U3 refusal tests: prefix lookalikes, normalized traversal and writes.
     for (const path of ['/schema', '/schemaX/slides.json', '/schema%2Fslides.json',
