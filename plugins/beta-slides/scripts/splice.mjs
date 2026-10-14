@@ -1069,7 +1069,8 @@ export async function read(id, { out, env = process.env, log = console.log } = {
   for (const s of Array.isArray(doc.slides) ? doc.slides : []) {
     if (isRuntime(s) && s.runtime.library && typeof s.runtime.library === 'object') {
       const v = s.runtime.values && typeof s.runtime.values === 'object' ? s.runtime.values : {}
-      const shown = (Array.isArray(s.runtime.props) ? s.runtime.props : []).map((p) => `${p.key}=${JSON.stringify(Object.prototype.hasOwnProperty.call(v, p.key) ? v[p.key] : p.default)}`)
+      // the settings as the shell keeps them (a hand-edited entry it drops is not listed)
+      const shown = gatedProps(s.runtime.props).map((p) => `${p.key}=${JSON.stringify(Object.prototype.hasOwnProperty.call(v, p.key) ? v[p.key] : p.default)}`)
       log(`  ${s.id}  (library scene "${s.runtime.library.id}" v${s.runtime.library.version}: change its settings with a values edit)${shown.length ? `: ${shown.join(', ')}` : ''}`)
       continue
     }

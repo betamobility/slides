@@ -1828,6 +1828,66 @@ try {
         `U12-R2 bundle check is independent of caller cwd (root=${atRoot.status}, slides=${atSlides.status}: ${atSlides.stderr.trim()})`)
     }
 
+    // U12 independent round 3: expectations written before running the product.
+    {
+      const target = await seed(d)
+      const result = await runTool([target, '--edits', editsFile([
+        { slideId: 'cph', values: { zoom: 2 } },
+        { slideId: 'cph', values: { position: '-90, 180' } },
+      ])])
+      const fresh = (await readDeck(target)).doc
+      const expected = structuredClone(d)
+      Object.assign(slideOf(expected, 'cph').runtime.values, { zoom: 2, position: '-90, 180' })
+      ok(result.code === 0 && same(fresh, expected),
+        `U12-R3 AE6 successive partial values edits preserve the entire remaining document: ${result.err}`)
+
+      const before = await readDeck(target)
+      log = []
+      const refused = await runTool([target, project({ cph: { manifest: { props: [] } } }),
+        '--edits', editsFile([{ library: 'counter', id: 'must-not-insert', insertAfter: 'end' }])])
+      ok(refused.code !== 0 && /slide "cph"/.test(refused.err)
+        && putsTo(target).length === 0 && (await readDeck(target)).etag === before.etag,
+        'U12-R3 AE6 undeclared folder refuses alongside a valid library insert')
+    }
+    {
+      const target = await seed(d)
+      const before = await readDeck(target)
+      log = []
+      // Prototype-looking own keys must be treated as undeclared data, never
+      // as properties inherited from an ordinary JS object.
+      const result = await runTool([target, '--edits', editsFile([
+        { slideId: 'cph', values: { zoom: 8 } },
+        { slideId: 'cph', values: JSON.parse('{"__proto__":"must not land"}') },
+      ])])
+      ok(result.code !== 0 && /__proto__/.test(result.err)
+        && putsTo(target).length === 0 && (await readDeck(target)).etag === before.etag,
+        'U12-R3 undeclared prototype key refuses after an earlier valid values edit')
+    }
+    {
+      const target = await seed(d)
+      const before = await readDeck(target)
+      log = []
+      const result = await runTool([target, '--edits', editsFile([
+        { library: 'counter', id: 'same-new-id', insertAfter: 's1' },
+        { library: 'missing-round-three', id: 'same-new-id', insertAfter: 'end' },
+      ])])
+      ok(result.code !== 0 && /missing-round-three/.test(result.err)
+        && putsTo(target).length === 0 && (await readDeck(target)).etag === before.etag,
+        'U12-R3 missing manifest scene refuses even when insert id duplicates a valid edit')
+    }
+    {
+      const handEdited = structuredClone(d)
+      // The shell gate explicitly skips a null prop, leaving all real settings.
+      slideOf(handEdited, 'cph').runtime.props.unshift(null)
+      const target = await seed(handEdited)
+      const output = join(project({}), 'round-three-read.bento.html')
+      const listed = await runTool(['--read', target, '--out', output])
+      const gated = rt?.checkRuntime(slideOf(handEdited, 'cph').runtime, handEdited.assets)
+      ok(!!gated?.library && listed.code === 0
+        && /cph.*library scene "map".*place="Copenhagen".*zoom=7/.test(listed.out),
+        `U12-R3 read lists a library instance whose null prop the shell drops (exit=${listed.code}: ${listed.err.trim()})`)
+    }
+
     // what a library insert refuses
     const refusals: Array<[string, unknown, RegExp]> = [
       ['an id the library does not have', { library: 'harbour', id: 'h', insertAfter: 'end' }, /"harbour" is not in the scene library/],
