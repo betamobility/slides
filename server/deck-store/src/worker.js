@@ -32,6 +32,11 @@
 //   PUT    /api/harness/decks/:id  replace; If-Match REQUIRED (428), stale → 412
 //   PUT    /api/harness/decks/:id/assets/:name
 //                                  upload a scene asset, service token only
+//   PUT    /api/harness/library.json
+//                                  replace the scene library, service token only
+//   GET    /api/harness/library.json
+//                                  the scene library, for a service token
+//   GET    /library/library.json   the scene library, for a signed-in person
 //   GET    /link/:code             the approval page for a pairing
 //   POST   /link/:code/approve     record the consent; same-origin + nonce
 //   POST   /api/grants/:hash/revoke
@@ -46,6 +51,7 @@
 //   PUT    /api/publish/decks/:id  replace; If-Match REQUIRED, `collab`
 //                                  restored, the shell pinned
 //   PUT    /api/publish/decks/:id/assets/:name    upload a scene asset
+//   GET    /api/publish/library.json   the scene library, for a grant
 //
 // A person (any @betamobility.io identity) may read, list, create and replace
 // anything; only DELETE is the owner's. A service token (Claude from a file
@@ -679,6 +685,86 @@ async function serveAsset(req, env, id, name) {
   })
 }
 
+// --- the scene library (2026-10-13-2236 plan, U8, KTD8, KTD13) ------------------
+//
+// ONE object: the manifest scripts/build-beta-library.mjs builds from
+// beta/library/ in the repo. It lists every reusable scene with its HTML and
+// its still inlined, so it is never public and never on the Pages origin: it
+// lives in the bucket beside the decks, under a key no deck or asset can have.
+//
+// One writer, three readers, each inside the gate its prefix already has:
+//   PUT /api/harness/library.json   the service token only, like the asset upload
+//   GET /api/harness/library.json   the service token (a machine listing the library)
+//   GET /api/publish/library.json   a grant (the splice tool, as the person who approved)
+//   GET /library/library.json       a signed-in person (the editor's gallery)
+// A grant cannot reach a harness path and the token cannot reach a publish
+// path, which is why the same bytes are served three times.
+
+const LIBRARY_KEY = 'library/library.json'
+const LIBRARY_MAX = 8 * 1024 * 1024
+const SCENE_ID_RE = /^[a-z][a-z0-9-]{0,39}$/
+
+// Hosts a web scene may point at: the build script's WEB_HOSTS, restated. The
+// build is where a scene is reviewed, but the upload is authorised by one
+// long-lived shared token, so the store does not take the allowlist on trust.
+const LIBRARY_WEB_HOSTS = ['slides.betamobility.ai', 'design.betamobility.ai']
+
+/** The least a manifest must be for anything to be stored: the build script's `manifestShape`, line for line. */
+function manifestShape(v) {
+  const obj = (x) => !!x && typeof x === 'object' && !Array.isArray(x)
+  if (!obj(v) || v.format !== 'beta/library' || v.v !== 1 || !Array.isArray(v.scenes)) return false
+  const ids = new Set()
+  return v.scenes.every((s) => {
+    if (!obj(s) || typeof s.id !== 'string' || !SCENE_ID_RE.test(s.id) || ids.has(s.id) || !Number.isInteger(s.version) || s.version < 1) return false
+    ids.add(s.id)
+    if (s.kind === 'runtime') return typeof s.html === 'string' && s.url === undefined
+    if (s.kind !== 'web' || typeof s.url !== 'string' || s.html !== undefined) return false
+    let u
+    try { u = new URL(s.url) } catch { return false }
+    return u.protocol === 'https:' && !u.port && !u.username && !u.password && LIBRARY_WEB_HOSTS.includes(u.hostname)
+  })
+}
+
+async function putLibrary(req, env) {
+  const type = (req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+  if (type !== 'application/json') return text(415, 'type')
+  const declared = Number(req.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > LIBRARY_MAX) return text(413, 'size')
+  const bytes = await req.arrayBuffer()
+  if (bytes.byteLength > LIBRARY_MAX) return text(413, 'size')
+  let parsed
+  try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { return text(400, 'json') }
+  if (!manifestShape(parsed)) return text(400, 'shape')
+  const stored = await env.DECKS.put(LIBRARY_KEY, bytes, { httpMetadata: { contentType: 'application/json' } })
+  return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag } })
+}
+
+// `no-cache`, like an asset: a new upload must show at the next open, and the
+// reader revalidates with If-None-Match for the price of a 304.
+async function serveLibrary(req, env) {
+  const headers = (obj) => ({
+    'cache-control': 'private, no-cache',
+    etag: obj.httpEtag,
+    [ETAG_HEADER]: obj.httpEtag,
+    'x-content-type-options': 'nosniff',
+    // JSON, served as JSON; if anything ever opened it as a document it has no origin to use
+    'content-security-policy': 'sandbox',
+  })
+  const inm = (req.headers.get('if-none-match') || '').trim()
+  if (inm) {
+    const head = await env.DECKS.head(LIBRARY_KEY)
+    if (!head) return empty(404)
+    const tags = inm === '*' ? ['*'] : inm.split(',').map((t) => t.trim().replace(/^W\//, ''))
+    if (tags.includes('*') || tags.includes(head.httpEtag)) return new Response(null, { status: 304, headers: headers(head) })
+  }
+  const obj = await env.DECKS.get(LIBRARY_KEY)
+  if (!obj) return empty(404) // nothing uploaded yet
+  return new Response(obj.body, {
+    status: 200,
+    headers: { ...headers(obj), 'content-type': 'application/json; charset=utf-8', 'content-length': String(obj.size) },
+  })
+}
+
 const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' blob:",
@@ -807,6 +893,8 @@ async function agentRoutes(req, env, ctx, url, path, m) {
   if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true })
   const pa = new RegExp(`^/api/publish/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
   if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
+  // the scene library, read as the person who approved (U8); a grant never writes it
+  if (path === '/api/publish/library.json' && m === 'GET') return serveLibrary(req, env)
 
   // NOT routed here, deliberately (R9): no list, so a leaked grant cannot
   // enumerate anyone's work, and no delete, so it cannot destroy a deck it is
@@ -857,6 +945,12 @@ export default {
     // that list is reads of maintainer-published bytes only.
     const who = await verifyAccess(req, env)
     if (!who) return empty(401)
+
+    // The scene library (U8). Written by the service token alone, like the
+    // asset upload below: a route that lets any signed-in page replace what
+    // every gallery shows is a way to plant scenes in other people's decks.
+    if (path === '/api/harness/library.json' && m === 'PUT') return agentWrite(who) ? putLibrary(req, env) : empty(403)
+    if (path === '/api/harness/library.json' && m === 'GET') return serveLibrary(req, env)
 
     // Harness routes: same handlers, open to any verified identity.
     if (path === '/api/harness/decks' && m === 'POST') return create(req, env, ctx, who)
@@ -945,6 +1039,8 @@ export default {
     if (sm && m === 'HEAD') return serveHead(env, sm[1])
     const sa = new RegExp(`^/d/(${ID_PAT})/assets/([^/]+)$`).exec(path)
     if (sa && m === 'GET') return serveAsset(req, env, sa[1], sa[2])
+    // the scene library, for the editor's gallery in a store tab (U8)
+    if (path === '/library/library.json' && m === 'GET') return serveLibrary(req, env)
 
     return empty(404)
   },

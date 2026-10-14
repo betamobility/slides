@@ -30,6 +30,7 @@ import { mintDocIntoBlock, indexPage } from '../src/pages.js'
 // verify, list and revoke are worker-side functions with no route of their
 // own, and the routes that use them arrive in U2 and U3.
 import { mintGrant, verifyGrant, listGrants, revokeGrant, GRANT_TTL_S } from '../src/grant.js'
+import { buildManifest, manifestShape, serialize, WEB_HOSTS } from '../../../scripts/lib/beta-library.mjs'
 
 const subtle = webcrypto.subtle
 const here = dirname(fileURLToPath(import.meta.url))
@@ -1900,6 +1901,326 @@ export async function run(Miniflare) {
     // binding fail, and the alternatives were a stub that proves nothing or an
     // assertion that cannot fail. The absent-binding case above covers the same
     // two-line branch (503 with the flag on, pass-through with it off).
+
+    // ------------------------------------------------ the scene library (U8)
+    console.log('\nthe scene library: one writer, three gated readers (2026-10-13-2236 plan, U8)')
+    {
+      const lib = serialize(buildManifest(join(dirname(fileURLToPath(import.meta.url)), '../../../beta/library')))
+      const J = { 'content-type': 'application/json' }
+      // nothing uploaded yet: every reader gets 404, and still needs its own credential
+      r = await call('GET', '/library/library.json', { as: 'alice' })
+      eq(r.status, 404, 'before any upload a signed-in person gets 404')
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 404, 'and so does the service token')
+      r = await call('GET', '/api/publish/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 404, 'and so does a grant')
+
+      // the one writer
+      r = await call('PUT', '/api/harness/library.json', { headers: J, body: lib })
+      eq(r.status, 401, 'an upload with no credential is 401')
+      r = await call('PUT', '/api/harness/library.json', { headers: { ...J, ...asGrant(aliceTok) }, body: lib })
+      eq(r.status, 401, 'a grant cannot upload: it is not an identity on a harness path')
+      r = await call('PUT', '/api/harness/library.json', { as: 'alice', headers: J, body: lib })
+      eq(r.status, 403, 'a signed-in person cannot upload either (403, as for the asset upload)')
+      r = await call('PUT', '/api/publish/library.json', { headers: { ...J, ...asGrant(aliceTok) }, body: lib })
+      eq(r.status, 401, 'there is no upload under the grant prefix')
+      r = await call('PUT', '/library/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 403, 'nor under the people path, where a service token stops')
+      r = await call('GET', '/library/library.json', { as: 'alice' })
+      eq(r.status, 404, 'none of the refused uploads stored anything')
+
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: { 'content-type': 'text/html' }, body: lib })
+      eq(r.status, 415, 'the service token with the wrong content type is 415')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: '{not json' })
+      eq(r.status, 400, 'bytes that do not parse are 400')
+      for (const [bad, why] of [
+        ['[1,2,3]', 'a list'], ['{"format":"bento/slides","v":1,"scenes":[]}', 'another format'],
+        ['{"format":"beta/library","v":2,"scenes":[]}', 'another version'], ['{"format":"beta/library","v":1}', 'no scenes list'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"../x","version":1,"kind":"runtime"}]}', 'a scene id that is not one'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"script"}]}', 'a scene kind that is not one'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"runtime","html":""},{"id":"x","version":2,"kind":"runtime","html":""}]}', 'two scenes with one id'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":0,"kind":"runtime","html":""}]}', 'a version below 1'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"runtime"}]}', 'a runtime scene with no page'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"web","url":"https://example.com/x"}]}', 'a web scene on a host Beta does not control'],
+        ['{"format":"beta/library","v":1,"scenes":[{"id":"x","version":1,"kind":"web","url":"http://slides.betamobility.ai/x"}]}', 'a web scene over http'],
+      ]) {
+        r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: bad })
+        eq(r.status, 400, `a manifest that is ${why} is 400`)
+        eq(manifestShape(JSON.parse(bad)), false, `and the build script's own check refuses ${why} too`)
+      }
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: '{"format":"beta/library","v":1,"scenes":[],"pad":"' + 'x'.repeat(8 * 1024 * 1024) + '"}' })
+      eq(r.status, 413, 'more than 8 MB is 413')
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 404, 'no refused body was stored')
+
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 200, 'the service token uploads the manifest built from beta/library/')
+      const etag = r.headers.get('etag')
+      ok(!!etag && r.headers.get('x-bento-etag') === etag, 'and gets its ETag back')
+
+      // three readers, the same bytes
+      const readers = [
+        ['a signed-in person at /library/library.json', '/library/library.json', { as: 'alice' }],
+        ['the service token at /api/harness/library.json', '/api/harness/library.json', { as: 'service' }],
+        ['a grant at /api/publish/library.json', '/api/publish/library.json', { headers: asGrant(aliceTok) }],
+      ]
+      for (const [who, path, opts] of readers) {
+        r = await call('GET', path, opts)
+        eq(r.status, 200, `${who} reads it`)
+        eq(await r.text(), lib, 'byte for byte what was uploaded')
+        eq(r.headers.get('content-type'), 'application/json; charset=utf-8', 'as JSON')
+        eq(r.headers.get('cache-control'), 'private, no-cache', 'never cached without revalidation, never by a shared cache')
+        eq(r.headers.get('x-content-type-options'), 'nosniff', 'never sniffed into a document')
+        eq(r.headers.get('etag'), etag, 'under the upload\'s ETag')
+        r = await call('GET', path, { ...opts, headers: { ...(opts.headers || {}), 'if-none-match': etag } })
+        eq(r.status, 304, 'and a revalidation costs a 304')
+      }
+      const parsed = JSON.parse(lib)
+      eq(parsed.scenes.map((s) => `${s.id}@${s.version}`).join(','), 'counter@1,map@1', 'the manifest lists both seed scenes with ids and versions')
+      ok(parsed.scenes.every((s) => s.props.every((p) => 'default' in p) && s.presets.length > 0), 'each with defaults and at least one preset')
+
+      // each reader's path answers only its own credential
+      r = await call('GET', '/library/library.json')
+      eq(r.status, 401, 'no credential at the people path is 401 (in production Access redirects to login before the worker runs)')
+      r = await call('GET', '/library/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 401, 'a grant at the people path is 401')
+      r = await call('GET', '/library/library.json', { as: 'service' })
+      eq(r.status, 403, 'the service token at the people path is 403: it has its own')
+      r = await call('GET', '/api/harness/library.json', { headers: asGrant(aliceTok) })
+      eq(r.status, 401, 'a grant at the token path is 401')
+      r = await call('GET', '/api/harness/library.json')
+      eq(r.status, 401, 'no credential at the token path is 401')
+      r = await call('GET', '/api/publish/library.json')
+      eq(r.status, 401, 'no credential at the grant path is 401')
+      r = await call('GET', '/api/publish/library.json', { as: 'alice' })
+      eq(r.status, 401, 'a person\'s assertion at the grant path is 401: only a grant counts there')
+      r = await call('GET', '/api/publish/library.json', { as: 'service' })
+      eq(r.status, 401, 'and so is the service token\'s')
+      r = await call('GET', '/api/publish/library.json', { headers: asGrant('x'.repeat(43)) })
+      eq(r.status, 401, 'a bearer that is not a grant is 401')
+
+      // the manifest is not a deck, and nothing public serves it
+      r = await call('GET', '/api/decks', { as: 'alice' })
+      ok(!(await r.text()).includes('library'), 'the manifest does not show up in the deck list')
+      for (const path of ['/library.json', '/library/', '/library', '/library/library.json/', '/library/other.json', '/api/harness/library', '/api/publish/library.json/x']) {
+        r = await call('GET', path)
+        ok(r.status === 401, `nothing answers ${path} without a credential (${r.status})`)
+      }
+      r = await call('DELETE', '/api/harness/library.json', { as: 'service' })
+      ok(r.status === 403 || r.status === 404, `there is no delete (${r.status})`)
+      r = await call('GET', '/api/harness/library.json', { as: 'service' })
+      eq(r.status, 200, 'and the manifest is still there')
+
+      // the store's own copy of the web-host allowlist is the build script's
+      eq(JSON.stringify(/const LIBRARY_WEB_HOSTS = (\[[^\]]*\])/.exec(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/worker.js'), 'utf8'))?.[1].replace(/'/g, '"').replace(/\s/g, '')), JSON.stringify(JSON.stringify(WEB_HOSTS)), 'the worker and the build script name the same web hosts')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'w', version: 1, kind: 'web', url: 'https://slides.betamobility.ai/scenes/w' }] }) })
+      eq(r.status, 200, 'a web scene on a Beta host is accepted')
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: lib })
+      eq(r.status, 200, 'and the real manifest goes back in')
+
+      // Independent adversarial review: authorization must precede conditional
+      // reads, and alternate spellings/methods must not reach the stored object.
+      {
+        const identities = [
+          ['anonymous', {}, [401, 401, 401]],
+          ['person', { as: 'alice' }, [200, 200, 401]],
+          ['service', { as: 'service' }, [403, 200, 401]],
+          ['grant', { headers: asGrant(aliceTok) }, [401, 401, 200]],
+        ]
+        const paths = ['/library/library.json', '/api/harness/library.json', '/api/publish/library.json']
+        let readsSafe = true, methodsSafe = true, variantsSafe = true
+        for (const [identity, opts, expected] of identities) {
+          for (const [idx, path] of paths.entries()) {
+            const response = await call('GET', path + '?cache=independent', {
+              ...opts, headers: { ...(opts.headers || {}), 'if-none-match': '*' },
+            })
+            const want = expected[idx] === 200 ? 304 : expected[idx]
+            if (response.status !== want || await response.text() !== '') readsSafe = false
+            for (const method of ['HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS', 'PUT']) {
+              if (method === 'PUT' && identity === 'service' && idx === 1) continue
+              const response = await call(method, path, {
+                ...opts, headers: { ...(opts.headers || {}), ...J },
+                ...(method === 'HEAD' ? {} : { body: lib }),
+              })
+              if (![401, 403, 404, 405].includes(response.status)) methodsSafe = false
+            }
+            for (const variant of [path + '/', path.replace('library.json', 'Library.json'), path.replace('library.json', '%6cibrary.json')]) {
+              const response = await call('GET', variant, opts)
+              if (![401, 403, 404].includes(response.status)) variantsSafe = false
+            }
+          }
+        }
+        ok(readsSafe, 'adversarial: every identity is gated before wildcard conditional GET with a query')
+        ok(methodsSafe, 'adversarial: every non-writer identity and alternate method is refused on all library routes')
+        ok(variantsSafe, 'adversarial: trailing slash, case and percent encoding cannot bypass any library gate')
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(await r.text() === lib, 'adversarial: refused method matrix leaves the stored manifest byte-identical')
+        let hostsSafe = true
+        for (const url of ['https://slides.betamobility.ai%2eevil.test/x', 'https://design.betamobility.ai./x', 'https://design.betamobility.ai:444/x']) {
+          const value = { format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: serialize(value) })
+          if (r.status !== 400 || manifestShape(value)) hostsSafe = false
+        }
+        ok(hostsSafe, 'adversarial: worker and build shape check reject encoded suffix, trailing dot and alternate port hosts')
+        r = await call('GET', '/library/library.json', { origin: OLD_ORIGIN })
+        ok(r.status === 301 && await r.text() === '' && r.headers.get('location') === ORIGIN + '/library/library.json',
+          'adversarial: retired host redirects without exposing manifest bytes')
+      }
+
+      // Round 2: reject authority parsing tricks independently at the worker,
+      // and do not let a known validator tag substitute for authorization.
+      {
+        let refusedHosts = true
+        for (const url of ['https://slides.betamobility.ai%09.evil.test/x', 'https://slides.betamobility.ai%2f.evil.test/x',
+          'https://slides.betamobility.ai@evil.test/x', 'http://design.betamobility.ai:443/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400) refusedHosts = false
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(refusedHosts && await r.text() === lib,
+          'round2: worker refuses encoded authority delimiters, userinfo and HTTP on port 443 without changing the library')
+        let conditionalSafe = true
+        for (const [path, opts, expected] of [
+          ['/library/library.json', {}, 401],
+          ['/library/library.json', { as: 'service' }, 403],
+          ['/api/harness/library.json', { headers: asGrant(aliceTok) }, 401],
+          ['/api/publish/library.json', { as: 'alice' }, 401],
+          ['/api/publish/library.json', { as: 'service' }, 401],
+          ['/library/library.json', { as: 'alice' }, 304],
+          ['/api/harness/library.json', { as: 'service' }, 304],
+          ['/api/publish/library.json', { headers: asGrant(aliceTok) }, 304],
+        ]) {
+          r = await call('GET', path, { ...opts, headers: { ...(opts.headers || {}), 'if-none-match': `"other", W/${etag}` } })
+          if (r.status !== expected || await r.text() !== '') conditionalSafe = false
+        }
+        ok(conditionalSafe, 'round2: weak ETag lists revalidate only for each route’s authorized readers')
+      }
+
+      // Round 3: lifetime checks precede cache validation; parser spellings
+      // are checked at the HTTP boundary too, without any outbound fetch.
+      {
+        let gated = true
+        for (const token of [deadGrant.token, expiredGrant.token]) {
+          for (const validator of ['*', etag]) {
+            r = await call('GET', '/api/publish/library.json?round=3', { headers: asGrant(token, { 'if-none-match': validator }) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        ok(gated, 'round3: expired and revoked grants cannot read or revalidate the manifest')
+        let hostsSafe = true
+        for (const url of ['https://slides。betamobility.ai.evil.test/x', 'https://%64esign.betamobility.ai.evil.test/x', 'http:\\design.betamobility.ai/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400) hostsSafe = false
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(hostsSafe && await r.text() === lib,
+          'round3: worker rejects Unicode dots, encoded hostname and backslash HTTP without replacing the manifest')
+        let identitiesSafe = true
+        const expiredIdentity = await sign(k1, 'k1', human('alice@betamobility.io', { exp: now() - 10 }))
+        for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'], ['PUT', '/api/harness/library.json']]) {
+          r = await call(method, path, { as: expiredIdentity, headers: { ...J, 'if-none-match': '*' }, ...(method === 'PUT' ? { body: lib } : {}) })
+          if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) identitiesSafe = false
+        }
+        ok(identitiesSafe, 'round3: an expired Access identity cannot upload, read or revalidate through either Access route')
+      }
+
+      // Round 4: a correctly signed token for a different Access application
+      // is still the wrong credential. Cache validators do not upgrade it.
+      {
+        let gated = true
+        for (const claims of [human('alice@betamobility.io', { aud: ['foreign-application'] }),
+          service({ aud: ['foreign-application'] }), service({ iss: 'https://foreign.cloudflareaccess.com' })]) {
+          const token = await sign(k1, 'k1', claims)
+          for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'],
+            ['GET', '/api/publish/library.json'], ['PUT', '/api/harness/library.json']]) {
+            r = await call(method, path + '?round=4', { as: token, headers: { ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && await r.text() === lib,
+          'round4: foreign-audience and foreign-issuer assertions cannot read, revalidate or replace the library')
+
+        let rejected = true
+        for (const url of ['ftp://slides.betamobility.ai/x', 'https://design.betamobility.ai:0/x',
+          'https://design%2ebetamobility%2eai%2eevil.test/x']) {
+          r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (r.status !== 400 || await r.text() !== 'shape') rejected = false
+        }
+        r = await call('GET', '/library/library.json', { as: 'alice' })
+        ok(rejected && await r.text() === lib,
+          'round4: worker refuses FTP, port zero and an encoded dotted suffix without replacing the library')
+      }
+
+      // Round 5: a valid signature is insufficient before nbf. Exercise
+      // reads, conditional reads and upload, then confirm the bytes survived.
+      {
+        let gated = true
+        for (const claims of [human('alice@betamobility.io', { nbf: now() + 3600 }),
+          service({ nbf: now() + 3600 })]) {
+          const token = await sign(k1, 'k1', claims)
+          for (const [method, path] of [['GET', '/library/library.json'], ['GET', '/api/harness/library.json'],
+            ['GET', '/api/publish/library.json'], ['PUT', '/api/harness/library.json']]) {
+            r = await call(method, path + '?round=5', { as: token, headers: { ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}) })
+            if (r.status !== 401 || await r.text() !== '' || r.headers.has('etag')) gated = false
+          }
+        }
+        r = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && await r.text() === lib,
+          'round5: not-yet-valid person and service assertions cannot read, revalidate or replace the manifest')
+      }
+
+      // Round 6: raw Access headers and a cookie are not a verified identity.
+      // A grant alongside them must still be restricted to its own prefix.
+      {
+        const spoof = { 'cf-access-client-id': 'deadbeef.access',
+          'cf-access-client-secret': 'synthetic-round6-secret',
+          cookie: 'CF_Authorization=synthetic-round6-cookie',
+          'cf-access-authenticated-user-email': 'alice@betamobility.io' }
+        let gated = true
+        for (const extra of [{}, asGrant(aliceTok)]) {
+          for (const [method, path] of [['GET', '/library/library.json'],
+            ['GET', '/api/harness/library.json'], ['PUT', '/api/harness/library.json']]) {
+            const response = await call(method, path + '?round=6', {
+              headers: { ...spoof, ...extra, ...J, 'if-none-match': '*' },
+              ...(method === 'PUT' ? { body: lib } : {}),
+            })
+            if (response.status !== 401 || await response.text() !== '' || response.headers.has('etag')) gated = false
+          }
+        }
+        const denied = await call('GET', '/api/publish/library.json', { headers: spoof })
+        const granted = await call('GET', '/api/publish/library.json', { headers: { ...spoof, ...asGrant(aliceTok) } })
+        const unchanged = await call('GET', '/api/harness/library.json', { as: 'service' })
+        ok(gated && denied.status === 401 && await denied.text() === '' &&
+          granted.status === 200 && await granted.text() === lib && await unchanged.text() === lib,
+          'round6: spoofed Access headers and cookie cannot upgrade a grant or authorize a library read or write')
+
+        let rejected = true
+        for (const url of ['https://ｄｅｓｉｇｎ.betamobility.ai.evil.test/scene',
+          'https://design.betamobility.ai:00444/scene',
+          'https://design.betamobility.ai@slides.betamobility.ai@evil.test/scene']) {
+          const response = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J,
+            body: serialize({ format: 'beta/library', v: 1, scenes: [{ id: 'web', version: 1, kind: 'web', url }] }) })
+          if (response.status !== 400 || await response.text() !== 'shape') rejected = false
+        }
+        const after = await call('GET', '/library/library.json', { as: 'alice' })
+        ok(rejected && await after.text() === lib,
+          'round6: worker refuses fullwidth off-list host, padded nondefault port and repeated userinfo without replacing the manifest')
+      }
+
+      // a second upload replaces the first
+      const next = serialize({ format: 'beta/library', v: 1, scenes: [] })
+      r = await call('PUT', '/api/harness/library.json', { as: 'service', headers: J, body: next })
+      eq(r.status, 200, 'a second upload is accepted')
+      r = await call('GET', '/library/library.json', { as: 'alice', headers: { 'if-none-match': etag } })
+      eq(r.status, 200, 'the old ETag no longer matches')
+      eq(await r.text(), next, 'and the person reads the new manifest')
+    }
 
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
