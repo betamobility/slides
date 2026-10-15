@@ -348,5 +348,36 @@ console.log('\nthe Beta toolkit copy')
   ok(/inside this skill's own folder/.test(skill), "the skill looks for splice.mjs in its own folder first")
 }
 
+console.log('\nthe manual: start block, triggers and the scene library')
+{
+  // "Referencing Slides" must load the skill: the words people type are in
+  // the description, and the description fits the 1024-character skill limit
+  // that claude.ai enforces on upload.
+  const desc = /^description: >-\n([\s\S]*?)\n---/m.exec(skill)?.[1].replace(/\n\s*/g, ' ').trim() ?? ''
+  ok(desc.length > 0 && desc.length <= 1024, `the skill description fits 1024 characters (${desc.length})`)
+  for (const w of ['Slides', 'slides.betamobility.ai', 'live scene', 'widget', 'Scenes gallery']) ok(desc.includes(w), `the description names "${w}"`)
+  // The guide served from the Beta host sends Claude to the Beta build first:
+  // upstream's install lines (nyblnet/bento, bento.page) come after.
+  const start = guide.indexOf('**Beta build: start here.**')
+  ok(start >= 0 && start < guide.indexOf('nyblnet/bento'), 'docs/agents.md opens with the Beta start block, before upstream\'s install lines')
+  const block = guide.slice(start, guide.indexOf('> **Bento is a suite.**'))
+  ok(/\/plugin marketplace add betamobility\/slides/.test(block) && /beta-slides@beta-slides/.test(block), 'the start block installs beta-slides@beta-slides from betamobility/slides')
+  ok(new RegExp(`${SITE.origin.replace(/[.]/g, '\\.')}/releases/${APPS.slides.dir}/${APPS.slides.shell.replace(/[.]/g, '\\.')}`).test(block), 'and downloads the shell from the Beta release path')
+  const rules = read('slides/src/beta/libraryrules.ts')
+  const hosts = JSON.parse((/WEB_HOSTS: readonly string\[\] = (\[[^\]]*\])/.exec(rules)?.[1] ?? '[]').replace(/'/g, '"'))
+  for (const [name, text] of [['the skill', skill], ['docs/agents.md', guide]]) {
+    ok(/^### The scene library: insert a reviewed scene, change its settings$/m.test(text), `${name} says how to insert a library scene`)
+    const adding = sectionOf(text, '### Adding a scene to the library')
+    ok(adding.length > 0, `${name} carries "Adding a scene to the library"`)
+    ok(/beta\/library\/<id>\//.test(adding) && /beta\/library\/counter\//.test(adding), `${name} names the folder and the scene to copy`)
+    for (const c of ['node scripts/build-beta-library.mjs --check', 'node scripts/test-beta-library.ts', 'node scripts/test-beta-library-browser.mjs']) {
+      ok(adding.includes(c) && read('.github/workflows/ci.yml').includes(c.replace('node ', '').split(' ')[0]), `${name} gives "${c}", which CI runs`)
+    }
+    ok(/--upload/.test(adding) && /never one an agent takes on its own/.test(adding), `${name} says the upload is the maintainer's step`)
+    ok(hosts.length > 0 && hosts.every((h) => adding.includes(`\`${h}\``)), `${name} names every WEB_HOSTS entry (${hosts.join(', ')})`)
+    for (const k of ['bool', 'latlon', 'select:a|b|c', 'range:min:max:step']) ok(adding.includes(`\`${k}\``), `${name} names the ${k} format hint`)
+  }
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

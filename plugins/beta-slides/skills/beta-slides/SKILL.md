@@ -1,19 +1,19 @@
 ---
 name: beta-slides
 description: >-
-  Create and edit Beta Mobility presentations — single-file .bento.html decks
+  Create and edit Beta Mobility presentations: single-file .bento.html decks
   whose document is plain JSON in a "#bento-doc" script block, built on the
   Beta fork of bento/slides. Use whenever the user wants a slide deck or
-  presentation: starting from NOTHING (it downloads the Beta build from
-  slides.betamobility.ai, or starts from a Beta template), from source
-  material, or by improving an existing .bento.html. Applies the Beta design
-  system through the deck's own theme, layouts and palette slots, refreshes
-  data at edit time with an as-of date, and exports editable PowerPoint. Covers
-  the three kinds of slide: native slides people edit in bento, code slides
-  (syntax-highlighted, morphing between steps) and live HTML scenes (runtime
-  slides) spliced into decks in the store, including porting a hand-rolled
-  reveal.js deck section by section. Full
-  schema + recipes at https://slides.betamobility.ai/agents.md.
+  presentation, or mentions Slides, bento, slides.betamobility.ai, a deck
+  link, a live scene, a widget or the Scenes gallery: starting from nothing
+  (Beta build or template from slides.betamobility.ai), from source material,
+  or by improving an existing deck. Applies the Beta design system through
+  the deck's own theme, layouts and palette slots, dates refreshed data, and
+  exports editable PowerPoint. Covers native slides, code slides, live HTML
+  scenes (runtime slides) spliced into decks in the store, porting a
+  reveal.js deck, and the scene library: insert a reviewed widget, change its
+  settings, or add a new one. Full schema + recipes at
+  https://slides.betamobility.ai/agents.md.
 ---
 
 # Authoring Beta decks
@@ -669,6 +669,65 @@ it from a folder:
   Without it the run is refused, naming the slide: the replace would discard
   what the person set. Declared, the replace is a normal replace (values are
   dropped, as for any replace) and the marker stays.
+
+### Adding a scene to the library
+
+Write a library scene when the same live scene will be wanted in more than
+one deck: a widget people insert from the editor's **Scenes** gallery and
+tune in its settings panel. A scene for one deck stays a scene folder in
+that deck's project. Check `node splice.mjs --library` first; a setting on
+an existing scene is cheaper than a new one.
+
+A library scene is a folder in the betamobility/slides repository, reviewed
+like code on its own branch and pull request:
+
+```
+beta/library/<id>/
+  scene.json    name, version, description, kind, steps, props, presets
+  index.html    the page (kind "runtime"), the same scene contract as any runtime slide
+  still.svg     what the slide shows wherever no frame runs
+```
+
+- `<id>` is lower case letters, digits and hyphens, starting with a letter.
+  Copy `beta/library/counter/` (no steps) or `beta/library/map/` (two steps)
+  as the starting point.
+- `version` is a whole number. Raise it on every change: a deck keeps the
+  copy it was given, and the number says which.
+- `index.html` follows "A scene" above: wait for `bento:init`, send
+  `bento:ready`, leave steps and navigation to the shell, honour reduced
+  motion, and draw its defaults on its own so it previews in a plain
+  browser tab. Everything inline; at most 256 KB as the shell measures it
+  (base64, padding included).
+- `still.svg` is a picture: no script, no `foreignObject`, no event
+  handlers, no links out, and under about 60 KB so it travels with the
+  slide to every collaborator.
+- `props` are the settings the person edits in the panel, with the shell's
+  three kinds: `text`, `number`, `color`. Anything else rides on `text` or
+  `number` with a `format` hint: `bool`, `latlon`, `select:a|b|c`,
+  `range:min:max:step`. Every prop has a `default`, and the scene reads
+  every value from `bento:init` and `bento:props`.
+- `presets` name sets of values; there is at least one, the gallery opens on
+  the first, and a preset lists only what differs from the defaults.
+- A web scene (`"kind": "web"`) has a `url` instead of `index.html`; it is
+  `https` on a host Beta controls (`WEB_HOSTS` in
+  `slides/src/beta/libraryrules.ts`: today `slides.betamobility.ai` and
+  `design.betamobility.ai`).
+
+Check it before the pull request, with the same commands CI runs:
+
+```bash
+node scripts/build-beta-library.mjs --check     # validates every folder into one manifest
+node scripts/test-beta-library.ts
+node scripts/test-beta-library-browser.mjs      # needs Chrome and a built shell
+```
+
+Open `index.html` in a plain browser tab to see the defaults before calling
+it done. Merging does not reach
+the gallery: `node scripts/build-beta-library.mjs --upload` publishes the
+manifest to the store with the store's service token, and that is a release
+step the maintainer runs or asks for, never one an agent takes on its own.
+Once uploaded, the scene is in every signed-in person's **Scenes** gallery,
+in `node splice.mjs --library`, and insertable with a `library` edit.
 
 ### Publishing: one click in a browser
 
