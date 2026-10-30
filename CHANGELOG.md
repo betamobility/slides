@@ -12,6 +12,7 @@ pre-1.0.
 ## [Unreleased]
 
 - **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.
+- **Speaker notes where you look for them.** Notes now sit right under the slide's own settings, above the deck-wide Slideshow and Theme sections, so you no longer scroll past every theme colour to write one.
 - **Native bullets in PowerPoint.** Lists export as PowerPoint bullets (nested and numbered too), not as "•" characters, and an empty list item exports nothing.
 
 ## [2026.10.11] — 2026-10-14

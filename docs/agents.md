@@ -762,7 +762,9 @@ A project folder holds `deck.json` (`{ title?, slides }`, for `--create`
 only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
 `still.svg`, `scene.json` (`{ steps, props, assets, url, insertAfter }`) and heavy files
 in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
-list of `{ slideId, elementId, html | src | option | rows }`. Assets are
+list of `{ slideId, elementId, html | src | option | rows | url }` (`url`
+for a web page embed, kept on its site; on a library web scene only its
+declared settings in the query change). Assets are
 stored per deck, so two scenes may list the same asset name only with the
 same bytes; the same name with different bytes is refused before any request.
 
@@ -849,10 +851,12 @@ the deck's link.
 
 ### The scene library: insert a reviewed scene, change its settings
 
-Beta keeps reviewed, reusable scenes (a counter, a map, …) in a library on
-the store. Prefer one over writing a scene from nothing when it fits: it is
-already reviewed, it has a still, and the person can change its settings in
-the editor's panel without you.
+Beta keeps reviewed, reusable scenes in a library on the store: today a
+counter, a map, a KPI row, a timeline, a before-and-after comparison and an
+annotated bar chart (`counter`, `map`, `kpi-row`, `timeline`,
+`before-after`, `annotated-bars`). Prefer one over writing a scene from
+nothing when it fits: it is already reviewed, it has a still, and the person
+can change its settings in the editor's panel without you.
 
 ```bash
 node splice.mjs --library      # what there is: ids, settings (kind, format, default) and presets
@@ -916,7 +920,13 @@ beta/library/<id>/
 
 - `<id>` is lower case letters, digits and hyphens, starting with a letter.
   Copy `beta/library/counter/` (no steps) or `beta/library/map/` (two steps)
-  as the starting point.
+  as the starting point, or `beta/library/kpi-row/` for a scene whose still
+  is captured: one that draws into `<svg id="scene">` by arithmetic (no
+  measured text) has its `still.svg` written by
+  `node scripts/build-beta-library-stills.mjs <id>`, and the browser rig
+  fails when that still is stale. Its colours and fonts come from one
+  `TOKENS` table of `beta/v131/tokens.json` values, which
+  `scripts/test-beta-library.ts` checks.
 - `version` is a whole number. Raise it on every change: a deck keeps the
   copy it was given, and the number says which.
 - `index.html` follows the scene contract under "Runtime slides": wait for `bento:init`, send

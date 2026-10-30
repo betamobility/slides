@@ -613,8 +613,13 @@ upload then fails, the error carries the deck id, and you finish with
   library inserts and settings edits (next section). Content edits change
   the content of native elements by id:
   `[{ "slideId": "s3", "elementId": "t-04", "html": "New text" }]`. The one
-  key per type is `html` (text), `src` (image, media), `option` (chart) and
-  `rows` (table). Anything else is refused.
+  key per type is `html` (text), `src` (image, media), `option` (chart),
+  `rows` (table) and `url` (a web page embed). Anything else is refused.
+  A `url` edit stays on the embed's site (same origin, an http or https
+  address the editor keeps, at most 2048 characters); on a library web
+  scene it changes only the scene's declared settings in the query string,
+  as the settings panel does, and the page and fragment stay. A url edit
+  is not framing-checked: the site is the one the person already chose.
 - **`--dry-run`** reads the deck and prints the plan without writing. Run it
   first.
 - An encrypted deck is refused; the tool does not decrypt. A deck that is in
@@ -623,10 +628,12 @@ upload then fails, the error carries the deck id, and you finish with
 
 ### The scene library: insert a reviewed scene, change its settings
 
-Beta keeps reviewed, reusable scenes (a counter, a map, …) in a library on
-the store. Prefer one over writing a scene from nothing when it fits: it is
-already reviewed, it has a still, and the person can change its settings in
-the editor's panel without you.
+Beta keeps reviewed, reusable scenes in a library on the store: today a
+counter, a map, a KPI row, a timeline, a before-and-after comparison and an
+annotated bar chart (`counter`, `map`, `kpi-row`, `timeline`,
+`before-after`, `annotated-bars`). Prefer one over writing a scene from
+nothing when it fits: it is already reviewed, it has a still, and the person
+can change its settings in the editor's panel without you.
 
 ```bash
 node splice.mjs --library      # what there is: ids, settings (kind, format, default) and presets
@@ -690,7 +697,13 @@ beta/library/<id>/
 
 - `<id>` is lower case letters, digits and hyphens, starting with a letter.
   Copy `beta/library/counter/` (no steps) or `beta/library/map/` (two steps)
-  as the starting point.
+  as the starting point, or `beta/library/kpi-row/` for a scene whose still
+  is captured: one that draws into `<svg id="scene">` by arithmetic (no
+  measured text) has its `still.svg` written by
+  `node scripts/build-beta-library-stills.mjs <id>`, and the browser rig
+  fails when that still is stale. Its colours and fonts come from one
+  `TOKENS` table of `beta/v131/tokens.json` values, which
+  `scripts/test-beta-library.ts` checks.
 - `version` is a whole number. Raise it on every change: a deck keeps the
   copy it was given, and the number says which.
 - `index.html` follows "A scene" above: wait for `bento:init`, send
