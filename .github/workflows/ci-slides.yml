@@ -10,9 +10,13 @@
 name: CI (slides)
 
 on:
+  # BETA FORK: these are the heavy browser suites; in the fork they run on pull
+  # requests only (the merge commit's own run would repeat them), and not for
+  # docs-only changes. GitHub paused Actions on this fork for usage (2026-10-30).
   pull_request:
-  push:
-    branches: [main]
+    paths-ignore: # BETA FORK
+      - 'docs/**'
+      - '**/*.md'
 
 concurrency:
   # The same rule as ci.yml, whose comment explains it: PR runs collapse onto
