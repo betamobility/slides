@@ -330,12 +330,31 @@ async function listDecks(env, origin) {
 }
 
 // --- analytics (KTD12): server-side, surface + outcome, nothing else -------
+//
+// The event names, and the FIXED page each one is filed under. The url is
+// never the request path: the pairing code, the handle, a deck id and a grant
+// hash all live in paths, and none of them may reach Plausible. A name not
+// listed here is filed under `/api/decks`, which is where every event but
+// deck_open was filed before the pairing events existed.
+//
+// The pairing, publish and upload events (2026-10-30, roadmap R4). Their
+// outcomes are the words the routes already use; the full table is in
+// docs/DECISIONS.md, 2026-10-30.
+const EVENT_PAGE = {
+  deck_open: 'd/',
+  deck_new: 'api/decks', deck_save: 'api/decks',
+  pairing_start: 'api/link/', pairing_poll: 'api/link/',
+  pairing_page: 'link/', pairing_approve: 'link/',
+  publish_create: 'api/publish/decks', publish_save: 'api/publish/decks',
+  grant_revoke: 'api/grants/',
+  asset_upload: 'assets/', library_upload: 'library/',
+}
 
 function track(ctx, req, name, outcome) {
   const origin = new URL(req.url).origin
   const body = JSON.stringify({
     name, domain: PLAUSIBLE_DOMAIN,
-    url: `${origin}/${name === 'deck_open' ? 'd/' : 'api/decks'}`,
+    url: `${origin}/${EVENT_PAGE[name] || 'api/decks'}`,
     props: { surface: 'deck-store', outcome },
   })
   const p = fetch(PLAUSIBLE_URL, {
@@ -343,6 +362,35 @@ function track(ctx, req, name, outcome) {
     headers: { 'content-type': 'application/json', 'user-agent': req.headers.get('user-agent') || 'beta-decks' },
   }).then(() => undefined, () => undefined) // a failed event never fails the response
   ctx.waitUntil(p)
+}
+
+// The refusals on the PUBLIC pairing routes (429, 503) are the one place where
+// an anonymous caller decides how many events fire, and Plausible bills per
+// event. So each (event, outcome) pair of that kind is sent at most once a
+// minute per isolate: the signal "the limiter is refusing" or "the limiter is
+// missing" survives, and a flood does not become a flood of events. Per
+// isolate, so across the edge it is a handful a minute, never one per request.
+const REFUSAL_EVERY_MS = 60_000
+const lastRefusal = new Map()
+function trackRefusal(ctx, req, name, outcome) {
+  const key = `${name}:${outcome}`
+  const now = Date.now()
+  if (now - (lastRefusal.get(key) ?? -Infinity) < REFUSAL_EVERY_MS) return
+  lastRefusal.set(key, now)
+  track(ctx, req, name, outcome)
+}
+
+/** The outcome word for a refusal from `rateLimited`. */
+const refusalOf = (res) => (res.status === 429 ? 'limited' : res.status === 503 ? 'unavailable' : 'rejected')
+
+/**
+ * File an upload's answer as `ok` or `rejected` and pass it on unchanged.
+ * Only for routes the caller is already authorised on: a refusal of WHO is
+ * asking (401, 403) is never an event, the way a bad bearer is not.
+ */
+function tracked(ctx, req, name, res) {
+  if (res.status !== 401 && res.status !== 403) track(ctx, req, name, res.ok ? 'ok' : 'rejected')
+  return res
 }
 
 // --- handlers -----------------------------------------------------------------
@@ -525,8 +573,8 @@ async function restoreIntoUpload(existing, bytes) {
  * ever gives a person an email, so an `@` was the person test — a grant's
  * writer carries one too, which is what `wroteAsPerson` excludes.
  */
-async function conflict(env, ctx, req, id) {
-  track(ctx, req, 'deck_save', 'conflict')
+async function conflict(env, ctx, req, id, evt = 'deck_save') {
+  track(ctx, req, evt, 'conflict')
   const current = await env.DECKS.head(KEY(id))
   const res = json(412, {
     error: 'changed', message: 'The deck changed since the version you read. Re-read it, re-apply your change and try again.',
@@ -544,18 +592,21 @@ async function conflict(env, ctx, req, id) {
 // harness must say which version it read (428 otherwise). The people route
 // honours If-Match when present but cannot require it, because shells already
 // on disk save without one and must keep working.
-async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCollab = false } = {}) {
+//
+// `evt` is the analytics name, as in `create`: a grant's write is a
+// publish_save, so deck_save keeps counting people and the file harness only.
+async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCollab = false, evt = 'deck_save' } = {}) {
   // A `get` rather than a `head` on the grant path: the stored document is
   // needed, not only its metadata. Everything else reads the same fields.
   const existing = restoreCollab ? await env.DECKS.get(KEY(id)) : await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
   const etag = ifMatchOf(req)
   if (requireMatch && !etag) {
-    track(ctx, req, 'deck_save', 'rejected')
+    track(ctx, req, evt, 'precondition')
     return json(428, { error: 'if-match-required', message: 'Read the deck first (GET /api/harness/decks/:id) and send its ETag as If-Match.' })
   }
   let bytes = await readBody(req)
-  if (!bytes) { track(ctx, req, 'deck_save', 'rejected'); return text(400, 'size') }
+  if (!bytes) { track(ctx, req, evt, 'rejected'); return text(400, 'size') }
   if (restoreCollab) {
     // THE PRECONDITION IS CLASSIFIED FIRST, before the shell is compared.
     // Otherwise a person saving between a grant's read and its write — which
@@ -565,13 +616,13 @@ async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCo
     // conflict into a failed run. `existing` is already the current object, so
     // this costs no extra read; the `onlyIf` on the put below stays, because
     // the get-then-put window is still a race and its 412 is the right answer.
-    if (etag && etag !== existing.etag) return conflict(env, ctx, req, id)
+    if (etag && etag !== existing.etag) return conflict(env, ctx, req, id, evt)
     const restored = await restoreIntoUpload(existing, bytes)
-    if (restored.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, restored.reason) }
+    if (restored.reason) { track(ctx, req, evt, 'rejected'); return text(400, restored.reason) }
     bytes = restored.bytes
   }
   const meta = inspect(bytes)
-  if (meta.reason) { track(ctx, req, 'deck_save', 'rejected'); return text(400, meta.reason) }
+  if (meta.reason) { track(ctx, req, evt, 'rejected'); return text(400, meta.reason) }
   const prev = existing.customMetadata || {}
   // An agent's write bumps the generation, a person's carries it forward. Read
   // from the head above: with If-Match the put only lands on that same version.
@@ -585,8 +636,8 @@ async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCo
       sg: String(gen),
     },
   }, etag)
-  if (!stored) return conflict(env, ctx, req, id)
-  track(ctx, req, 'deck_save', 'ok')
+  if (!stored) return conflict(env, ctx, req, id, evt)
+  track(ctx, req, evt, 'ok')
   return new Response(null, { status: 200, headers: { etag: stored.httpEtag, [ETAG_HEADER]: stored.httpEtag, [GEN_HEADER]: String(gen) } })
 }
 
@@ -876,11 +927,27 @@ async function harnessRead(env, id, { stripCollab = false } = {}) {
  */
 async function agentRoutes(req, env, ctx, url, path, m) {
   if (path === '/api/link/start' && m === 'POST') {
-    return (await rateLimited(req, env)) || linkStart(req, env, url)
+    const refused = await rateLimited(req, env)
+    if (refused) { trackRefusal(ctx, req, 'pairing_start', refusalOf(refused)); return refused }
+    const res = await linkStart(req, env, url)
+    track(ctx, req, 'pairing_start', res.status === 200 ? 'ok' : 'rejected')
+    return res
   }
   const lp = new RegExp(`^/api/link/(${TOKEN_PAT})$`).exec(path)
   if (lp && m === 'GET') {
-    return (await rateLimited(req, env)) || linkPoll(env, lp[1])
+    const refused = await rateLimited(req, env)
+    if (refused) { trackRefusal(ctx, req, 'pairing_poll', refusalOf(refused)); return refused }
+    const res = await linkPoll(env, lp[1])
+    // Only the polls that MEAN something. `pending` is every few seconds of
+    // every pairing, and `gone` (410) cannot tell a lapsed pairing from a
+    // handle nobody issued, which is exactly what the uptime probe sends
+    // (README, "Uptime"). A lapse is counted where a person meets it instead:
+    // pairing_page and pairing_approve answer `gone`.
+    if (res.status === 200) {
+      const { state } = await res.clone().json()
+      track(ctx, req, 'pairing_poll', state === 'delivered' ? 'ok' : 'collected')
+    }
+    return res
   }
 
   // Everything else under either prefix needs a grant. Verified BEFORE any
@@ -891,12 +958,12 @@ async function agentRoutes(req, env, ctx, url, path, m) {
 
   // One-to-one with the harness routes (KTD5): same handlers, same
   // conditional-write contract, the option flags U8 fills in.
-  if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who)
+  if (path === '/api/publish/decks' && m === 'POST') return create(req, env, ctx, who, 'publish_create')
   const pd = new RegExp(`^/api/publish/decks/(${ID_PAT})$`).exec(path)
   if (pd && m === 'GET') return harnessRead(env, pd[1], { stripCollab: true })
-  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true })
+  if (pd && m === 'PUT') return replace(req, env, ctx, who, pd[1], { requireMatch: true, restoreCollab: true, evt: 'publish_save' })
   const pa = new RegExp(`^/api/publish/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
-  if (pa && m === 'PUT') return putAsset(req, env, pa[1], pa[2])
+  if (pa && m === 'PUT') return tracked(ctx, req, 'asset_upload', await putAsset(req, env, pa[1], pa[2]))
   // the scene library, read as the person who approved (U8); a grant never writes it
   if (path === '/api/publish/library.json' && m === 'GET') return serveLibrary(req, env)
 
@@ -953,7 +1020,7 @@ export default {
     // The scene library (U8). Written by the service token alone, like the
     // asset upload below: a route that lets any signed-in page replace what
     // every gallery shows is a way to plant scenes in other people's decks.
-    if (path === '/api/harness/library.json' && m === 'PUT') return agentWrite(who) ? putLibrary(req, env) : empty(403)
+    if (path === '/api/harness/library.json' && m === 'PUT') return agentWrite(who) ? tracked(ctx, req, 'library_upload', await putLibrary(req, env)) : empty(403)
     if (path === '/api/harness/library.json' && m === 'GET') return serveLibrary(req, env)
 
     // Harness routes: same handlers, open to any verified identity.
@@ -966,7 +1033,7 @@ export default {
     // upload route open to every signed-in page is a way to plant files on
     // the store's origin. `(.+)` so a bad name is a 400, not a 404.
     const am = new RegExp(`^/api/harness/decks/(${ID_PAT})/assets/(.+)$`).exec(path)
-    if (am && m === 'PUT') return agentWrite(who) ? putAsset(req, env, am[1], am[2]) : empty(403)
+    if (am && m === 'PUT') return agentWrite(who) ? tracked(ctx, req, 'asset_upload', await putAsset(req, env, am[1], am[2])) : empty(403)
 
     // Everything else is for people. A service token stops here.
     if (who.kind !== 'user') return empty(403)
@@ -988,12 +1055,13 @@ export default {
       // same-origin for free on this host.
       if (!pageRequest(req)) return text(403, 'Open this link in a browser tab.')
       const pairing = await readPairing(env, lm[1])
-      if (!pairing) return text(410, 'This approval link has expired or has already been used.')
+      if (!pairing) { track(ctx, req, 'pairing_page', 'gone'); return text(410, 'This approval link has expired or has already been used.') }
+      track(ctx, req, 'pairing_page', 'ok')
       return html(linkPage(who.id, lm[1], pairing), NO_FRAMING)
     }
     const la = new RegExp(`^/link/(${ID_PAT})/approve$`).exec(path)
     if (la && m === 'POST') {
-      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be approved from the store’s own page.')
+      if (!sameOrigin(req, url) || !pageRequest(req)) { track(ctx, req, 'pairing_approve', 'refused'); return text(403, 'This has to be approved from the store’s own page.') }
       const nonce = await formNonce(req)
       // Read once, for the label the done page repeats back.
       const pairing = await readPairing(env, la[1])
@@ -1004,8 +1072,11 @@ export default {
         // The consent may already have been recorded — the state write lands
         // before the code is deleted — so say so rather than showing a raw
         // platform error to someone who just clicked Approve.
+        track(ctx, req, 'pairing_approve', 'error')
         return text(502, 'The store could not finish recording this approval. Check with whoever asked for it before approving again.')
       }
+      // approvePairing's own three words: 'ok', 'nonce', 'gone'.
+      track(ctx, req, 'pairing_approve', outcome === 'ok' || outcome === 'nonce' ? outcome : 'gone')
       if (outcome === 'nonce') return text(403, 'This approval form is out of date. Open the link again.')
       if (outcome !== 'ok') return text(410, 'This approval link has expired or has already been used.')
       return html(linkDonePage(who.id, pairing || {}), NO_FRAMING)
@@ -1016,10 +1087,11 @@ export default {
     // and same-origin, because Access attaches the session either way (KTD13).
     const gr = /^\/api\/grants\/([0-9a-f]{64})\/revoke$/.exec(path)
     if (m === 'POST' && (gr || path.startsWith('/api/grants/'))) {
-      if (!sameOrigin(req, url) || !pageRequest(req)) return text(403, 'This has to be revoked from the store’s own page.')
+      if (!sameOrigin(req, url) || !pageRequest(req)) { track(ctx, req, 'grant_revoke', 'refused'); return text(403, 'This has to be revoked from the store’s own page.') }
       // A hash that is not this person's revokes nothing and answers 404: the
       // page never shows anyone else's, so there is nothing to distinguish.
-      if (!gr || !(await revokeGrant(env, who.id, gr[1]))) return empty(404)
+      if (!gr || !(await revokeGrant(env, who.id, gr[1]))) { track(ctx, req, 'grant_revoke', 'missing'); return empty(404) }
+      track(ctx, req, 'grant_revoke', 'ok')
       return new Response(null, { status: 303, headers: { location: '/', 'cache-control': 'no-store' } })
     }
 

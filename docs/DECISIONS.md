@@ -12453,3 +12453,37 @@ write the query for Claude, needs the panel's query writer (`writeQueryAll`,
 `webSceneOf` in `slides/src/beta/scenesettings.ts`) exported through
 `slides/src/beta/libraryread.ts` into the plugin bundle: an app change, left
 for later.
+
+## 2026-10-30 — BETA FORK: the deck store counts the publish path, inside KTD12
+
+Roadmap R4 (`docs/plans/2026-10-30-001-improvement-roadmap-plan.md`). KTD12
+stands unchanged: events are sent by the worker, carry `surface: deck-store`
+and an `outcome`, and nothing else. This entry adds event names, not fields.
+
+**The events.** `pairing_start` (`ok`, `rejected`, `limited`, `unavailable`),
+`pairing_poll` (`ok`, `collected`, `limited`, `unavailable`), `pairing_page`
+(`ok`, `gone`), `pairing_approve` (`ok`, `nonce`, `gone`, `refused`,
+`error`), `publish_create` (`ok`, `rejected`), `publish_save` (`ok`,
+`rejected`, `conflict`, `precondition`), `grant_revoke` (`ok`, `missing`,
+`refused`), `asset_upload` and `library_upload` (`ok`, `rejected`). The table
+with routes is in `server/deck-store/README.md`.
+
+**Four rules that came with them.**
+
+- Each event is filed under a fixed page per name, never the request path. A
+  pairing code, a handle, a deck id and a grant hash all live in paths.
+- A grant's writes are `publish_create` and `publish_save`, no longer
+  `deck_save`. From the deploy on, `deck_save` counts people and the file
+  harness only. The `428` is now its own outcome, `precondition`, on both
+  harness and publish replaces; it used to be filed as `rejected`.
+- A `pending` or `gone` poll is not counted. The first fires every few
+  seconds of every pairing; the second cannot tell a lapsed pairing from the
+  uptime probe (`check-store-live.mjs --uptime`), which polls a handle nobody
+  was issued. A lapse is counted where a person meets it, as `pairing_page`
+  or `pairing_approve` `gone`. There is no deny route to count.
+- `limited` and `unavailable` are sent at most once a minute per worker
+  isolate. They come from anonymous callers, and Plausible bills per event.
+  A refusal of who is asking (`401`, an identity-kind `403`) is never an
+  event, as before.
+
+PPTX export runs in the client and has no event yet; that needs its own note.
