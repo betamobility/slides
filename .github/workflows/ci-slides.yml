@@ -138,6 +138,8 @@ jobs:
         # the network.
         run: node scripts/test-slides-import-link-browser.mjs
       - name: The unsupported-browser notice names the app in Chromium
+        # BETA FORK: upstream only. It expects "a bento/slides presentation"; the Beta build says "beta/slides", and scripts/test-beta-appconfig.ts checks that wording.
+        if: github.repository == 'nyblnet/bento'
         # Each app's shell, built with the flags its own build:single passes,
         # says what it is ("a bento/slides presentation", …) — it said "a
         # bento/dash spreadsheet" in every app.
