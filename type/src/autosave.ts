@@ -33,10 +33,10 @@
 //
 // Registered once, at import time, mirroring every other feature module.
 
-import { isEncryptionActive } from '../../kernel/src/save.ts';
+import { isBodySealed } from '../../kernel/src/save.ts';
 import {
   putRecovery, getRecovery, clearRecovery, addVersion, listVersions, pruneOld,
-  clearVersions, type Snapshot,
+  clearVersions, recoveryLooksOlder, onRecoveryOff, type Snapshot,
 } from '../../kernel/src/autosave.ts';
 import { canonicalize } from './canon.ts';
 import { registerReady, type FeatureContext } from './features.ts';
@@ -77,16 +77,16 @@ export function docContentKey(doc: TypeDoc): string {
 /**
  * May the CURRENT document's plaintext touch IndexedDB right now?
  *
- * bento/type has no encryption feature yet — `isEncryptionActive()` can
- * never return true today — but the guard costs nothing and is the one line
- * that must already be correct the day encryption ships, exactly as it is in
- * slides/src/autosave.ts. Never remove this without confirming that day has
- * not arrived. Exported (rather than kept as a private `if`) so the rig can
+ * Not while the body is SEALED — by a password or by the identity seal
+ * (`isBodySealed()`, kernel save.ts): a sealed document's plaintext must
+ * never reach a recovery snapshot or version history. bento/type has no
+ * password feature of its own, but a document sealed to people opens here,
+ * so this is live, not hypothetical. Exported (rather than kept as a private `if`) so the rig can
  * assert the guard directly against the kernel's real encryption state,
  * instead of trusting that the call site was written correctly.
  */
 export function canSnapshot(): boolean {
-  return !isEncryptionActive();
+  return !isBodySealed();
 }
 
 const AUTOSAVE_DEBOUNCE_MS = 2500;
@@ -121,6 +121,15 @@ async function runAutosave(ctx: FeatureContext): Promise<void> {
 
 async function checkRecovery(ctx: FeatureContext): Promise<void> {
   const doc = ctx.store.doc;
+  // A SEALED body: plaintext copies this browser kept for this document in an
+  // earlier, unsealed session are never offered (no banner, nothing in
+  // version history) and are deleted — for THIS docId only; every other
+  // document's copies are untouched. Guarded by
+  // scripts/test-type-sealed-browser.mjs.
+  if (isBodySealed()) {
+    await Promise.all([clearRecovery(doc.docId), clearVersions(doc.docId)]);
+    return;
+  }
   const snap = await getRecovery(doc.docId);
   if (!snap) return;
   // A snapshot is foreign input (restoregate.ts): format-checked, and never
@@ -156,19 +165,38 @@ function ensureStyle(): void {
   document.head.appendChild(style);
 }
 
+/**
+ * What the recovery banner offers — maintainer ruling (9), 2026-10-15.
+ *
+ * When the recovered copy LOOKS OLDER than the file just opened (kernel
+ * recoveryLooksOlder: the snapshot's time is before the file's `modified`), it
+ * WARNS and makes keeping the file the default. It never hides the copy: the
+ * two clocks come from different devices, and hiding a copy that was really
+ * newer would lose work, which is the worse failure. When the age is unknown
+ * (either time missing or unparseable) there is no warning — and the ordinary
+ * banner makes no claim that the copy is newer or safe either.
+ */
+export function recoveryBanner(snap: Snapshot, doc: TypeDoc): { older: boolean; defaultAction: 'keep' | 'restore' } {
+  const older = recoveryLooksOlder(snap, doc);
+  return { older, defaultAction: older ? 'keep' : 'restore' };
+}
+
 function showRecoveryBanner(ctx: FeatureContext, snap: Snapshot): void {
   ensureStyle();
   document.querySelector('.t-recover')?.remove();
   const bar = document.createElement('div');
   bar.className = 't-recover';
   bar.setAttribute('role', 'alert');
+  const plan = recoveryBanner(snap, ctx.store.doc);
   const when = new Date(snap.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' });
   const msg = document.createElement('span');
-  msg.textContent = t('Unsaved changes from {when} were found.', { when });
+  msg.textContent = plan.older
+    ? t('This recovered copy looks older than the file you opened. Keep the file unless you know it’s newer.')
+    : t('Unsaved changes from {when} were found.', { when });
   const restore = document.createElement('button');
-  restore.className = 't-btn t-primary';
+  restore.className = plan.older ? 't-btn' : 't-btn t-primary';
   restore.type = 'button';
-  restore.textContent = t('Restore');
+  restore.textContent = plan.older ? t('Restore anyway') : t('Restore');
   restore.addEventListener('click', () => {
     // Gated AGAIN, against the document open at the click: identity comes from
     // the live document, and that can change while this banner is up (Stop
@@ -178,17 +206,51 @@ function showRecoveryBanner(ctx: FeatureContext, snap: Snapshot): void {
     // Never fall back to the copy gated when the banner appeared: its identity
     // was the document's THEN, which is the staleness this re-gate exists for.
     if (!gated) { bar.remove(); return; }
-    ctx.store.replace(gated);
+    // RECOVER: the person chose this copy over the file, so its content AND its
+    // history come back together — revisions and the signatures over them are
+    // one unit and are never split (restorerules.ts).
+    ctx.store.restore(gated, 'recover');
     ctx.refresh();
     bar.remove();
     ctx.toast(t('Restored your unsaved changes'));
   });
   const dismiss = document.createElement('button');
-  dismiss.className = 't-btn';
+  dismiss.className = plan.older ? 't-btn t-primary' : 't-btn';
   dismiss.type = 'button';
-  dismiss.textContent = t('Discard');
+  // Keeping the file and discarding the recovered copy are the same act; when
+  // the copy looks older, it is named for what the person is choosing.
+  dismiss.textContent = plan.older ? t('Keep the file') : t('Discard');
   dismiss.addEventListener('click', () => { void clearRecovery(ctx.store.doc.docId); bar.remove(); });
-  bar.append(msg, restore, dismiss);
+  // The DEFAULT is first in the bar and takes focus: keep the file when the copy
+  // looks older, restore otherwise.
+  if (plan.defaultAction === 'keep') bar.append(msg, dismiss, restore);
+  else bar.append(msg, restore, dismiss);
+  document.body.appendChild(bar);
+  (plan.defaultAction === 'keep' ? dismiss : restore).focus();
+}
+
+/**
+ * Crash recovery switched off for this document — ruling (9). The kernel's
+ * per-document store refuses a recovery copy it cannot keep (too large), and
+ * says so once through onRecoveryOff. Shown once, dismissible, never a modal:
+ * the advice is to save often, and the person should be able to keep working.
+ */
+let recoveryOffShown = false;
+function showRecoveryOff(): void {
+  if (recoveryOffShown) return;
+  recoveryOffShown = true;
+  ensureStyle();
+  const bar = document.createElement('div');
+  bar.className = 't-recover t-recover-off';
+  bar.setAttribute('role', 'status');
+  const msg = document.createElement('span');
+  msg.textContent = t('Crash recovery is off for this document — it’s too large to keep a backup copy. Save often.');
+  const close = document.createElement('button');
+  close.className = 't-btn';
+  close.type = 'button';
+  close.textContent = t('Close');
+  close.addEventListener('click', () => bar.remove());
+  bar.append(msg, close);
   document.body.appendChild(bar);
 }
 
@@ -196,6 +258,7 @@ function wireAutosave(ctx: FeatureContext): void {
   if (ctx.store.doc.readonly) return; // a player file has nothing to protect
   void pruneOld();
   void checkRecovery(ctx);
+  onRecoveryOff(docId => { if (docId === ctx.store.doc.docId) showRecoveryOff(); });
   ctx.store.on(() => scheduleAutosave(ctx));
 }
 

@@ -118,6 +118,9 @@
           "type": "number",
           "minimum": 0,
           "maximum": 10000
+        },
+        "typeWriter": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -2516,6 +2519,12 @@
             },
             "slideNumber": {
               "type": "boolean"
+            },
+            "typeWriterSeconds": {
+              "type": "number",
+              "minimum": 0.08,
+              "maximum": 1,
+              "description": "typewriter: seconds per character (absent = 0.08)"
             }
           },
           "additionalProperties": false

@@ -62,7 +62,8 @@
 //                                    (<projectDir>/assets/<name> also found)
 //
 // edits.json is a list of edits, each one of three kinds:
-//   { slideId, elementId, html | src | option | rows }   content of a native element
+//   { slideId, elementId, html | src | option | rows | url }   content of a native element
+//                                                        (url: a web embed, see THE EMBED URL CARVE-OUT)
 //   { slideId, values: { key: value } }                    settings of a library scene
 //   { library, id, insertAfter, preset?, values? }         a new library scene slide
 //
@@ -157,7 +158,46 @@ const validValue = (kind, v) => kind === 'number' ? typeof v === 'number' && Num
   : typeof v === 'string' && v.length <= MAX_TEXT
 const GEOMETRY = new Set(['x', 'y', 'w', 'h', 'rotation'])
 // The one key per element type an edit may change.
-const CONTENT_KEY = { text: 'html', image: 'src', media: 'src', chart: 'option', table: 'rows' }
+const CONTENT_KEY = { text: 'html', image: 'src', media: 'src', chart: 'option', table: 'rows', embed: 'url' }
+
+// THE EMBED URL CARVE-OUT (2026-10-13-2236 plan, "Deferred to Follow-Up
+// Work"; 2026-10-30-001 roadmap, R8). A web embed's settings live in its
+// address's query string (KTD10), so its `url` is its content. The edit is
+// held to what the editor's settings panel itself can do:
+//   - only a web page embed (`app: "web"`); another app's embed holds a
+//     document, and its url is not what it shows;
+//   - an address the shell keeps: slides/src/model.ts isWebUrl (http or
+//     https, at most 2048 characters, no space, quote or angle bracket),
+//     restated because this file cannot import the app; any other is dropped
+//     silently on the next load;
+//   - no login in it, and the same origin as before: which site an embed
+//     shows is the person's choice, made in the editor;
+//   - for a library web scene (its `doc` carries `library` and `props`) the
+//     page stays too: same path and fragment, and only declared settings in
+//     the query may change, exactly as the panel writes it.
+const WEB_URL = /^https?:\/\/[^\s\x22\x27<>]+$/i
+const MAX_WEB_URL = 2048
+const libraryEmbed = (el) => !!el.doc && typeof el.doc === 'object' && !!el.doc.library && typeof el.doc.library === 'object' && Array.isArray(el.doc.props)
+
+/** Why `url` may not replace this embed's address, or null when it may. */
+export function embedUrlRefusal(before, url) {
+  if (before.app !== 'web') return `only a web page embed's url may change, and this one is ${JSON.stringify(before.app)}`
+  if (typeof url !== 'string' || url.length > MAX_WEB_URL || !WEB_URL.test(url)) return `the url must be an http or https address of at most ${MAX_WEB_URL} characters with no space, quote or angle bracket; the editor drops any other when the deck loads`
+  let next, prev
+  try { next = new URL(url) } catch { return 'the url is not an address' }
+  if (next.username || next.password) return 'the url must not carry a login'
+  try { prev = new URL(before.url) } catch { prev = null }
+  if (!prev || prev.origin !== next.origin) return `the url may change within its site only (${prev ? prev.origin : 'the embed has no address yet'}); which site an embed shows is the person's to change in the editor`
+  if (!libraryEmbed(before)) return null
+  if (prev.pathname !== next.pathname || prev.hash !== next.hash) return `it is the library web scene "${before.doc.library.id}": its page stays, and only its settings (the query string) may change`
+  const declared = new Set(before.doc.props.map((p) => p && p.key))
+  for (const k of new Set([...prev.searchParams.keys(), ...next.searchParams.keys()])) {
+    if (!declared.has(k) && prev.searchParams.getAll(k).join('\u0000') !== next.searchParams.getAll(k).join('\u0000')) {
+      return `"${k}" in its query is not one of the library web scene's settings (${[...declared].join(', ') || 'it has none'})`
+    }
+  }
+  return null
+}
 
 /** A refusal: the message names the offending id; nothing has been written. */
 export class Refusal extends Error {}
@@ -265,7 +305,7 @@ export function readEdits(file) {
   if (!file) return []
   let list
   try { list = JSON.parse(readFileSync(file, 'utf8')) } catch (e) { throw new Refusal(`edits file does not parse: ${e.message}`) }
-  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of edits: { slideId, elementId, html | src | option | rows }, { slideId, values }, or { library, id, insertAfter, preset?, values? }')
+  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of edits: { slideId, elementId, html | src | option | rows | url }, { slideId, values }, or { library, id, insertAfter, preset?, values? }')
   const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
   for (const e of list) {
     if (!plain(e)) throw new Refusal('every edit is an object')
@@ -561,6 +601,8 @@ export function checkOwnership(read, out, { scenes, edits, inserted = new Set(),
         if (k !== CONTENT_KEY[b.type] || !allowed.has(k)) {
           throw new Refusal(`element "${b.id}" on slide "${sid}": "${k}" is not a content change the splice tool may make on a ${b.type} element (only ${CONTENT_KEY[b.type] || 'nothing'}); nothing was written`)
         }
+        const why = b.type === 'embed' ? embedUrlRefusal(b, a.url) : null
+        if (why) throw new Refusal(`element "${b.id}" on slide "${sid}": ${why}; nothing was written`)
       }
     })
   })
@@ -1076,8 +1118,8 @@ export async function read(id, { out, env = process.env, log = console.log } = {
     }
     if (isRuntime(s)) { log(`  ${s.id}  (runtime slide: replace it with a scene folder)`); continue }
     const els = (Array.isArray(s.elements) ? s.elements : [])
-      .filter((e) => e && CONTENT_KEY[e.type])
-      .map((e) => `${e.id} (${e.type}: ${CONTENT_KEY[e.type]})`)
+      .filter((e) => e && CONTENT_KEY[e.type] && (e.type !== 'embed' || e.app === 'web'))
+      .map((e) => `${e.id} (${e.type}: ${CONTENT_KEY[e.type]}${e.type === 'embed' && libraryEmbed(e) ? `, library web scene "${e.doc.library.id}": settings in its query` : ''})`)
     log(`  ${s.id}${s.stateOf ? ` [state of ${s.stateOf}]` : ''}${els.length ? `: ${els.join(', ')}` : ': nothing an edit may change'}`)
   }
 }

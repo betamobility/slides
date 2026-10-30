@@ -25,7 +25,7 @@ registerHooks({
 
 const { parseDoc } = await import('../dash/src/model.ts')
 const { Store } = await import('../dash/src/store.ts')
-const { savingFor, saveRevision, afterPendingWrites } = await import('../dash/src/saving.ts')
+const { savingFor, saveRevision, afterPendingWrites, copyLanding } = await import('../dash/src/saving.ts')
 const { FileWriteBack } = await import('../dash/src/writeback.ts')
 type DashDoc = import('../dash/src/model.ts').DashDoc
 
@@ -160,6 +160,27 @@ for (const [landed, clean, adopt] of [['open-file', 1, 1], ['download', 1, 0], [
   await saveRevision(s, async () => 'x', () => landed, ack)
   ok(a.cleaned === clean && a.adopted.length === adopt,
     `${landed}: dot ${clean ? 'clears' : 'stays'}, ${adopt ? 'adopted' : 'not adopted'} as the file's content`)
+}
+
+console.log('\nSave a copy… leaves the workbook on the ORIGINAL (maintainer ruling 2026-10-15)')
+{
+  for (const [r, want] of [['copied', 'elsewhere'], ['downloaded', 'elsewhere'], ['saved-as', 'elsewhere'], ['saved', 'elsewhere'], ['cancelled', 'nowhere']] as const) {
+    ok(copyLanding(r) === want, `a copy answering '${r}' lands ${want} — never in the open file`)
+  }
+  // end to end, the way saveui.ts drives it: dirty workbook, copy written
+  const s = new Store(fresh())
+  edit(s, 7)
+  const { a, ack } = ackSpy()
+  const out = await saveRevision(s, async () => 'copied', copyLanding, ack)
+  ok(out.kind === 'done' && a.cleaned === 0 && a.adopted.length === 0,
+    'after a copy, the unsaved dot still describes the original and nothing is adopted as its content')
+  // The menu handler is DOM-only, so it is checked by what it CALLS: the copy
+  // must go through copyLanding, and the toast must say you are still on the original.
+  const { readFileSync } = await import('node:fs')
+  const ui = readFileSync(new URL('../dash/src/saveui.ts', import.meta.url), 'utf8')
+  ok(/saveRevision\(store, \(snap\) => saveFile\(snap, true\), copyLanding, host\.ack\)/.test(ui),
+    'saveui.ts writes the copy through copyLanding — not a mapping that could retarget the workbook')
+  ok(ui.includes("t('Copy saved — you are still editing the original')"), 'and its toast says you are still on the original')
 }
 
 console.log('\na write for a workbook that has been replaced is never made')

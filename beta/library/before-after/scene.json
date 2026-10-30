@@ -1,0 +1,28 @@
+{
+  "name": "Before and after",
+  "version": 1,
+  "description": "Two panels, before and after, with the change between them. The after panel comes in on the second step.",
+  "kind": "runtime",
+  "steps": 2,
+  "props": [
+    { "key": "title", "label": "Title (empty for none)", "kind": "text", "default": "Average trip to the city centre" },
+    { "key": "beforeLabel", "label": "Before: heading", "kind": "text", "default": "Before" },
+    { "key": "beforeValue", "label": "Before: figure", "kind": "text", "default": "38 min" },
+    { "key": "beforeText", "label": "Before: what it was", "kind": "text", "default": "Bus with one change, morning peak 2024" },
+    { "key": "beforeAmount", "label": "Before: amount for the bar (0 for no bars)", "kind": "number", "default": 38 },
+    { "key": "afterLabel", "label": "After: heading", "kind": "text", "default": "After" },
+    { "key": "afterValue", "label": "After: figure", "kind": "text", "default": "24 min" },
+    { "key": "afterText", "label": "After: what it is", "kind": "text", "default": "Direct line with signal priority, morning peak 2026" },
+    { "key": "afterAmount", "label": "After: amount for the bar (0 for no bars)", "kind": "number", "default": 24 },
+    { "key": "change", "label": "Change between them (empty for none)", "kind": "text", "default": "−37 %" },
+    { "key": "changeTone", "label": "The change is", "kind": "text", "default": "good", "format": "select:good|bad|neutral" },
+    { "key": "beforeColour", "label": "Before bar colour", "kind": "color", "default": "#C7CED6" },
+    { "key": "afterColour", "label": "After bar and frame colour", "kind": "color", "default": "#0F2A4A" },
+    { "key": "background", "label": "Background", "kind": "color", "default": "#FFFFFF" }
+  ],
+  "presets": [
+    { "name": "Travel time", "values": {} },
+    { "name": "Share of trips", "values": { "title": "Share of trips made by bike", "beforeValue": "4 %", "beforeText": "Travel survey 2022", "beforeAmount": 4, "afterValue": "9 %", "afterText": "Travel survey 2025, after the cycle network", "afterAmount": 9, "change": "+5 pp" } },
+    { "name": "Figures only", "values": { "beforeAmount": 0, "afterAmount": 0 } }
+  ]
+}

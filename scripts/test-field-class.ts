@@ -86,6 +86,10 @@ const EXPECT: Record<Tier, string[]> = {
   template: ['docId', 'title', 'slides', 'template', 'modified', 'preview', 'autosave'].sort(),
   // Copy document JSON: content only — collab, modes, history, unknown all gone
   copyJSON: ['docId', 'title', 'slides', 'modified', 'preview', 'autosave'].sort(),
+  // mail merge — one complete document per recipient: content kept, identity
+  // RESET (docId absent, the builder mints a fresh one), capability + history +
+  // modes + unknown all dropped. copyJSON minus docId.
+  merge: ['title', 'slides', 'modified', 'preview', 'autosave'].sort(),
 }
 
 console.log('projectForCopy emits exactly the ruled field set per tier')
@@ -166,10 +170,38 @@ console.log('\na {set} mode cell fires even when the SOURCE has no such field')
   const tpl = projectForCopy(noModes(), MAP, 'template', OPTS) as Record<string, unknown>
   ok(tpl.template === true, 'template copy of a doc with NO template key is still a template')
   ok(!('readonly' in tpl), 'and invents no readonly')
-  for (const tier of ['file', 'duplicate', 'invite', 'copyJSON'] as Tier[]) {
+  for (const tier of ['file', 'duplicate', 'invite', 'copyJSON', 'merge'] as Tier[]) {
     const out = projectForCopy(noModes(), MAP, tier, OPTS) as Record<string, unknown>
     ok(!('readonly' in out) && !('template' in out), `${tier} invents no mode field (no set cell there)`)
   }
+}
+
+console.log('\nthe merge tier — a complete document for someone else (type\'s mail merge)')
+{
+  const out = projectForCopy(liveDoc(), MAP, 'merge', OPTS) as Record<string, unknown>
+  // identity reset — the one that makes merge distinct from copyJSON
+  ok(!('docId' in out), 'identity is RESET: docId is omitted, so the builder mints a fresh one per letter')
+  ok(!('collab' in out), 'capability dropped: no room, no keys (a letter is not a live document)')
+  ok(!('revisions' in out) && !('trail' in out), 'history dropped: revisions and trail do not ride a letter')
+  ok(!('readonly' in out) && !('template' in out), 'modes dropped: a letter is neither locked nor a template (template would fork on open)')
+  ok(!('mystery' in out), 'an unknown key is dropped (fail-closed)')
+  ok(out.title === 'Secret plan' && same((out.slides as string[]), ['a', 'b']), 'content is kept verbatim')
+  // distinct from the two neighbours it could be confused with
+  const cj = projectForCopy(liveDoc(), MAP, 'copyJSON', OPTS) as Record<string, unknown>
+  ok('docId' in cj && !('docId' in out), 'merge resets docId where copyJSON keeps it')
+  const dup = projectForCopy(liveDoc(), MAP, 'duplicate', OPTS) as Record<string, unknown>
+  ok('revisions' in dup && !('revisions' in out), 'merge drops history where duplicate keeps it')
+  // absent-field source: nothing is fabricated (no {set} cell at this tier)
+  const bare = projectForCopy({ docId: 'D', title: 'hi' }, MAP, 'merge', OPTS) as Record<string, unknown>
+  ok(same(keysOf(bare), ['title']), 'a bare source yields content only — docId reset, nothing invented')
+  // BOUNDARY (security condition): projectForCopy does NOT recurse into embedded
+  // documents. A caller merging a doc with embeds must pre-strip them; the kernel
+  // leaves a nested doc's own fields untouched. This pins why merge.ts must keep
+  // the withoutEmbeddedCaps/withoutCaps wrapper.
+  const withEmbed = { ...liveDoc(), slides: [{ embed: { collab: { ownerPriv: 'NESTED-SECRET' } } }] }
+  const mergedEmbed = projectForCopy(withEmbed, MAP, 'merge', OPTS) as { slides: Array<{ embed: { collab: unknown } }> }
+  ok(JSON.stringify(mergedEmbed.slides).includes('NESTED-SECRET'),
+    'a nested embed is NOT walked — the caller must strip embeds before merge (kept as a guard, not a feature)')
 }
 
 console.log('\ndocContentKey: counts content + history, excludes capability + bookkeeping, skips absent')

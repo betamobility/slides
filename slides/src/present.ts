@@ -10,9 +10,10 @@ import { anim, resetXform } from './anim'
 import { chartSnapshotSvg, mountChart } from './charts'
 import type { BentoDoc, GradientFill, ShapeElement, Slide, SlideElement } from './model'
 import { morphKey, paginates, inLinearFlow, isWebUrl } from './model'
-import { applyElementFrame, gradientLineCoords, renderSlide } from './render'
+import { applyElementFrame, cssColor, fetchFreeOption, gradientLineCoords, paintSafeShape, renderSlide } from './render'
 import { cropImgStyle, isIdentityCrop, lerpCrop } from './crop'
 import { paintSpeaker, setSpeakerWindow, speakerIdleBody, speakerWindow } from './screens'
+import { speakerWindowTitle } from './wintitle'
 import { ICONS } from './icons'
 import { t } from './i18n'
 import { lsGet, lsSet } from '../../kernel/src/storage.ts'
@@ -23,11 +24,17 @@ import { offlineEnabled } from './update'
 import { createRuntimeShow } from './runtime-present.ts' // BETA FORK: runtime slides
 import { steppedElements } from './runtime.ts' // BETA FORK
 import { storeIdFromLocation } from './beta/store.ts' // BETA FORK
+import { countPlan } from './countnumber'
 
 const MORPH_DURATION_DEFAULT = 0.65
 /** Set per-deck by doc.present.morphSeconds; clamped to something sane. */
 let MORPH_DURATION = MORPH_DURATION_DEFAULT
 const MORPH_EASE = 'power2.inOut'
+const TYPE_WRITER_DURATION_DEFAULT = 0.08
+/** Seconds per typed character, per-deck by doc.present.typeWriterSeconds. */
+let TYPE_WRITER_DURATION = TYPE_WRITER_DURATION_DEFAULT
+/** No typewriter run lasts longer than this; a long snippet types faster. */
+const TYPE_WRITER_MAX_TOTAL = 6
 
 export interface PresentSession {
   exit(): void
@@ -82,10 +89,12 @@ export function startPresentation(
   } = {},
 ): PresentSession {
   MORPH_DURATION = Math.min(6, Math.max(0.1, doc.present?.morphSeconds ?? MORPH_DURATION_DEFAULT))
+  TYPE_WRITER_DURATION = Math.min(1, Math.max(0.08, doc.present?.typeWriterSeconds ?? TYPE_WRITER_DURATION_DEFAULT))
 
   const overlay = document.createElement('div')
   overlay.className = 'bento-present-overlay'
-  overlay.style.setProperty('--bento-accent', doc.theme.accent)
+  // a document colour, so it is gated like every other (render.ts cssColor)
+  overlay.style.setProperty('--bento-accent', cssColor(doc.theme.accent, '#f7a600'))
   // Reveal ignores key events originating from form fields. If focus is still
   // on an editor input (title, notes…) when the show starts, arrows go dead.
   ;(document.activeElement as HTMLElement | null)?.blur?.()
@@ -941,6 +950,7 @@ export function startPresentation(
       const section = slidesEl.children[cur] as HTMLElement | undefined
       const slide = doc.slides[cur]
       if (section && slide) {
+        settleTypeWriter(section)
         anim.killTweensOf(section.querySelectorAll('.bento-el'))
         for (const el of slide.elements) {
           const node = section.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
@@ -998,7 +1008,7 @@ export function startPresentation(
     setSpeakerWindow(speaker)
     ;(window as unknown as Record<string, unknown>).__bentoSpeaker = speaker // diagnostics
     const d = speaker.document
-    d.title = `${doc.title} — ${t('Speaker view')}`
+    d.title = speakerWindowTitle(doc.title)
     if (!d.head.querySelector('style')) { // already styled when adopting an editor window
       for (const st of document.querySelectorAll('style')) d.head.appendChild(d.importNode(st, true))
     }
@@ -1224,7 +1234,7 @@ export function startPresentation(
       if (speakerAdopted) {
         // editor-owned window — leave it open, reset to the idle placeholder so
         // it's ready for the next run instead of freezing on the last slide
-        paintSpeaker(speaker, `${doc.title} — ${t('Speaker view')}`,
+        paintSpeaker(speaker, speakerWindowTitle(doc.title),
           speakerIdleBody(doc.title, t('Presentation ended. Start it again to bring these notes back to life.')))
       } else {
         speaker.close()
@@ -1326,6 +1336,7 @@ export function startPresentation(
       // stuck at its "from" state (invisible) for every future visit.
       anim.killTweensOf(from.querySelectorAll('.bento-el'))
       sweepSymbolSpans(from)
+      settleTypeWriter(from)
       const fromSlide = doc.slides[fromIdx]
       for (const el of fromSlide?.elements ?? []) {
         const node = from.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
@@ -1463,7 +1474,7 @@ export function startPresentation(
       for (const el of slide.elements) {
         if (stepOf(el) <= steps.step || stepOf(el) > was) continue
         const node = section.querySelector<HTMLElement>(`[data-el-id="${CSS.escape(el.id)}"]`)
-        if (node) { anim.killTweensOf(node); applyElementFrame(node, el); resetXform(node) }
+        if (node) { settleTypeWriter(node); anim.killTweensOf(node); applyElementFrame(node, el); resetXform(node) }
       }
       applyStep(section, slide, steps.step)
     }
@@ -1610,10 +1621,12 @@ function mountLiveCharts(slide: Slide, section: HTMLElement, fromSlide?: Slide) 
     if (!node) continue
     // a matching chart on the other side of a morph: animate its data over
     const fromEl = fromSlide?.elements.find((e) => e.id === el.id && e.type === 'chart')
-    const dispose = mountChart(el, node, fromEl && fromEl.type === 'chart' ? fromEl.option : undefined)
+    // the engine writes option colours into svg paint: hand it a fetch-free copy
+    const live = { ...el, option: fetchFreeOption(el.option) }
+    const dispose = mountChart(live, node, fromEl && fromEl.type === 'chart' ? fetchFreeOption(fromEl.option) : undefined)
     handles.push(() => {
       dispose()
-      node.innerHTML = chartSnapshotSvg(el)
+      node.innerHTML = chartSnapshotSvg(live)
       const csvg = node.querySelector('svg')
       if (csvg) {
         csvg.setAttribute('preserveAspectRatio', 'none')
@@ -1682,7 +1695,7 @@ function enterSpec(kind: EnterKind, enterDur?: number) {
 function runEnterFx(slide: Slide, section: HTMLElement, only?: Set<string>, revealing = false, atStep = 0) {
   const entering = fxNodes(slide, section)
     // reveal-set members are shown/hidden by hover, never by entrance tweens
-    .filter(([el]) => (el.fx!.enter || el.fx!.countUp || (revealing && only?.has(el.id))) && !el.showOnHover)
+    .filter(([el]) => (el.fx!.enter || el.fx!.countUp || el.fx!.typeWriter || (revealing && only?.has(el.id))) && !el.showOnHover)
     .filter(([el]) => (only ? only.has(el.id) : shownAt(el, atStep)))
     .sort((a, b) => (a[0].fx!.order ?? 0) - (b[0].fx!.order ?? 0))
   // Delay derives from fx.order when set (equal order ⇒ elements enter
@@ -1710,6 +1723,7 @@ function runEnterFx(slide: Slide, section: HTMLElement, only?: Set<string>, reve
       )
     }
     if (fx.countUp) runCountUp(node)
+    if (fx.typeWriter) runTypeWriter(node, [...node.querySelectorAll<HTMLElement>('[data-sym]')], 0.12 + Math.min(step, 24) * 0.05)
   })
   settleGuarantee(entering.map(([el, node]) => [node, el]))
 }
@@ -1762,101 +1776,102 @@ function settleGuarantee(pairs: Array<[HTMLElement, SlideElement]>) {
 }
 
 /** Animate every number in the element's text from 0 to its final value. */
-/**
- * How a number was WRITTEN, so the count-up can put it back the same way.
- *
- * The number must settle exactly as the author typed it. Routing through
- * `Intl.NumberFormat(navigator.language)` is the tempting fix and the wrong
- * one: slide content is authored, so the same deck would read `1,234.5` for
- * one viewer and `1.234,5` for another. Locale follows the viewer for CHROME
- * only (`PLATFORM.md` §3).
- */
-interface NumberShape {
-  value: number
-  decimals: number
-  group: string   // separator between thousands, '' if the author used none
-  point: string   // decimal separator, '' if the number is an integer
-}
-
-/**
- * Read an authored number. Separators are genuinely ambiguous, so the rules
- * are stated rather than guessed:
- *
- * - BOTH `.` and `,` present → the LAST one is the decimal point, the other
- *   groups. `1,234.5` → 1234.5, `1.234,5` → 1234.5.
- * - Only `,` → grouping if there are several (`1,234,567`), or if a single one
- *   is followed by exactly three digits (`1,234`). Otherwise a decimal comma
- *   (`1,23`, `1,2345`).
- * - Only `.` → a decimal point, with one exception. A single dot reads as a
- *   decimal point, always: a deck writing `1.234` means
- *   one-point-two-three-four, and reading it as grouping would break every
- *   three-decimal number to fix a rarer case. The exception is a well-formed
- *   group pattern, `-?\d{1,3}(\.\d{3}){2,}`, which needs at least two
- *   separators and three digits in every group after the first, with an
- *   optional leading minus: `1.250.000` and `-1.250.000` cannot be a decimal
- *   point under any convention, so they group and settle as the author typed
- *   them rather than as `1250.000`. Anything else with two or more dots,
- *   like `1.2.3` or `192.168.1.1`, stays on the decimal path, because reading
- *   those as groups would rewrite version strings and addresses into numbers
- *   that look legitimate.
- */
-function readNumber(raw: string): NumberShape {
-  const dots = (raw.match(/\./g) ?? []).length
-  const commas = (raw.match(/,/g) ?? []).length
-  let point = ''
-  if (dots && commas) point = raw.lastIndexOf('.') > raw.lastIndexOf(',') ? '.' : ','
-  else if (commas) point = commas > 1 || /,\d{3}$/.test(raw) ? '' : ','
-  // Two or more dots group, but only when the token is a well-formed group pattern.
-  // `dots > 1` alone is too broad: it would read `1.2.3` as 123 and
-  // `192.168.1.1` as 19.216.811, which is a version string and an address
-  // being rewritten into plausible-looking numbers. Requiring three-digit
-  // groups after the first keeps those on the documented decimal path.
-  else if (dots) point = /^-?\d{1,3}(\.\d{3}){2,}$/.test(raw) ? '' : '.'
-  const group = point === '.' ? (commas ? ',' : '')
-    : point === ',' ? (dots ? '.' : '')
-      : (commas ? ',' : dots ? '.' : '')
-  const cut = point ? raw.lastIndexOf(point) : -1
-  const whole = (cut >= 0 ? raw.slice(0, cut) : raw).replace(/[.,]/g, '')
-  const frac = cut >= 0 ? raw.slice(cut + 1) : ''
-  return { value: Number(frac ? `${whole}.${frac}` : whole), decimals: frac.length, group, point }
-}
-
-/** Put a number back in the author's own convention. */
-function writeNumber(value: number, shape: NumberShape): string {
-  const fixed = value.toFixed(shape.decimals)
-  const dot = fixed.indexOf('.')
-  let whole = dot >= 0 ? fixed.slice(0, dot) : fixed
-  const frac = dot >= 0 ? fixed.slice(dot + 1) : ''
-  if (shape.group) whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, shape.group)
-  return frac ? whole + shape.point + frac : whole
-}
-
 function runCountUp(node: HTMLElement) {
   const inner = node.querySelector<HTMLElement>('.bento-text-inner') ?? node
-  const final = inner.textContent ?? ''
-  // Separators only count BETWEEN digits, so a sentence ending in a number
-  // ("grew 25.") keeps its full stop instead of having it swallowed and
-  // re-emitted as part of the value.
-  const tokens = [...final.matchAll(/\d+(?:[.,]\d+)*/g)]
-  if (!tokens.length) return
-  const shapes = tokens.map((m) => readNumber(m[0]))
+  // what animates and what stays as authored: countnumber.ts countPlan
+  const plan = countPlan(inner.textContent ?? '')
+  if (!plan) return
   const state = { p: 0 }
   anim.to(state, {
     p: 1,
     duration: 1.15,
     delay: 0.15,
     ease: 'power2.out',
-    onUpdate() {
-      let out = ''
-      let last = 0
-      tokens.forEach((m, i) => {
-        out += final.slice(last, m.index)
-        out += writeNumber(shapes[i].value * state.p, shapes[i])
-        last = m.index! + m[0].length
-      })
-      inner.textContent = out + final.slice(last)
+    onUpdate() { inner.textContent = plan(state.p) },
+  })
+}
+
+/**
+ * Typewriter (fx.typeWriter, code elements): the tokens appear a character at
+ * a time behind a blinking cursor. Nothing is split — each token span stays
+ * exactly as code.ts rendered it, so its `data-sym` id is the one a plain
+ * code element on the neighbouring slide carries, and a morph between the two
+ * pairs token for token: matched tokens travel, only the NEW text types.
+ * Characters are revealed by clipping the token's box, never by changing its
+ * text, so typing reflows nothing — a token travelling on the same line lands
+ * where the morph measured it.
+ *
+ * Pacing is per character (doc.present.typeWriterSeconds), with the whole run
+ * capped at TYPE_WRITER_MAX_TOTAL: a short snippet types at the authored
+ * speed, a long one speeds up rather than holding the slide for a minute.
+ *
+ * Every run is recorded so it can be SETTLED — finished at once, text whole,
+ * cursor gone — on slide exit, a step back, and reduced motion.
+ */
+const typing = new Map<HTMLElement, () => void>()
+
+function runTypeWriter(node: HTMLElement, tokens: HTMLElement[], delay = 0) {
+  settleTypeWriter(node)
+  const runs: Array<{ span: HTMLElement; start: number; len: number; ink: boolean; shown: number }> = []
+  let total = 0
+  for (const span of tokens) {
+    const len = span.textContent?.length ?? 0
+    if (!len) continue
+    runs.push({ span, start: total, len, ink: span.dataset.tok !== undefined, shown: -1 })
+    total += len
+  }
+  if (!total) return
+  const per = Math.min(TYPE_WRITER_DURATION, TYPE_WRITER_MAX_TOTAL / total)
+  // The cursor exists only while a run does. It is never part of the model
+  // render, so the editor canvas, thumbnails, print and the file preview
+  // cannot show it.
+  const cursor = document.createElement('span')
+  cursor.className = 'bento-code-cursor'
+  cursor.textContent = '▎'
+  cursor.setAttribute('aria-hidden', 'true')
+  runs[0].span.parentElement!.appendChild(cursor)
+  const paint = (k: number) => {
+    let at = runs[0].span
+    let frac = 0
+    for (const r of runs) {
+      const shown = Math.max(0, Math.min(r.len, k - r.start))
+      if (shown !== r.shown) {
+        r.shown = shown
+        // whitespace is invisible either way; only ink needs hiding
+        if (r.ink) r.span.style.clipPath = shown >= r.len ? '' : `inset(0 ${(1 - shown / r.len) * 100}% 0 0)`
+      }
+      // a newline span has no useful box to stand the cursor on
+      if (shown > 0 && !r.span.textContent!.includes('\n')) { at = r.span; frac = shown / r.len }
+    }
+    cursor.style.transform = `translate(${at.offsetLeft + at.offsetWidth * frac}px, ${at.offsetTop}px)`
+  }
+  paint(0)
+  const state = { k: 0 }
+  const finish = () => {
+    if (typing.get(node) !== finish) return
+    typing.delete(node)
+    anim.killTweensOf(state)
+    anim.killTweensOf(cursor)
+    for (const r of runs) r.span.style.clipPath = ''
+    cursor.remove()
+  }
+  typing.set(node, finish)
+  anim.to(state, {
+    k: total,
+    duration: per * total,
+    delay,
+    ease: 'none',
+    onUpdate: () => paint(Math.floor(state.k)),
+    onComplete: () => {
+      paint(total)
+      anim.to(cursor, { opacity: 0, duration: 0.3, delay: 0.6, ease: 'power2.out', onComplete: finish })
     },
   })
+}
+
+/** Finish the typewriter runs inside `scope` at once: all text shown, no cursor. */
+function settleTypeWriter(scope: HTMLElement) {
+  for (const [node, finish] of [...typing]) if (scope === node || scope.contains(node)) finish()
 }
 
 /** Re-parse inline svg elements so their CSS animations replay on entry. */
@@ -2140,7 +2155,9 @@ function morphMathSymbols(
   // is under way, makes the two motions one beat.
   const fresh = Array.from(to.querySelectorAll<HTMLElement>('[data-sym]'))
     .filter((s) => !fromAt.has(s.dataset.sym!))
-  fresh.forEach((s, i) => {
+  // A typewriter element types its new text instead, once the travel is under way.
+  if (b.fx?.typeWriter) runTypeWriter(to, fresh, MORPH_DURATION * 0.4)
+  else fresh.forEach((s, i) => {
     anim.fromTo(s, { opacity: 0 }, {
       opacity: 1,
       duration: 0.3,
@@ -2287,6 +2304,11 @@ function runMorph(
     if (fromEls.has(id)) continue
     const m = toModel.get(id)
     if (m?.showOnHover && m.showOnHover !== activeSet) continue // hover-revealed, stays hidden
+    if (m?.fx?.typeWriter) {
+      // new to this slide: it types in, all of it — and rises only if it asked to
+      runTypeWriter(n, [...n.querySelectorAll<HTMLElement>('[data-sym]')], MORPH_DURATION * 0.4)
+      if (!m.fx.enter) continue
+    }
     entering.push([n, m?.opacity ?? 1])
   }
   if (entering.length) {
@@ -2475,6 +2497,9 @@ function sampleGradient(stops: GradientFill['stops'], t: number): string {
  * temporary gradient that collapses to the flat color and is then removed.
  */
 function morphShapeFill(target: SVGElement, a: ShapeElement, b: ShapeElement) {
+  // the model's paint goes into fill/stroke/stop-color attributes: gated first
+  a = paintSafeShape(a)
+  b = paintSafeShape(b)
   if (a.fill === b.fill && JSON.stringify(a.fillGradient) === JSON.stringify(b.fillGradient)) return
   // line shapes paint with stroke (fill is the line color in the model)
   if (b.shape === 'line' && target.tagName === 'line') {

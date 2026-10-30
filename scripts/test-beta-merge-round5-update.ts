@@ -61,7 +61,12 @@ const rejected = await saveRevision(store, queue, d => applyUpdateInPlace(releas
 assert.equal(rejected.kind, 'failed'); assert.equal(writes.length, 0); assert.equal(downloads, 0); assert(store.dirty)
 badBytes = false
 const result = await saveRevision(store, queue, d => applyUpdateInPlace(release, d))
-assert.equal(result.kind, 'written'); assert.equal(store.dirty, false)
+// Since upstream 1.2.10 the save queue clears the dot only for 'saved',
+// 'saved-as' or 'downloaded' (an allow-list). An in-place update leaves it lit
+// on purpose: the editor's "Reload into new version" clears it when the write
+// was the open deck (`outcome.current`), so the unload guard still protects
+// edits made before that reload.
+assert.equal(result.kind, 'written'); assert(result.kind === 'written' && result.current); assert.equal(store.dirty, true)
 assert.equal(writes.length, 1); assert.equal(downloads, 1)
 assert.equal(writes[0].url, origin + '/api/decks/UpdateR5')
 assert.equal(writes[0].headers['if-match'], 'before')

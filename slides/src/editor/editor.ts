@@ -15,7 +15,7 @@ import { THEME_CHOICES, setTheme, themeChoice } from '../../../kernel/src/theme.
 import type { InPlaceOutcome } from '../update'
 import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, sandboxed, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
-import { renderSlide, renderThumbnail } from '../render'
+import { cssColor, renderSlide, renderThumbnail } from '../render'
 import { mapDeck } from '../export/pptx'
 import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
@@ -34,15 +34,16 @@ import { startPresentation } from '../present'
 // serializeFile (plain output) is deliberately NOT imported here: every path
 // in this file writes a real file for a person, so all of them must inherit an
 // active password. serializeAuto is the only encryption-aware serializer.
-import { adoptFileHandle, canWriteInPlace, currentFileName, fileBase, hasFileHandle, hostCan, isEncryptionActive, openedFileName, saveFile, serializeAuto, setEncryptionPassword, suggestedFileName, writeUpdatedFile, writeUpdatedFileAs } from '../save'
+import { adoptFileHandle, canWriteInPlace, currentFileName, fileBase, hasFileHandle, hostCan, isBodySealed, isEncryptionActive, openedFileName, saveFile, serializeAuto, setEncryptionPassword, suggestedFileName, writeUpdatedFile, writeUpdatedFileAs } from '../save'
 import { createSaveQueue, saveRevision } from '../saving'
 import type { SaveQueue } from '../../../kernel/src/savequeue.ts'
 import { noteSavedFromWeb } from './returngate'
-import { addVersion, clearRecovery, clearVersions, docContentKey, getRecovery, listVersions, pruneOld, putRecovery, type Snapshot } from '../autosave'
+import { addVersion, clearRecovery, clearVersions, docContentKey, getRecovery, listVersions, onRecoveryOff, pruneOld, putRecovery, recoveryLooksOlder, type Snapshot } from '../autosave'
 import { insertElements, insertSlides, parseClip, serializeElements, serializeSlides } from './clipboard'
 import { estimatedFrames, fencedElements, splitFences } from './codefence'
-import { openSpeakerWindow, speakerIdleBody } from '../screens'
-import { boxCenter, connectorEndpoint, lineEndpoints, pathEndpoints, setLineEndpoints, setPathEndpoints } from './lineedit'
+import { openSpeakerWindow, speakerIdleBody, speakerWindow } from '../screens'
+import { neutralWindowTitle, speakerWindowTitle, titleSealed } from '../wintitle'
+import { routeAllConnectors } from '../connectors'
 import { ICONS } from '../icons'
 import { t, isRtl } from '../i18n' // BETA FORK (v1.1 U3): the locale picker is gone, only t/isRtl remain
 import { markFileSaved } from '../packs' // BETA FORK (v1.1 U3): pack management UI removed; the save path still marks packs saved
@@ -168,6 +169,8 @@ export class Editor {
   /** Name of a deck opened by DROP when no writable handle came with it. */
   private openedAs?: string
   private thumbTimer = 0
+  /** The slide the list last scrolled into view (highlightSidebar). */
+  private thumbRevealed = -1
   private presenting = false
   private updatesB!: HTMLElement
   private avatarsBox!: HTMLElement
@@ -300,7 +303,7 @@ export class Editor {
     for (const peer of peers.slice(0, MAX)) {
       const chip = document.createElement('button')
       chip.className = 'ed-avatar'
-      chip.style.background = peer.color
+      chip.style.background = cssColor(peer.color, '#888') // a peer's colour: gated
       chip.textContent = (peer.name || '?').trim().charAt(0).toUpperCase() || '?'
       const idx = this.store.doc.slides.findIndex((s) => s.id === peer.slide)
       chip.title =
@@ -637,6 +640,7 @@ export class Editor {
     this.canvas.onSlideNav = (dir) => this.store.goToLinear(dir)
     this.canvas.onRuntimeRefused = () => this.refuseOnRuntimeSlide() // BETA FORK
     this.panel = new PropsPanel(this.props, this.store)
+    this.panel.onListIndent = (dir) => { this.canvas.indentList(dir) }
 
     if (!canWriteDeck(this.store.doc.collab)) this.enterReaderMode()
   }
@@ -1057,6 +1061,7 @@ export class Editor {
           t('Stop encrypting this file — the next save writes it as plain, readable JSON again.'),
           () => {
             setEncryptionPassword(null)
+            this.syncWindowTitle() // the deck title may return to the tab
             this.toast(t('Password removed — the next save writes an unencrypted file'))
             void this.save(false)
           })
@@ -1354,6 +1359,7 @@ export class Editor {
     const pass = await this.promptPassword()
     if (pass === null) return
     setEncryptionPassword(pass)
+    this.syncWindowTitle() // the deck title leaves the tab now, not at the next save
     // Purge any plaintext snapshots already written to IndexedDB before encryption
     // was enabled — otherwise up to MAX_VERSIONS version snapshots + a recovery copy
     // (full plaintext JSON, incl. collab keys) would linger ~30 days, defeating the
@@ -1589,7 +1595,7 @@ export class Editor {
         row.className = 'ed-share-peer'
         const dot = document.createElement('span')
         dot.className = 'dot'
-        dot.style.background = peer.color
+        dot.style.background = cssColor(peer.color, '#888')
         const who = document.createElement('span')
         who.className = 'who'
         who.textContent = peer.editing ? `${peer.name} ✏️` : peer.name
@@ -2039,7 +2045,18 @@ export class Editor {
       n.classList.toggle('selected', selected.has(idx))
       if (isActive) active = n
     })
-    if (!this.lightTable?.holdsScroll(this.store.currentIndex)) active?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) // BETA FORK: a scrolled grid must not jump under the pointer
+    // Bring the current slide into view only when it CHANGED. This also runs
+    // for a selection change and after a rebuild, with the current slide where
+    // it was — and a click on a thumb clears the selection BEFORE it moves the
+    // current slide, so revealing then scrolled the list to the slide being
+    // LEFT (often off-screen), and the click landed with a different thumb
+    // under the pointer. Keyboard and show navigation still reveal: they
+    // change the current slide.
+    // BETA FORK: a scrolled grid must not jump under the pointer
+    if (active && this.store.currentIndex !== this.thumbRevealed && !this.lightTable?.holdsScroll(this.store.currentIndex)) {
+      active.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+    if (active) this.thumbRevealed = this.store.currentIndex
   }
 
   private scheduleThumbs() {
@@ -2363,7 +2380,7 @@ export class Editor {
    *  can be placed on a second screen before presenting — present mode adopts it. */
   openSpeakerView() {
     const w = openSpeakerWindow(
-      `${this.store.doc.title} — ${t('Speaker view')}`,
+      speakerWindowTitle(this.store.doc.title),
       speakerIdleBody(this.store.doc.title, t('Notes, controls and slide thumbnails appear here when you start presenting. Drag this window to your second display.')),
     )
     if (!w) this.toast(t('Couldn’t open the speaker view — allow pop-ups for this site.'))
@@ -2601,38 +2618,14 @@ export class Editor {
   }
 
   /** Re-route connectors (line and open-path shapes anchored to elements via
-   *  from/to) when anything on the slide moves. Derived, not committed — every
-   *  replica computes the same endpoints from the element boxes (mirrors
-   *  syncLinkedCharts). A line moves its two endpoints; a curve (#302) moves
-   *  its first/last anchor and keeps every interior point (tips.movePathEnds). */
+   *  from/to) when anything moves — on EVERY slide, not just the one on screen:
+   *  a deck replaced by JSON, a remote op on another slide, or an undo can
+   *  leave any slide's connectors stale, and the thumbnails, the show and print
+   *  all read the model. Derived, not committed — every replica computes the
+   *  same endpoints from the element boxes (mirrors syncLinkedCharts); see
+   *  connectors.ts routeConnectors. Boot routes the whole deck once (main.ts). */
   private syncConnectors() {
-    const slide = this.store.slide
-    const byId = new Map(slide.elements.map((e) => [e.id, e]))
-    let changed = false
-    for (const el of slide.elements) {
-      if (el.type !== 'shape' || (el.shape !== 'line' && el.shape !== 'path')) continue
-      const c = el as import('../model').ShapeElement
-      if (!c.from && !c.to) continue
-      if (c.from && !byId.has(c.from.el)) { delete c.from; changed = true }
-      if (c.to && !byId.has(c.to.el)) { delete c.to; changed = true }
-      if (!c.from && !c.to) continue
-      const isPath = c.shape === 'path'
-      const pathEnds = isPath ? pathEndpoints(c) : null
-      if (isPath && !pathEnds) continue
-      const [a, b] = isPath ? pathEnds! : lineEndpoints(c)
-      const fromBox = c.from ? byId.get(c.from.el) : null
-      const toBox = c.to ? byId.get(c.to.el) : null
-      // explicit side → pin to that side's midpoint; 'auto' → ride the border
-      // toward the other end (kernel geom: connectorEndpoint)
-      const na = fromBox ? connectorEndpoint(fromBox, c.from?.side, toBox ? boxCenter(toBox) : b) : a
-      const nb = toBox ? connectorEndpoint(toBox, c.to?.side, fromBox ? boxCenter(fromBox) : a) : b
-      if (Math.hypot(na.x - a.x, na.y - a.y) > 0.5 || Math.hypot(nb.x - b.x, nb.y - b.y) > 0.5) {
-        if (isPath) setPathEndpoints(c, na, nb)
-        else setLineEndpoints(c, na, nb)
-        changed = true
-      }
-    }
-    if (changed) this.canvas.render()
+    if (routeAllConnectors(this.store.doc)) this.canvas.render()
   }
 
   // --- auto-save + crash recovery -----------------------------------------------
@@ -2655,6 +2648,27 @@ export class Editor {
     this.noticeIfCannotWriteInPlace()
     this.noticeIfJustUpdated()
     this.store.on('doc', () => this.scheduleAutosave())
+    onRecoveryOff((docId) => this.noticeRecoveryOff(docId))
+  }
+
+  /** Decks told, in this page, that their crash recovery is off — once each. */
+  private recoveryOffSaid = new Set<string>()
+
+  /**
+   * A host with a per-document store (bento/home) refused this deck's recovery
+   * copy, so from now on there is NO crash backstop for it. Say so, once, where
+   * the save status shows, and stop the unsaved dot's tooltip claiming the work
+   * is "kept in this browser". Never for a sealed deck (a password, or the
+   * identity seal): those are never snapshotted, so there was no backstop to lose.
+   */
+  private noticeRecoveryOff(docId: string) {
+    if (docId !== this.store.doc.docId || isBodySealed() || this.recoveryOffSaid.has(docId)) return
+    this.recoveryOffSaid.add(docId)
+    this.lastBackupAt = 0
+    this.dirtyDot.title = canWriteInPlace()
+      ? t('Unsaved changes — ⌘S saves this file in place')
+      : t('Unsaved changes — ⌘S downloads an updated copy (this browser can’t rewrite the file)')
+    this.flashSaved(t('Crash recovery is off for this deck — it’s too large to keep a backup copy. Save often.'), 8000)
   }
 
   private scheduleAutosave() {
@@ -2666,10 +2680,11 @@ export class Editor {
   private async runAutosave() {
     const doc = this.store.doc
     if (doc.readonly) return
-    // Never write an encrypted deck's plaintext to IndexedDB; its file
-    // write-back below stays encrypted via serializeAuto.
+    // Never write a sealed deck's plaintext to IndexedDB (sealed = a password
+    // OR the identity seal); its file write-back below stays sealed via
+    // serializeAuto.
     let snapshotted = false
-    if (!isEncryptionActive()) {
+    if (!isBodySealed()) {
       // only true if it REALLY stored — see putRecovery; no IndexedDB (Safari
       // private browsing, some file:// contexts) must not read as "backed up"
       snapshotted = await putRecovery(doc)
@@ -2814,6 +2829,15 @@ export class Editor {
 
   private async checkRecovery() {
     const doc = this.store.doc
+    // A sealed document never offers or keeps an unsealed snapshot: anything
+    // stored for this docId came from an earlier session that was not sealed,
+    // so it is deleted (this docId only), never shown. Boot has already set the
+    // seal (a password at the gate, the identity seal before the app ran).
+    if (isBodySealed()) {
+      await clearRecovery(doc.docId)
+      await clearVersions(doc.docId)
+      return
+    }
     const snap = await getRecovery(doc.docId)
     // A snapshot is foreign input (restoregate.ts): offered only if it is a
     // document after the untrusted gate, compared as it WOULD be restored
@@ -2908,11 +2932,21 @@ export class Editor {
     const named = file && fileBase(file) !== this.store.doc.title
     // Two segments, never three: a tab is narrow, and once a file name is
     // shown the app name is the least informative thing competing for it.
-    document.title = named
-      ? `${this.store.doc.title} — ${file}`
-      : `${this.store.doc.title} — ${appConfig().appName}`
+    // While the body is sealed the deck title stays out of the tab: browsers
+    // keep tab titles in their history (wintitle.ts). The open speaker window
+    // follows, so adding or removing a password retitles both at once.
+    document.title = titleSealed()
+      ? neutralWindowTitle(file ?? null)
+      : named
+        ? `${this.store.doc.title} — ${file}`
+        : `${this.store.doc.title} — ${appConfig().appName}`
+    const sw = speakerWindow()
+    if (sw) sw.document.title = speakerWindowTitle(this.store.doc.title)
     if (!this.fileChip) return
-    this.fileChip.hidden = !named
+    // out of the bar only until there IS a file; after that the chip keeps its
+    // slot and goes quiet when it would repeat the title (styles.css, #546)
+    this.fileChip.hidden = !file
+    this.fileChip.classList.toggle('ed-filechip-quiet', !named)
     if (!file) return
     this.fileChip.textContent = fileBase(file)
     // Three states, because two would lie: with the API but no handle yet, ⌘S
@@ -3017,11 +3051,19 @@ export class Editor {
     document.querySelector('.ed-recover')?.remove()
     const bar = div('ed-recover')
     const when = new Date(snap.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })
+    // The kernel's SIGNAL (recoveryLooksOlder): the snapshot is older than the
+    // file now open. It only changes the words and the default — the snapshot is
+    // still offered, and a false "older" (two devices' clocks) must never cost
+    // work, so "Keep the file" dismisses without deleting it. When the signal is
+    // false the banner is the plain one and claims nothing ("newer", "safe").
+    const older = recoveryLooksOlder(snap, this.store.doc)
     const msg = document.createElement('span')
-    msg.textContent = t('Unsaved changes from {when} were found.', { when })
+    msg.textContent = older
+      ? t('This recovered copy looks older than the file you opened. Keep the file unless you know it’s newer.')
+      : t('Unsaved changes from {when} were found.', { when })
     const restore = document.createElement('button')
-    restore.className = 'ed-btn ed-btn-primary'
-    restore.textContent = t('Restore')
+    restore.className = older ? 'ed-btn' : 'ed-btn ed-btn-primary'
+    restore.textContent = older ? t('Restore anyway') : t('Restore')
     restore.addEventListener('click', () => {
       // gated again against the document as it is NOW: the live session may
       // have been joined or rotated since the banner appeared, and the identity
@@ -3034,6 +3076,16 @@ export class Editor {
       bar.remove()
       this.toast(t('Restored your unsaved changes'))
     })
+    if (older) {
+      const keep = document.createElement('button')
+      keep.className = 'ed-btn ed-btn-primary'
+      keep.textContent = t('Keep the file')
+      keep.addEventListener('click', () => bar.remove())
+      bar.append(msg, keep, restore)
+      document.body.appendChild(bar)
+      keep.focus() // keeping the file is the default
+      return
+    }
     const dismiss = document.createElement('button')
     dismiss.className = 'ed-btn'
     dismiss.textContent = t('Discard')
@@ -3086,7 +3138,8 @@ export class Editor {
 
   /** Browse and restore the locally-kept auto-save timeline for this deck. */
   private async openVersionHistory() {
-    const versions = await listVersions(this.store.doc.docId)
+    // a sealed document has no timeline here (checkRecovery deleted any)
+    const versions = isBodySealed() ? [] : await listVersions(this.store.doc.docId)
     document.querySelector('.ed-about-overlay')?.remove()
     const overlay = div('ed-about-overlay')
     const box = div('ed-about ed-version-box')
@@ -3229,21 +3282,23 @@ export class Editor {
   }
 
   private savedTimer = 0
-  private savedHideTimer = 0
-  private flashSaved(message = t('Saved')) {
-    let tag = document.querySelector<HTMLElement>('.ed-autosaved')
-    if (!tag) { tag = div('ed-autosaved'); document.querySelector('.ed-topbar .ed-title')?.after(tag) }
+  private flashSaved(message = t('Saved'), holdMs = 1400) {
+    const title = document.querySelector<HTMLElement>('.ed-topbar .ed-title')
+    const bar = title?.parentElement
+    if (!title || !bar) return
+    let tag = bar.querySelector<HTMLElement>(':scope > .ed-autosaved')
+    if (!tag) { tag = div('ed-autosaved'); bar.appendChild(tag) }
     tag.textContent = message
-    // hidden while idle: at opacity 0 the tag still held its width, so after
-    // the first backup the title permanently lost the space this text needs
-    tag.hidden = false
+    // An overlay at the title's right end, never a slot in the bar: as a flex
+    // item it shifted Undo/Redo on every auto-save and clicks landed on Redo
+    // (#546). Offsets are in the bar's content coordinates, so it rides along
+    // when a too-narrow bar is scrolled.
+    tag.style.left = `${Math.max(title.offsetLeft, title.offsetLeft + title.offsetWidth - tag.offsetWidth - 6)}px`
+    tag.style.top = `${title.offsetTop + (title.offsetHeight - tag.offsetHeight) / 2}px`
     void tag.offsetWidth // paint a frame at opacity 0 so the fade-in runs
     tag.classList.add('show')
     clearTimeout(this.savedTimer)
-    clearTimeout(this.savedHideTimer)
-    this.savedTimer = window.setTimeout(() => tag!.classList.remove('show'), 1400)
-    // leave layout only after the 0.25s fade-out has finished
-    this.savedHideTimer = window.setTimeout(() => { tag!.hidden = true }, 1700)
+    this.savedTimer = window.setTimeout(() => tag!.classList.remove('show'), holdMs)
   }
 
   async save(forcePicker: boolean) {
@@ -3269,36 +3324,69 @@ export class Editor {
       return
     }
     const result = out.result
+    // "Save a copy…" wrote ANOTHER file and leaves you editing this one (#705):
+    // nothing about the open deck changes — not its title, file chip, ⌘S target
+    // or sharing, and its unsaved dot stays (saving.ts). Saying "Saved" here, or
+    // retitling to the copy, would claim the deck had become the copy.
+    if ((result as string) === 'copied') {
+      this.toast(t('Copy saved — you are still editing the original'))
+      return
+    }
     try {
       // the file name is knowable from here on — put it in the tab and the chip
       this.syncWindowTitle()
       // staged language packs are in the bytes now — stop calling them pending
       markFileSaved()
-      // record a recovery baseline + a version checkpoint at each manual save
-      if (!isEncryptionActive()) { void putRecovery(this.store.doc); void addVersion(this.store.doc); this.lastVersionAt = Date.now() }
-      // Saving is the opt-in: a named, saved deck is "live by default" from
-      // now on (the recipient of a copy already joins on open). Connect this
-      // session too so author and recipient meet without another click.
-      this.session?.enableSharing()
-      this.tryJoin()
-      // A save from the WEB changes what this page is: the deck now lives in a
-      // file, and this URL will hand out a fresh starter next time. Said here,
-      // persistently, so the next visit is not a surprise — and deliberately
-      // NOT as a block, because this tab keeps working and keeps writing.
-      // BETA FORK (v1.1 U8): the store origin is https but it is not the web
-      // demo — the deck lives at this URL, so the "starts fresh" notice is false.
-      if (!isStoreOrigin()) {
-        noteSavedFromWeb(currentFileName() ?? suggestedFileName(this.store.doc), {
-          fsAccess: canWriteInPlace(), canWrite: hostCan('write'),
-        })
+      // The save wrote everything there was, so a pending auto-save would only
+      // write it again. Cancelled ONLY here, after a save that left nothing
+      // unsaved: a cancelled or failed save returns above with the timer still
+      // running (it is the edit's crash-recovery copy), and an edit made while
+      // the bytes were on their way keeps the deck dirty and keeps its timer.
+      if (!this.store.dirty) {
+        clearTimeout(this.autosaveTimer)
+        this.autosaveTimer = 0
       }
       this.toast(result === 'downloaded'
         ? t('This browser can’t rewrite files in place — a fresh copy went to Downloads')
         : t('Saved'))
+      // Saving is the opt-in: a named, saved deck is "live by default" from
+      // now on (the recipient of a copy already joins on open). Connect this
+      // session too so author and recipient meet without another click.
+      if (sharingOn(this.store)) {
+        this.session?.enableSharing()
+        this.tryJoin()
+      }
+      // The recovery baseline, the version checkpoint and the web note run when
+      // the page is idle, so the toast and the next paint are not held behind
+      // two IndexedDB writes (a large deck stalled the compositor on Wayland).
+      // The seal is asked when they run, not now: a deck sealed meanwhile
+      // writes nothing.
+      const doc = this.store.doc
+      Editor.whenIdle(() => {
+        // record a recovery baseline + a version checkpoint at each manual save
+        if (!isBodySealed()) { void putRecovery(doc); void addVersion(doc); this.lastVersionAt = Date.now() }
+        // A save from the WEB changes what this page is: the deck now lives in a
+        // file, and this URL will hand out a fresh starter next time. Said here,
+        // persistently, so the next visit is not a surprise — and deliberately
+        // NOT as a block, because this tab keeps working and keeps writing.
+        // BETA FORK (v1.1 U8): the store origin is https but it is not the web
+        // demo — the deck lives at this URL, so the "starts fresh" notice is false.
+        if (!isStoreOrigin()) {
+          noteSavedFromWeb(currentFileName() ?? suggestedFileName(doc), {
+            fsAccess: canWriteInPlace(), canWrite: hostCan('write'),
+          })
+        }
+      }, 200)
     } catch (err) {
       console.error(err)
       this.toast(t('Save failed — see console'))
     }
+  }
+
+  /** Run `task` when the page is idle, and at most `timeout` ms later. */
+  private static whenIdle(task: () => void, timeout: number) {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(() => task(), { timeout })
+    else setTimeout(task, 0)
   }
 
   // --- keyboard ------------------------------------------------------------------
@@ -3882,7 +3970,7 @@ export class Editor {
     for (const c of THEME_CHOICES) {
       const o = document.createElement('option')
       o.value = c
-      o.textContent = c === 'auto' ? t('Match my system') : c === 'light' ? t('Light') : t('Dark')
+      o.textContent = c === 'auto' ? t('Match my system') : c === 'light' ? t('Light mode') : t('Dark mode')
       if (c === themeChoice()) o.selected = true
       themeSel.appendChild(o)
     }

@@ -138,7 +138,7 @@ export function fontFace(stack: string | undefined, fallback: string): string {
 
 // ---- rich text ---------------------------------------------------------------
 
-interface Run { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; breakLine?: boolean }
+interface Run { text: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; breakLine?: boolean; bullet?: true | { type: 'number' }; indentLevel?: number }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
 const decode = (s: string) => s.replace(/&(#?\w+);/g, (m, e: string) => {
@@ -155,16 +155,25 @@ const decode = (s: string) => s.replace(/&(#?\w+);/g, (m, e: string) => {
 export function htmlToRuns(html: string): Run[] {
   const runs: Run[] = []
   const state = { bold: 0, italic: 0, underline: 0, strike: 0 }
-  let firstBlock = true
+  // Lists become native PowerPoint bullets, not "• " text: the first run of
+  // each <li> opens a bulleted paragraph (pptxgenjs starts a new paragraph on
+  // a run that carries `bullet`); the item's later runs stay in it. An item
+  // with no text gets no paragraph, so an empty layout row exports no dot.
+  const lists: Array<'ul' | 'ol'> = []
+  let pendingItem: { bullet: true | { type: 'number' }; indentLevel?: number } | null = null
+  let breakAfterList = false
   const push = (text: string) => {
     if (!text) return
+    if (breakAfterList && !pendingItem) { breakAfterList = false; br() }
     runs.push({
       text,
       bold: state.bold > 0 || undefined,
       italic: state.italic > 0 || undefined,
       underline: state.underline > 0 || undefined,
       strike: state.strike > 0 || undefined,
+      ...(pendingItem ?? {}),
     })
+    pendingItem = null
   }
   const br = () => {
     if (runs.length) runs[runs.length - 1].breakLine = true
@@ -182,13 +191,26 @@ export function htmlToRuns(html: string): Run[] {
       case 'u': state.underline += d; break
       case 's': case 'strike': case 'del': state.strike += d; break
       case 'br': br(); break
+      case 'ul': case 'ol':
+        if (closing) { lists.pop(); if (!lists.length) breakAfterList = true }
+        else lists.push(tag)
+        break
+      case 'li':
+        if (closing) { pendingItem = null; break }
+        breakAfterList = false
+        pendingItem = {
+          bullet: lists.at(-1) === 'ol' ? { type: 'number' } : true,
+          ...(lists.length > 1 ? { indentLevel: lists.length - 1 } : {}),
+        }
+        break
       default: break
     }
+    // Every block, list items included, ends the paragraph before it with a
+    // break: the text box always sets `align`, and pptxgenjs then groups by
+    // breakLine/align only, never by `bullet` alone.
     if ((tag === 'p' || tag === 'div' || tag === 'li' || tag === 'h1' || tag === 'h2') && !closing) {
-      if (firstBlock) firstBlock = false
-      else br()
+      if (runs.length && !runs[runs.length - 1].breakLine) br()
     }
-    if (tag === 'li' && !closing) push('• ')
   }
   // never hand pptxgenjs an empty run list: PowerPoint drops the shape
   return runs.length ? runs : [{ text: '' }]
@@ -389,7 +411,7 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
           }
           if (t.letterSpacing) props.charSpacing = pt(t.letterSpacing)
           if (transparency || colour?.transparency) props.transparency = Math.max(transparency, colour?.transparency ?? 0)
-          s.addText(runs.map((r) => ({ text: r.text, options: { bold: r.bold || props.bold, italic: r.italic, underline: r.underline ? { style: 'sng' } : undefined, strike: r.strike ? 'sngStrike' : undefined, breakLine: r.breakLine } })), props)
+          s.addText(runs.map((r) => ({ text: r.text, options: { bold: r.bold || props.bold, italic: r.italic, underline: r.underline ? { style: 'sng' } : undefined, strike: r.strike ? 'sngStrike' : undefined, breakLine: r.breakLine, bullet: r.bullet, indentLevel: r.indentLevel } })), props)
           if (t.colorGradient) degrade(slide.id, el.id, 'gradient', 'Gradient text is flattened to its solid colour.')
           break
         }

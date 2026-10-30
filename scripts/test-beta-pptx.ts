@@ -156,6 +156,31 @@ const tplXml = execFileSync('find', [join(work, 't/ppt/slides'), '-name', 'slide
 ok(!/\{\{/.test(tplXml), 'client-pitch template exports with every footer and byline token resolved')
 ok(tplMap.report.filter((r) => r.elementId !== '*').every((r) => r.reason === 'gradient' || r.reason === 'svg'), `template report carries only expected reasons (${[...new Set(tplMap.report.map((r) => r.reason))].join(', ')})`)
 
+// ---- 2c2. bullets are native PowerPoint bullets (R2) -------------------------
+console.log('\nBullets')
+const { generalTemplate } = await import('./lib/beta-general.mjs')
+const general = generalTemplate() as BentoDoc
+const listSlides = general.slides.filter((s) => s.id === 'bullets' || s.id === 'bullets-detail')
+ok(listSlides.length === 2, 'the general template has both bullets slides')
+ok(listSlides.every((s) => s.elements.filter((e: any) => e.type === 'text' && /<ul>/.test(e.html)).length === 1),
+  'each bullets slide holds its points in ONE text box with a <ul>')
+ok(!general.slides.concat(general.layouts ?? []).some((s) => s.elements.some((e: any) => e.role === 'list-marker' || (e.type === 'text' && /^\s*•\s*$/.test(e.html ?? '')))),
+  'no slide or layout draws a bullet as its own "•" text box')
+const emptyLayout = structuredClone((general.layouts ?? []).find((l) => l.id === 'bullets')!)
+ok(!!emptyLayout && emptyLayout.elements.some((e: any) => e.id === 'point-list' && e.html === '<ul><li></li></ul>' && e.placeholder),
+  'the Bullets layout starts as an empty list behind its prompt, so typing starts inside a list')
+emptyLayout.id = 'empty-bullets'
+const bulletDeck = { ...general, slides: [...listSlides, emptyLayout] } as BentoDoc
+const bulletMap = await mapDeck(bulletDeck)
+writeFileSync(join(work, 'bullets.pptx'), Buffer.from(await bulletMap.pptx.write({ outputType: 'nodebuffer' }) as Uint8Array))
+execFileSync('unzip', ['-q', '-o', join(work, 'bullets.pptx'), '-d', join(work, 'b')])
+const bxml = (n: number) => read(join(work, `b/ppt/slides/slide${n}.xml`))
+const bulletParas = (xml: string) => (xml.match(/<a:p>(?:(?!<\/a:p>)[\s\S])*?<a:buChar[\s\S]*?<\/a:p>/g) ?? []).length
+ok(bulletParas(bxml(1)) === 3, `Bullets / generous exports three native bullet paragraphs (${bulletParas(bxml(1))})`)
+ok(bulletParas(bxml(2)) === 3, `Bullets / title and explanation exports three native bullet paragraphs (${bulletParas(bxml(2))})`)
+ok(!/<a:t>•/.test(bxml(1) + bxml(2)), 'no bullet is exported as a literal "•" character')
+ok(bulletParas(bxml(3)) === 0, 'an untouched Bullets layout exports no bullet at all (no stray dot)')
+
 // ---- 2d. the headless CLI the skill points at -------------------------------
 console.log('\nCLI')
 const cliOut = join(work, 'cli.pptx')

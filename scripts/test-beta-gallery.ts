@@ -55,8 +55,10 @@ const withScenes = (...scenes: unknown[]) => ({ format: 'beta/library', v: 1, sc
 console.log('\nwhat in a manifest is trusted')
 {
   const scenes = g.readManifest(clone(manifest))!
-  ok(scenes && scenes.map((s) => s.id).join() === 'counter,map', 'the real manifest reads: counter and map')
-  ok(scenes.every((s) => s.kind === 'runtime' && s.html && s.still.startsWith('<svg')), 'both are runtime scenes with a page and a still')
+  // every scene the build admits, the shelf admits: one it dropped would build green and never reach a person
+  ok(scenes && scenes.map((s) => s.id).join() === manifest.scenes.map((s: { id: string }) => s.id).join() && ['counter', 'map'].every((id) => scenes.some((s) => s.id === id)),
+    `the real manifest reads, every scene of it (${scenes?.map((s) => s.id).join(', ')})`)
+  ok(scenes.every((s) => s.kind === 'runtime' && s.html && s.still.startsWith('<svg')), 'all are runtime scenes with a page and a still')
   ok(presetsFor({ id: 'map' })?.map((p) => p.name).join() === 'Oslo,Copenhagen,Stockholm', 'reading it remembers the presets for the settings panel (U10)')
   for (const [bad, why] of [[null, 'null'], [{ format: 'beta/library', v: 2, scenes: [] }, 'another version'],
     [{ format: 'other', v: 1, scenes: [] }, 'another format'], [{ format: 'beta/library', v: 1, scenes: {} }, 'scenes not a list']] as const) {
@@ -141,6 +143,22 @@ console.log('\na web scene becomes an embed on the current slide')
   const head = 'https://slides.betamobility.ai/?p='
   const long = g.readManifest(withScenes(web({ url: head + 'x'.repeat(2045 - head.length) })))![0]
   ok(long && 'error' in g.webEmbed(doc, long, { name: 'n', values: { mode: 'near' } }), 'an address the preset would push past the limit is refused, not written')
+}
+
+console.log('\nevery library scene, with every preset, becomes a slide the gate keeps (R8)')
+{
+  for (const scene of g.readManifest(clone(manifest))!) {
+    for (const preset of scene.presets) {
+      const doc = deck()
+      const slide = g.runtimeSlide(doc, scene, preset)
+      const rt = slide?.runtime
+      const reread = slide && sanitizeSlide(clone(slide))
+      const want = Object.fromEntries(scene.props.map((p) => [p.key, Object.prototype.hasOwnProperty.call(preset.values, p.key) ? preset.values[p.key] : p.default]))
+      ok(!!rt && rt.library?.id === scene.id && rt.steps === scene.steps && JSON.stringify(rt.values) === JSON.stringify(want)
+        && !!reread && JSON.stringify(reread.runtime) === JSON.stringify(rt) && runtimeSource(slide!, doc)?.html === scene.html,
+        `${scene.id} / "${preset.name}": inserted with the preset's values over the defaults, and a reload keeps it as written`)
+    }
+  }
 }
 
 console.log('\ninserting into the editor\'s deck')

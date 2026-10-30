@@ -45,7 +45,7 @@ capturePristine(); assert(installStoreHost())
 const store: any = { doc: newDoc(), revision: 1, dirty: true, setDirty(v: boolean) { this.dirty = v } }
 store.doc.title = 'first edit'
 let snapshot: any, banner = '', recovered: any
-const deps: any = { hasFileHandle, writeUpdatedFile, saveRevision, saveFile, serializeAuto: async (d: any) => { serializations++; return serializeAuto(d) }, isEncryptionActive: () => false,
+const deps: any = { hasFileHandle, writeUpdatedFile, saveRevision, saveFile, serializeAuto: async (d: any) => { serializations++; return serializeAuto(d) }, isEncryptionActive: () => false, isBodySealed: () => false,
   putRecovery: async (d: any) => { snapshot = { at: Date.now(), json: JSON.stringify(d) }; return true }, addVersion: async () => {}, markFileSaved() {}, StoreConflictError, StoreSignedOutError, t: (s: string) => s, console: { error() {} } }
 const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, canvas: { commitTextEdit() {} }, storeConflictMessage: () => 'conflict' }
 ctx.noteStoreConflict = method('noteStoreConflict', 'err, always = false', { markStoreConflict }).bind(ctx)
@@ -69,7 +69,7 @@ assert.throws(noSerializeOracle)
 const replaced = structuredClone(store.doc); replaced.title = 'service replacement'; store.doc = replaced
 ctx.showConflictRecoveryBanner = (_snap: any, d: any) => { banner = 'new-deck'; recovered = d }
 ctx.showRecoveryBanner = () => { banner = 'restore' }
-await method('checkRecovery', '', { getRecovery: async () => snapshot, gateRestored, docContentKey, hasStoreConflict, clearStoreConflict, recoveryChoice, isStoreOrigin: () => true }).call(ctx)
+await method('checkRecovery', '', { isBodySealed: () => false, getRecovery: async () => snapshot, gateRestored, docContentKey, hasStoreConflict, clearStoreConflict, recoveryChoice, isStoreOrigin: () => true }).call(ctx)
 assert.equal(banner, 'new-deck'); assert.equal(recovered.title, 'third edit after refusal')
 assert.equal(store.doc.title, 'service replacement')
 console.log('PASSED: overlapping autosave/manual writes latch on one 412, keep newest recovery and offer it as a new deck after reload')

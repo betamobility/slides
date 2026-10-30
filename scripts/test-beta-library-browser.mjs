@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildManifest } from './lib/beta-library.mjs'
+import { captureStill, capturedScenes } from './lib/beta-library-still.mjs'
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
 
 let checks = 0
@@ -193,6 +194,181 @@ console.log('\nthe map')
   await four.p.close()
 }
 
+// ---- the R8 scenes (kpi-row, timeline, before-after, annotated-bars) ----
+// They draw into <svg id="scene"> by arithmetic, and their still is that
+// drawing of their defaults, captured (scripts/build-beta-library-stills.mjs).
+const captured = capturedScenes(join(root, 'beta/library'))
+
+/** What the drawing says, read off the svg. */
+const reading = (p) => p.evaluate(() => {
+  const svg = document.getElementById('scene')
+  const texts = [...svg.querySelectorAll('text')]
+  const w = window.innerWidth, h = window.innerHeight
+  return {
+    nodes: svg.querySelectorAll('*').length, label: svg.getAttribute('aria-label') ?? '', viewBox: svg.getAttribute('viewBox'),
+    words: texts.map((t) => t.textContent).join(' | '), fonts: texts.every((t) => t.hasAttribute('font-family') || !!t.closest('[font-family]')),
+    off: texts.filter((t) => { const b = t.getBoundingClientRect(); return b.width > 0 && (b.left < -1 || b.right > w + 1 || b.top < -1 || b.bottom > h + 1) }).map((t) => t.textContent),
+    attrs: [...svg.querySelectorAll('*')].flatMap((n) => [...n.attributes].map((a) => a.value)).join(' '),
+    markup: document.querySelectorAll('img, image, iframe, foreignObject, script:not(:first-of-type)').length,
+  }
+})
+
+console.log('\nthe R8 scenes: captured stills, every preset and step, settings as data')
+ok(['annotated-bars', 'before-after', 'kpi-row', 'timeline'].every((id) => captured.includes(id)), `the four R8 scenes are captured scenes (${captured.join(', ')})`)
+for (const id of captured) {
+  const s = scene(id)
+  // the committed still is the scene's own drawing of its defaults
+  const cp = await ctx.newPage()
+  const fresh = await captureStill(cp, s.html)
+  await cp.close()
+  ok(fresh === readFileSync(join(root, 'beta/library', id, 'still.svg'), 'utf8'), `${id}: still.svg is what the page draws with its defaults (else run node scripts/build-beta-library-stills.mjs ${id})`)
+
+  const { p, errors, say, init } = await open(s)
+  let r = await reading(p)
+  ok(r.nodes > 5 && r.fonts && r.label.includes(defaults(s).title), `${id}: before it is told anything it draws its defaults, every text naming its font (${r.nodes} nodes)`)
+  for (const preset of s.presets) for (let step = 0; step < Math.max(1, s.steps); step++) {
+    for (const size of [{ width: 1280, height: 720 }, { width: 1024, height: 768 }]) {
+      await p.setViewportSize(size)
+      await init(preset.values, { step })
+      r = await reading(p)
+      ok(r.nodes > 5 && !/NaN|undefined|Infinity|null/.test(r.words + r.attrs) && r.off.length === 0,
+        `${id}: preset "${preset.name}", step ${step}, ${size.width}x${size.height}: draws, and no text leaves the picture (${r.off.join(' / ') || r.nodes + ' nodes'})`)
+    }
+  }
+  await p.setViewportSize({ width: 1280, height: 720 })
+  // a setting changed while it shows
+  await init()
+  await say({ type: 'bento:props', values: { title: 'A title set in the panel' } })
+  r = await reading(p)
+  ok(r.words.includes('A title set in the panel') && !r.words.includes(defaults(s).title), `${id}: bento:props redraws with the new value`)
+  // settings are data: every free text setting carries markup, every colour a URL
+  const hostile = Object.fromEntries(s.props.map((q) => [q.key, q.kind === 'text' && !q.format ? '<img src=x onerror="document.title=\'pwn\'"><b>b</b>' : q.kind === 'color' ? 'url(https://evil.test/a.png)' : q.default]))
+  await init(hostile)
+  await p.waitForTimeout(100)
+  r = await reading(p)
+  ok(r.markup === 0 && await p.evaluate(() => document.title !== 'pwn') && r.words.includes('<img'), `${id}: markup in a setting is shown as text, not built`)
+  ok(!/url\s*\(/i.test(r.attrs), `${id}: a colour that names a URL is not used`)
+  // garbage in every setting still draws
+  await init(Object.fromEntries(s.props.map((q) => [q.key, q.kind === 'number' ? Number.NaN : q.kind === 'color' ? '' : 'x'.repeat(4000)])))
+  r = await reading(p)
+  ok(r.nodes > 3 && !/NaN|Infinity/.test(r.attrs) && r.off.length === 0, `${id}: settings that are not numbers, or 4000 characters long, still draw inside the picture (${r.off.map((t) => t.slice(0, 30)).join(" / ") || "none"} off)`)
+  // with motion the entrance runs (on arrival, or for a scene that steps, on
+  // the step forward) and lands on the same drawing as without
+  const last = Math.max(0, s.steps - 1)
+  await init({}, { step: last })
+  const settled = (await reading(p)).attrs
+  const arrive = async () => {
+    if (s.steps > 1 && id === 'before-after') { await init({}, { step: last - 1, reduceMotion: false }); await say({ type: 'bento:step', index: last }) } else await init({}, { step: last, reduceMotion: false })
+    await p.waitForTimeout(80)
+  }
+  await arrive()
+  const moving = (await reading(p)).attrs
+  await p.waitForTimeout(2000)
+  ok(moving !== settled && (await reading(p)).attrs === settled, `${id}: with motion an entrance plays, and lands where the reduced drawing is`)
+  await arrive()
+  await say({ type: 'bento:motion', reduce: true })
+  ok((await reading(p)).attrs === settled, `${id}: motion switched off mid-entrance lands at once`)
+  ok(errors.length === 0, `${id}: no error (${errors.join(' | ')})`)
+  await p.close()
+}
+
+{
+  const s = scene('kpi-row')
+  const { p, init } = await open(s)
+  const rules = () => p.evaluate(() => document.querySelectorAll('#scene line[stroke-width="4"]').length)
+  await init({ count: 4 }); const four = await rules()
+  await init({ count: 2 }); const two = await rules()
+  ok(four === 4 && two === 2, `kpi-row: the count sets how many figures (${four}, ${two})`)
+  const tone = async (delta, trend) => { await init({ count: 2, k1Delta: delta, k1Trend: trend }); return p.evaluate(() => document.querySelector('#scene g text[font-size="30"][font-family*="DM Mono"]')?.getAttribute('fill')) }
+  const tones = [await tone('+5 %', 'up is good'), await tone('+5 %', 'down is good'), await tone('−5 %', 'down is good'), await tone('-5 %', 'up is good'), await tone('+5 %', 'neutral'), await tone('5 %', 'up is good')]
+  ok(tones.join() === '#1F7A1F,#B42318,#1F7A1F,#B42318,#666666,#666666',
+    `kpi-row: a change is --color-positive the good way, --color-negative the other, --beta-muted when neutral or unsigned (${tones})`)
+  // a figure is Geist (DM Mono is for small data), and its descenders never touch the label under it
+  for (const [values, what] of [
+    [{ count: 2, k1Value: '−23 %', k2Value: '4 of 5', k2Label: 'residents want the scheme kept' }, '"−23 %" and "4 of 5"'],
+    [{ count: 4, k4Value: '1 200', k4Label: 'bikes in service', k4Delta: '+15 %' }, 'four figures with "1 200"'],
+    [{ count: 3, k1Value: 'gjpqy 99', k2Value: '1,24 mill.', k3Value: '100 000 000' }, 'descender letters and long figures'],
+  ]) {
+    await init(values)
+    const fit = await p.evaluate(() => [...document.querySelectorAll('#scene > g')].map((g) => {
+      const [fig, label] = [...g.children].filter((n) => n.tagName === 'text')
+      const a = fig.getBoundingClientRect(), b = label.getBoundingClientRect(), rule = g.querySelector('line').getBoundingClientRect()
+      return { gap: Math.round(b.top - a.bottom), wide: a.right <= rule.right + 1, sans: /Geist/.test(fig.getAttribute('font-family')) && !/DM Mono/.test(fig.getAttribute('font-family')), tabular: fig.getAttribute('font-variant') === 'tabular-nums' }
+    }))
+    ok(fit.length >= 2 && fit.every((f) => f.gap >= 8 && f.wide && f.sans && f.tabular), `kpi-row: ${what}: figures in Geist with tabular numerals, inside their column, a clear gap above the label (${fit.map((f) => f.gap).join(', ')} px)`)
+  }
+  await init({ k1Delta: '', k2Delta: '', k3Delta: '' })
+  ok(await p.evaluate(() => document.querySelectorAll('#scene path').length) === 0 && !(await reading(p)).words.includes('vs. the year before'), 'kpi-row: with no change there is no arrow and no note')
+  await p.close()
+}
+{
+  const s = scene('timeline')
+  const { p, init } = await open(s)
+  const xs = () => p.evaluate(() => [...document.querySelectorAll('#scene circle[r="11"]')].map((c) => Number(c.getAttribute('cx'))))
+  await init()
+  let x = await xs()
+  ok(x.length === 5 && (await reading(p)).words.includes('Today'), `timeline: five milestones and the today marker by default (${x.length})`)
+  // 2025-01, 2025-06, 2025-11, 2026-04, 2027-01: five months apart, then nine
+  ok(Math.abs((x[1] - x[0]) / (x[2] - x[1]) - 1) < 0.05 && Math.abs((x[4] - x[3]) / (x[3] - x[2]) - 1.8) < 0.1, `timeline: dates are placed in proportion to time (${x.join(', ')})`)
+  const filled = await p.evaluate(() => [...document.querySelectorAll('#scene circle[r="11"]')].map((c) => c.getAttribute('fill') !== '#FFFFFF'))
+  ok(filled.join() === 'true,true,true,false,false', `timeline: milestones up to today are filled, later ones hollow (${filled})`)
+  await init(s.presets.find((q) => q.name.startsWith('Phases')).values)
+  x = await xs()
+  const gaps = x.slice(1).map((v, i) => Math.round(v - x[i]))
+  ok(new Set(gaps).size === 1 && !(await reading(p)).words.includes('Today'), `timeline: phase names space the milestones evenly and leave the marker out (${gaps})`)
+  await init({ m1Date: '2027', m2Date: '2025-03', m3Date: 'Q3 2025', m4Date: '2026 Q1', m5Date: '2025-03-15' })
+  x = await xs()
+  const order = await p.evaluate(() => [...document.querySelectorAll('#scene text[font-size="24"]')].map((t) => t.textContent).filter((t) => /\d/.test(t)))
+  ok(x.every((v, i) => i === 0 || v > x[i - 1]) && order.join() === '2025-03,2025-03-15,Q3 2025,2026 Q1,2027', `timeline: every date form reads, in time order whatever order they are written in (${order})`)
+  await init({ m6Date: '2027-06', m6Label: 'Six', today: '' })
+  ok((await xs()).length === 6 && !(await reading(p)).words.includes('Today'), 'timeline: a sixth milestone shows, and an empty today removes the marker')
+  await p.close()
+}
+{
+  const s = scene('before-after')
+  const { p, say, init } = await open(s)
+  await init({}, { step: 0 })
+  let w = (await reading(p)).words
+  ok(w.includes('38 min') && !w.includes('24 min') && !w.includes('37'), 'before-after: step 0 shows the before figure, not the after one or the change')
+  await say({ type: 'bento:step', index: 1 })
+  await p.waitForTimeout(50)
+  w = (await reading(p)).words
+  ok(w.includes('24 min') && w.includes('−37 %'), 'before-after: step 1 brings in the after figure and the change')
+  await say({ type: 'bento:step', index: 0 })
+  ok(!(await reading(p)).words.includes('24 min'), 'before-after: stepping back hides them again')
+  const bars = () => p.evaluate(() => [...document.querySelectorAll('#scene rect[height="28"]')].map((r) => Number(r.getAttribute('width'))))
+  await init({}, { step: 1 })
+  const b = await bars()
+  ok(b.length === 2 && Math.abs(b[1] / b[0] - 24 / 38) < 0.01, `before-after: the two bars share one scale (${b})`)
+  await init({ beforeAmount: 0 }, { step: 1 })
+  ok((await bars()).length === 0, 'before-after: an amount of 0 leaves the bars out')
+  await init({ changeTone: 'bad' }, { step: 1 })
+  ok(await p.evaluate(() => [...document.querySelectorAll('#scene text')].find((t) => t.textContent === '−37 %')?.getAttribute('fill')) === '#B42318', 'before-after: a bad change is drawn in --color-negative')
+  await p.close()
+}
+{
+  const s = scene('annotated-bars')
+  const { p, say, init } = await open(s)
+  const bars = () => p.evaluate(() => [...document.querySelectorAll('#scene rect')].slice(1).map((r) => ({ h: Number(r.getAttribute('height')), y: Number(r.getAttribute('y')), fill: r.getAttribute('fill') })))
+  await init({}, { step: 0 })
+  let b = await bars()
+  ok(b.length === 7 && b.every((x) => x.fill === '#0F2A4A') && !(await reading(p)).words.includes('Pandemic'), 'annotated-bars: step 0 draws the seven bars, none picked out, and no callout')
+  await say({ type: 'bento:step', index: 1 })
+  await p.waitForTimeout(50)
+  b = await bars()
+  ok(b[1].fill === '#E4572E' && b[6].fill === '#E4572E' && b.filter((x) => x.fill === '#E4572E').length === 2 && (await reading(p)).words.includes('Pandemic'), 'annotated-bars: step 1 picks out the two bars the callouts name, and shows the callouts')
+  await init({ values: '12,5; 12.5; 25', labels: 'a; b; c', note1Bar: 0, note2Bar: 0 }, { step: 1 })
+  b = await bars()
+  ok(b.length === 3 && b[0].h === b[1].h && Math.abs(b[2].h / b[0].h - 2) < 0.01, `annotated-bars: "12,5" and "12.5" read as the same number, on one scale (${b.map((x) => x.h)})`)
+  await init({ values: '10; -5; 20', labels: 'a; b; c', note1Bar: 2, note2Bar: 9 }, { step: 1 })
+  b = await bars()
+  const words = (await reading(p)).words
+  ok(b.length === 3 && b[1].y >= b[0].y + b[0].h - 1 && words.includes('Pandemic') && !words.includes('New timetable'), 'annotated-bars: a negative value hangs below zero, and a callout naming a bar that is not there is left out')
+  await init({ values: Array.from({ length: 20 }, (_, i) => i + 1).join('; ') }, { step: 1 })
+  ok((await bars()).length === 12, 'annotated-bars: at most twelve bars')
+  await p.close()
+}
+
 console.log('\nthe stills')
 for (const s of manifest.scenes) {
   const p = await ctx.newPage()
@@ -208,7 +384,7 @@ for (const s of manifest.scenes) {
   }, still)
   ok(info.parses && info.drawn, `${s.id}: the still is well-formed and draws as an image`)
   ok(info.texts > 0 && info.fonts, `${s.id}: every text in the still names its font (${info.texts} texts)`)
-  const word = s.id === 'map' ? 'Oslo' : 'trips this year'
+  const word = { counter: 'trips this year', map: 'Oslo' }[s.id] ?? defaults(s).title
   ok(info.words.includes(word), `${s.id}: the still shows what the scene shows by default ("${word}")`)
   await p.close()
 }

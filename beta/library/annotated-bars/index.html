@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Annotated bar chart</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  svg { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<svg id="scene" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img"></svg>
+<script>
+  // Up to twelve bars with up to two callouts, each pointing at one bar. Two
+  // steps: the bars first, then the callouts with their bars picked out.
+  // Labels and values are lists separated by ";" (so a decimal comma reads:
+  // "12,5; 15"). A value is drawn as written, followed by the unit; its bar
+  // takes the number in it.
+  // Defaults match scene.json, so the file previews on its own in a browser,
+  // and the drawing it makes before it is told anything (the last step) IS its
+  // still (scripts/build-beta-library-stills.mjs saves it). So: every text
+  // names its font as an attribute (a still has no stylesheet), and the layout
+  // is arithmetic on character counts, never measured text, so the drawing is
+  // the same on every machine.
+
+  // Beta design tokens (beta/v131/tokens.json). Every colour and font drawn
+  // here comes from this table; scripts/test-beta-library.ts checks each value
+  // against the token file and that the page writes no other colour.
+  const TOKENS = {
+    '--beta-white': '#FFFFFF',
+    '--beta-charcoal': '#1A1A1A',
+    '--beta-muted': '#666666',
+    '--chart-1': '#0F2A4A',
+    '--chart-2': '#E4572E',
+    '--font-sans': "'Geist', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+    '--font-mono': "'DM Mono', 'Courier New', monospace",
+  }
+  const SANS = TOKENS['--font-sans'], MONO = TOKENS['--font-mono']
+  const INK = TOKENS['--beta-charcoal'], MUTED = TOKENS['--beta-muted']
+  const W = 1600, NS = 'http://www.w3.org/2000/svg', M = 120, STEPS = 2, MAX_BARS = 12
+  let H = 900 // follows the frame's shape, so nothing is cropped on a 4:3 deck
+
+  const state = { step: STEPS - 1, reduce: false,
+    props: {
+      title: 'Weekday boardings on line 31, thousands',
+      labels: '2019; 2020; 2021; 2022; 2023; 2024; 2025', values: '41; 22; 27; 35; 39; 44; 52', unit: '',
+      note1Bar: 2, note1Text: 'Pandemic: boardings fell by half',
+      note2Bar: 7, note2Text: 'New timetable with a bus every 7.5 minutes',
+      bars: '#0F2A4A', highlight: '#E4572E', background: '#FFFFFF',
+    } }
+  const svg = document.getElementById('scene')
+  let raf = 0
+
+  /** A colour a deck may set: a plain CSS colour, never something that loads (the shell refuses those too). */
+  const colour = (v, fallback) => (typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/.test(v) && !/url|expression|var\s*\(/i.test(v) ? v : fallback)
+  const text = (v, max) => String(v ?? '').trim().slice(0, max)
+  const r1 = (v) => Math.round(v * 10) / 10
+  const el = (name, attrs, content) => {
+    const n = document.createElementNS(NS, name)
+    for (const k in attrs) n.setAttribute(k, attrs[k])
+    if (content != null) n.textContent = content
+    return n
+  }
+  /** Words into at most `lines` lines of about `chars` characters; a cut ends in an ellipsis. */
+  function wrap(s, chars, lines) {
+    chars = Math.max(4, chars)
+    const words = String(s).trim().split(/\s+/).filter(Boolean).map((w) => (w.length > chars ? w.slice(0, chars - 1) + '…' : w))
+    const out = []
+    let cur = ''
+    for (const w of words) {
+      if (!cur) cur = w
+      else if (cur.length + 1 + w.length <= chars) cur += ' ' + w
+      else { out.push(cur); cur = w }
+    }
+    if (cur) out.push(cur)
+    if (out.length > lines) {
+      out.length = lines
+      out[lines - 1] = out[lines - 1].slice(0, chars - 1) + '…'
+    }
+    return out
+  }
+  function lines(list, x, y, step, attrs) {
+    const t = el('text', { x, y, ...attrs })
+    list.forEach((line, i) => t.appendChild(el('tspan', { x, y: r1(y + i * step) }, line)))
+    return t
+  }
+  /** "41; 22,5;  7" → ['41', '22,5', '7']: split on ";" only, so a decimal comma stays inside its value. */
+  const list = (s) => String(s ?? '').split(';').map((v) => v.trim()).slice(0, MAX_BARS)
+  /** The number in a value as written: "1 200" and "12,5" and "12.5 %" read as 1200, 12.5, 12.5; anything else is 0. */
+  function number(v) {
+    const m = /^[-−]?\d+(?:[.,]\d+)?/.exec(v.replace(/[\s ]/g, ''))
+    if (!m) return 0
+    return Number(m[0].replace('−', '-').replace(',', '.'))
+  }
+
+  /** Draw the step; `grow` is how far the bars have risen, `shown` how far the callouts have come in (0 to 1). */
+  function draw(grow = 1, shown = state.step >= 1 ? 1 : 0) {
+    const p = state.props
+    H = Math.round(W * Math.max(0.3, Math.min(3, (window.innerHeight || 9) / (window.innerWidth || 16))))
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    const bg = colour(p.background, TOKENS['--beta-white'])
+    const base = colour(p.bars, TOKENS['--chart-1']), hi = colour(p.highlight, TOKENS['--chart-2'])
+    svg.replaceChildren(el('rect', { width: W, height: H, fill: bg }))
+
+    let top = 70
+    const title = wrap(text(p.title, 200), 48, 2)
+    if (title.length) {
+      svg.appendChild(lines(title, M, 150, 62, { 'font-family': SANS, 'font-size': 50, 'font-weight': 500, fill: INK }))
+      top = 150 + (title.length - 1) * 62 + 50
+    }
+
+    const labels = list(p.labels), raw = list(p.values)
+    // as many bars as the longer list, less empty entries at its end
+    const used = (l) => l.reduce((last, v, i) => (v ? i + 1 : last), 0)
+    const n = Math.max(1, Math.max(used(labels), used(raw)))
+    const unit = String(p.unit ?? '').slice(0, 12) // as written: " %" keeps its space
+    const vals = Array.from({ length: n }, (_, i) => number(raw[i] ?? ''))
+    const slot = (W - 2 * M) / n, bw = slot * 0.62
+    const notes = [[p.note1Bar, p.note1Text], [p.note2Bar, p.note2Text]]
+      .map(([b, t]) => ({ bar: Math.round(Number(b)) - 1, words: text(t, 200) }))
+      .filter((c) => c.bar >= 0 && c.bar < n && c.words)
+
+    // the band for callouts sits above the plot; the plot keeps room for the value labels
+    const band = notes.length ? 3 * 34 + 30 : 0
+    const hiV = Math.max(0, ...vals), loV = Math.min(0, ...vals)
+    // a bar below zero carries its value under it, above the category labels
+    const plotTop = top + band + 60, bottom = H - 110 - (loV < 0 ? 44 : 0)
+    const span = hiV - loV || 1
+    const zero = r1(plotTop + (bottom - plotTop) * hiV / span)
+    const y = (v) => plotTop + (bottom - plotTop) * (hiV - v) / span
+    const cx = (i) => r1(M + slot * i + slot / 2)
+    const picked = new Set(shown > 0 ? notes.map((c) => c.bar) : [])
+    const vSize = Math.min(28, Math.floor(slot * 0.92 / (Math.max(1, ...raw.slice(0, n).map((v) => (v + unit).length)) * 0.6)))
+    const lChars = Math.max(3, Math.floor(slot * 0.92 / (24 * 0.56)))
+
+    for (let i = 0; i < n; i++) {
+      const v = vals[i] * grow, x = r1(cx(i) - bw / 2)
+      const y0 = Math.min(y(v), zero), h = Math.abs(y(v) - zero)
+      svg.appendChild(el('rect', { x, y: r1(y0), width: r1(bw), height: r1(Math.max(h, 0)), fill: picked.has(i) ? hi : base }))
+      if (grow >= 1 && raw[i]) {
+        const below = vals[i] < 0
+        svg.appendChild(el('text', { x: cx(i), y: r1(below ? y(vals[i]) + vSize + 10 : y(vals[i]) - 14), 'font-family': MONO, 'font-size': vSize, 'text-anchor': 'middle', fill: INK }, raw[i] + unit))
+      }
+      const label = labels[i] ?? ''
+      if (label) svg.appendChild(el('text', { x: cx(i), y: r1(H - 64), 'font-family': SANS, 'font-size': 24, 'text-anchor': 'middle', fill: MUTED }, label.length > lChars ? label.slice(0, lChars - 1) + '…' : label))
+    }
+    svg.appendChild(el('line', { x1: M, y1: zero, x2: W - M, y2: zero, stroke: INK, 'stroke-opacity': 0.25, 'stroke-width': 2 }))
+
+    if (shown > 0 && notes.length) {
+      // callouts are 400 wide, centred over their bar where there is room, and pushed apart when two would touch
+      const cw = 400
+      const placed = notes.map((c) => ({ ...c, x: Math.max(M + cw / 2, Math.min(W - M - cw / 2, cx(c.bar))) })).sort((a, b) => a.x - b.x)
+      if (placed.length === 2 && placed[1].x - placed[0].x < cw + 24) {
+        const mid = (placed[0].x + placed[1].x) / 2
+        placed[0].x = Math.max(M + cw / 2, mid - (cw + 24) / 2)
+        placed[1].x = Math.min(W - M - cw / 2, placed[0].x + cw + 24)
+      }
+      const g = el('g', shown < 1 ? { opacity: shown.toFixed(3) } : {})
+      for (const c of placed) {
+        const words = wrap(c.words, Math.floor(cw / (26 * 0.56)), 3)
+        const ty = r1(top + 26)
+        g.appendChild(lines(words, r1(c.x), ty, 34, { 'font-family': SANS, 'font-size': 26, 'text-anchor': 'middle', fill: INK }))
+        const end = vals[c.bar] < 0 ? zero : y(vals[c.bar])
+        const from = r1(ty + (words.length - 1) * 34 + 18)
+        const to = r1(end - (vals[c.bar] < 0 ? 12 : vSize + 30))
+        if (to > from) {
+          g.appendChild(el('line', { x1: r1(c.x), y1: from, x2: cx(c.bar), y2: to, stroke: hi, 'stroke-width': 2 }))
+          g.appendChild(el('circle', { cx: cx(c.bar), cy: to, r: 5, fill: hi }))
+        }
+      }
+      svg.appendChild(g)
+    }
+    svg.setAttribute('aria-label', [text(p.title, 200), ...raw.slice(0, n).map((v, i) => `${labels[i] ?? ''} ${v}${unit}`.trim()), ...(shown > 0 ? notes.map((c) => c.words) : [])].filter(Boolean).join('; '))
+  }
+
+  /** Bars rise on arrival and callouts fade in on the second step; at once with motion reduced. */
+  function animate(fromGrow, toStep) {
+    cancelAnimationFrame(raf)
+    if (state.reduce) return draw()
+    const t0 = performance.now()
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / 700), e = 1 - Math.pow(1 - k, 3)
+      const grow = fromGrow ? e : 1
+      const shown = toStep >= 1 ? (fromGrow ? Math.max(0, (k - 0.6) / 0.4) : e) : 0
+      draw(grow, shown)
+      if (k < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    draw(fromGrow ? 0 : 1, 0)
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      state.step = Math.max(0, Math.min(STEPS - 1, Number(m.step) || 0)) // the last step when the presenter arrives going backwards
+      Object.assign(state.props, m.props)
+      state.reduce = !!m.reduceMotion
+      animate(true, state.step)
+    } else if (m.type === 'bento:step') {
+      const was = state.step
+      state.step = Math.max(0, Math.min(STEPS - 1, Number(m.index) || 0))
+      if (state.step > was) animate(false, state.step)
+      else { cancelAnimationFrame(raf); draw() }
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+      cancelAnimationFrame(raf)
+      draw()
+    } else if (m.type === 'bento:motion') {
+      state.reduce = !!m.reduce
+      if (state.reduce) { cancelAnimationFrame(raf); draw() } // a rise under way lands at once
+    }
+  })
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); draw() })
+
+  // Keys pressed inside the frame never reach the shell: forward them.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  draw()
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>

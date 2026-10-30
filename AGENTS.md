@@ -208,8 +208,8 @@ node scripts/bento-check.mjs doc.json --json --fail-on warning   # machine-reada
 ```
 
 The loop: write the document JSON (compact where the shell accepts it) → `bento
-check --png` → read `findings` (`text-overflow` says how many px the box is
-short and on which element; `out-of-canvas`, dead links, effects that can
+check --png` → read `findings` (`text-overflow` and `table-overflow` say how
+many px the box is short and on which element; `out-of-canvas`, dead links, effects that can
 never run, unknown keys the gate dropped) → look at `contact.png`, one image of
 every slide, or a single `page-NN.png` when a finding points at it → fix →
 run again. Exit 0 means no finding at or above `--fail-on` (default `error`).
@@ -263,7 +263,7 @@ verbatim; this section is what the fork adds. The plan of record is
 `docs/plans/2026-09-08-001-feat-beta-slides-bento-fork-plan.md`; where it and
 `docs/PLATFORM.md` disagree, PLATFORM wins.
 
-Upstream base: `v1.2.7` (merged 2026-10-14, #41). `scripts/test-beta-markers.ts` diffs the fork against this tag; change it in the same commit as the next upstream merge.
+Upstream base: `v1.2.10` (merged 2026-10-30; v1.2.7 was #41). `scripts/test-beta-markers.ts` diffs the fork against this tag; change it in the same commit as the next upstream merge.
 
 ## Rules for the fork
 

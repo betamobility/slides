@@ -8,7 +8,7 @@ import type { Store } from '../store'
 import { MEDIA_EMBED_BUDGET, applyChartPalette, defaultChart, internAsset, morphKey, paginates, isWebUrl, tableStyleFor, uid, type ChartElement, type ImageElement, type LineEnding, type MediaElement, type ShapeElement, type Slide, type SlideElement, type TableElement, type TextElement, type TransitionKind, type CodeElement, type BentoDoc, type EmbedElement } from '../model'
 import { CROP_MAX_SCALE, normalizeCrop } from '../crop'
 import { LANGS } from '../../../kernel/src/tokenize.ts'
-import { resolveAsset } from '../render'
+import { cssColor, resolveAsset } from '../render'
 import { measureElement } from '../measure'
 import { PALETTE_SLOTS, paletteOf, refAt, setColor, slotIsSet } from '../palette'
 import { isMacOS } from '../screens'
@@ -61,6 +61,7 @@ const ROW_TIPS: Record<string, string> = {
   'Enter secs': 'How long the entrance takes, in seconds',
   'Reveal step': 'Animate on click: hidden until the n-th → on this slide (0 = shown with the slide)',
   'Count up': 'Numbers in this text count up from zero when the slide enters',
+  'Typewriter': 'Code types in a character at a time, behind a cursor, when it appears',
   'Ambient': 'Continuous motion while the slide is on screen — Ken Burns drift or zoom',
   'Zoom': 'Ken Burns direction — drift, settle out, or settle in',
   'Zoom %': 'How far the Ken Burns zoom travels',
@@ -142,6 +143,9 @@ const fillStyles = (): Array<[string, string]> =>
 
 export class PropsPanel {
   private burst = false
+  /** Indent (+1) / outdent (−1) bullets — set by the editor to the canvas,
+   *  which knows whether a text box is open and where its caret is. */
+  onListIndent: ((dir: 1 | -1) => void) | null = null
 
   constructor(
     private host: HTMLElement,
@@ -378,6 +382,10 @@ export class PropsPanel {
       this.host.appendChild(hint)
     }
 
+    // BETA FORK (roadmap R3): speaker notes are per-slide, daily work, so they sit right under
+    // this slide's own properties, above every deck-wide section (Slideshow, Theme, Layout)
+    this.buildNotes(slide)
+
     // Deck-wide slideshow chrome, in its own section: these are not properties
     // of THIS slide (the section above) but of how the whole deck presents, and
     // mixing them in beside Background and Transition read as per-slide.
@@ -513,8 +521,7 @@ export class PropsPanel {
       }, true)
     })
     this.host.appendChild(saveLy)
-
-    this.buildNotes(slide) // BETA FORK
+    // BETA FORK (roadmap R3): buildNotes moved up, under the slide's own properties
   }
 
   private buildNotes(slide: Slide) {
@@ -770,7 +777,7 @@ export class PropsPanel {
     const setFx = (patch: Partial<NonNullable<SlideElement['fx']>>) =>
       this.mutate(el.id, (e) => {
         const fx = { ...(e.fx ?? {}), ...patch }
-        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step) delete e.fx
+        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step && !fx.typeWriter) delete e.fx
         else e.fx = fx
       }, true)
 
@@ -802,6 +809,9 @@ export class PropsPanel {
     this.row('Count up', this.select(
       ['off', 'on'], el.fx?.countUp ? 'on' : 'off',
       (v) => setFx({ countUp: v === 'on' ? true : undefined })))
+    if (el.type === 'code') this.row('Typewriter', this.select(
+      ['off', 'on'], el.fx?.typeWriter ? 'on' : 'off',
+      (v) => setFx({ typeWriter: v === 'on' ? true : undefined })))
     this.row('Ambient', this.select(
       ['none', 'kenburns'], el.fx?.ambient ?? 'none',
       (v) => setFx(v === 'none' ? { ambient: undefined, ken: undefined } : { ambient: 'kenburns' })))
@@ -1124,6 +1134,25 @@ export class PropsPanel {
         (e as TextElement).fontSize = Math.round(Math.max(v, 3) * (4 / 3) * 100) / 100
       }, fin)))
     this.row('Weight', this.weightSelect(el))
+    // Indent / Outdent bullets (#368): the item under the caret while the box
+    // is open — a press here must not take the caret away, so mousedown is
+    // held — else the whole box. Tab / ⇧Tab do the same while editing.
+    const shift = document.createElement('div')
+    shift.className = 'ed-shift-row'
+    for (const [dir, label, tip] of [
+      [-1, t('Outdent'), t('Move the bullet up a level (⇧Tab while editing)')],
+      [1, t('Indent'), t('Move the bullet down a level, under the one above (Tab while editing)')],
+    ] as const) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'ed-btn'
+      b.textContent = label
+      b.title = tip
+      b.addEventListener('mousedown', (ev) => ev.preventDefault())
+      b.addEventListener('click', (ev) => { ev.preventDefault(); this.onListIndent?.(dir) })
+      shift.appendChild(b)
+    }
+    this.row('Bullets', shift)
     // Text fill: a solid colour, or a multi-stop gradient painted into the glyphs.
     const tgrad = el.colorGradient
     this.row('Fill style', this.labeledSelect(fillStyles(), tgrad ? 'gradient' : 'solid', (v) =>
@@ -2400,7 +2429,7 @@ export class PropsPanel {
         const el = this.store.element(id)
         if (!el) continue
         const fx = { ...(el.fx ?? {}), step: step > 0 ? step : undefined }
-        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step) delete el.fx
+        if (!fx.enter && !fx.countUp && !fx.ambient && !fx.loop && !fx.step && !fx.typeWriter) delete el.fx
         else el.fx = fx
       }
     }, true)
@@ -2591,7 +2620,7 @@ export class PropsPanel {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'ed-swatch'
-      b.style.background = base
+      b.style.background = cssColor(base, 'transparent') // a document colour: gated
       b.title = slot
       if (current && current.split(' ')[0] === slot) b.classList.add('is-on')
       b.addEventListener('click', () => {

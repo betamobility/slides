@@ -1,0 +1,46 @@
+[package]
+name = "bento-id-agent"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "bento/connect agent core for the desktop host (Windows, Linux): the signed statements, key storage and the agent contract"
+
+[dependencies]
+p256 = { version = "0.14", features = ["ecdsa", "getrandom"] }
+sha2 = "0.10"
+base64 = "0.22"
+zeroize = "1"
+argon2 = { version = "0.5", features = ["zeroize"] }
+hkdf = "0.12"
+hmac = "0.12"
+aes-gcm = "0.10"
+unicode-normalization = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tss-esapi = { version = "7", optional = true }
+
+[features]
+# the Linux TPM key store (needs libtss2)
+tpm = ["dep:tss-esapi"]
+# the Linux no-TPM key store: the DISTRIBUTION libsecret (thin in-tree FFI)
+keyring = []
+# security keys through the DISTRIBUTION libfido2 (>= 1.12), Linux only
+fido = []
+# TEST-ONLY mutants for the PRF interop rig (fido-rig.sh): each must make
+# tests/fido_interop.rs FAIL. Never enabled in a shipped build.
+rig-mutant-double-hash = ["fido"]
+rig-mutant-raw-hash = ["fido"]
+# the in-memory software key store: tests and rigs only, never a shipped path
+test-store = []
+
+[dev-dependencies]
+unicode-normalization = "0.1.26"
+serde_json = "1"
+
+# Argon2id at 64 MiB / t=3 is minutes unoptimised: optimise the crypto crates
+# even in debug and test builds (the rest stays debug).
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
