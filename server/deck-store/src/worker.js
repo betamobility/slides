@@ -23,6 +23,8 @@
 //                                  (every deck ETag travels with
 //                                  x-bento-service-gen, see GEN_HEADER)
 //   DELETE /api/decks/:id          owner only → 204, the deck's assets with it
+//                                  (the deck itself is kept under history/, see
+//                                  "deck history" below)
 //   GET    /d/:id                  the stored bytes, streamed, unchanged, + ETag
 //   HEAD   /d/:id                  the same headers, no body (the editor's boot)
 //   GET    /d/:id/assets/:name     a scene asset, sandboxed, no-cache + ETag
@@ -393,6 +395,80 @@ function tracked(ctx, req, name, res) {
   return res
 }
 
+// --- deck history (2026-10-30, roadmap R5) ------------------------------------
+//
+// R2 has no object versioning: PutBucketVersioning / GetBucketVersioning and
+// object lock are listed as unimplemented in Cloudflare's S3-compatibility
+// table, and the Workers binding has no copy. So the worker keeps its own:
+// before a version of a deck is overwritten or deleted, its bytes and its
+// customMetadata are put under
+//
+//   history/<id>/<when that version was written, compact UTC>-<etag8>[-deleted].bento.html
+//
+// in the same bucket. `-deleted` marks the copy taken just before a delete. R2's
+// etag is the MD5 of the bytes, so the same bytes written in the same second
+// share a key: one object, nothing lost. Nothing serves, lists or routes that prefix — listDecks
+// reads `decks/`, every route matches an id shape, remove() touches `decks/`
+// and `assets/` — so a history object is reachable by the maintainer alone
+// (README, "Restoring a deck"). A lifecycle rule on `history/` expires them;
+// the worker never deletes one.
+//
+// WHEN a version is kept. Every person save is an autosave (a 2.5 s debounce),
+// so a copy per save would be one 1 MB object every few seconds of editing.
+// A version is kept when:
+//
+//   · it is about to be DELETED (always), or
+//   · the incoming write is an AGENT's (a service token or a grant; agents
+//     write a handful of times per run, never per keystroke), or
+//   · it was written by someone ELSE than the incoming writer, or
+//   · it has stood for HISTORY_SETTLED_MS or longer.
+//
+// What is not kept is a version one person overwrote themself within ten
+// minutes of writing it: an intermediate autosave. Their tab's own version
+// history (IndexedDB) still has those.
+//
+// FAIL CLOSED. If the copy cannot be written, the overwrite or delete does not
+// happen either (503). A save that silently skipped its copy would leave
+// exactly the gap this exists to close; a failed save is visible and retried.
+const HISTORY_PREFIX = (id) => `history/${id}/`
+const HISTORY_SETTLED_MS = 10 * 60 * 1000
+const compactUtc = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
+
+/** Should the stored version `prev` be kept before `who` overwrites it? */
+function keepBeforeWrite(prev, who, now = Date.now()) {
+  if (agentWrite(who)) return true
+  const m = prev.customMetadata || {}
+  if (decMeta(m.writer) !== writerOf(who)) return true
+  const t = Date.parse(m.updated || '') || prev.uploaded?.getTime?.() || 0
+  return now - t >= HISTORY_SETTLED_MS
+}
+
+/**
+ * Copy the CURRENT version of deck `id` under history/. Returns true when it
+ * is kept (or there was nothing to keep), false when the copy failed — the
+ * caller then refuses the write. Read here rather than reused from the
+ * caller, because the grant path has already consumed its body.
+ */
+async function keepVersion(env, id, { deleting = false } = {}) {
+  try {
+    const cur = await env.DECKS.get(KEY(id))
+    if (!cur) return true
+    const m = cur.customMetadata || {}
+    const when = new Date(Date.parse(m.updated || '') || cur.uploaded?.getTime?.() || Date.now())
+    const key = `${HISTORY_PREFIX(id)}${compactUtc(when)}-${String(cur.etag).slice(0, 8)}${deleting ? '-deleted' : ''}.bento.html`
+    // Already there means the same bytes (the key carries their MD5): never
+    // overwrite a history object, which a bucket lock on history/ would refuse.
+    if (await env.DECKS.head(key)) return true
+    await env.DECKS.put(key, await cur.arrayBuffer(), {
+      httpMetadata: { contentType: 'text/html; charset=utf-8' },
+      customMetadata: m,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // --- handlers -----------------------------------------------------------------
 
 // `evt` is the analytics name: a deck made at /new is a deck_new, every other
@@ -627,6 +703,12 @@ async function replace(req, env, ctx, who, id, { requireMatch = false, restoreCo
   // An agent's write bumps the generation, a person's carries it forward. Read
   // from the head above: with If-Match the put only lands on that same version.
   const gen = genOf(existing) + (agentWrite(who) ? 1 : 0)
+  // Keep the version this write replaces (see "deck history"). Skipped when
+  // the precondition already names another version: the put below is a 412.
+  if ((!etag || etag === existing.etag) && keepBeforeWrite(existing, who) && !(await keepVersion(env, id))) {
+    track(ctx, req, evt, 'error')
+    return text(503, 'store: the previous version could not be kept, so nothing was saved; try again')
+  }
   const stored = await putIfMatch(env, KEY(id), bytes, {
     httpMetadata: { contentType: 'text/html; charset=utf-8' },
     customMetadata: {
@@ -645,6 +727,8 @@ async function remove(env, who, id) {
   const existing = await env.DECKS.head(KEY(id))
   if (!existing) return empty(404)
   if (decMeta(existing.customMetadata?.owner) !== who.id) return empty(403)
+  // A deleted deck is kept under history/ first, always; no copy, no delete.
+  if (!(await keepVersion(env, id, { deleting: true }))) return text(503, 'store: the deck could not be kept before deleting, so nothing was deleted; try again')
   // Assets first: a failure part-way leaves a deck with fewer assets (its
   // scenes show their stills), never orphaned assets nothing can reach.
   let cursor

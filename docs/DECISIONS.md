@@ -12487,3 +12487,33 @@ with routes is in `server/deck-store/README.md`.
   event, as before.
 
 PPTX export runs in the client and has no event yet; that needs its own note.
+
+## 2026-10-30 — BETA FORK: the deck store keeps its own version history
+
+Roadmap R5. Every stored deck lives in one R2 bucket, and before this nothing
+could recover a deck that was overwritten or deleted on purpose.
+
+**R2 has no object versioning, so the worker keeps the history.** Cloudflare's
+S3-compatibility table lists `PutBucketVersioning`, `GetBucketVersioning` and
+object lock as unimplemented, and the Workers binding has no copy. Before a
+version is overwritten or deleted, the worker puts its bytes and metadata
+under `history/<id>/` in the same bucket, and a lifecycle rule on that prefix
+expires them after 30 days. We considered a scheduled export to a second
+bucket and rejected it. It needs a new bucket, binding and cron, and it can
+only catch versions that are still current when it runs, so an agent
+overwrite between two runs is exactly what it misses.
+
+**Not every save.** A version is kept before a delete, before any agent
+write, before a write by someone other than its writer, and once it has stood
+ten minutes. One person's own autosaves within ten minutes are not kept;
+their tab's version history has them.
+
+**Fail closed.** A save or delete whose copy fails is refused with `503`,
+filed as `deck_save` or `publish_save` outcome `error` (a word the R4 entry
+above does not list). A store tab shows the refusal and does not latch.
+
+**Restore goes through the store,** with the service token's conditional
+harness `PUT`, never a raw `wrangler r2 object put`, which would drop the
+owner and title. A deleted deck comes back as a new deck with a new link.
+Procedure and maintainer commands: `server/deck-store/README.md`, "Deck
+history and restore".
