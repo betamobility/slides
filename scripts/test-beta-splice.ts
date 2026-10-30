@@ -1952,6 +1952,62 @@ try {
     ok(/setting "place" would change, and no values edit names it/.test(refused), `the ownership check refuses a change to a setting no values edit names (${refused})`)
   }
 
+  console.log('\na web embed\'s url is its content: the carve-out (R8; 2026-10-13-2236 plan, deferred)')
+  {
+    const { derive, checkOwnership, embedUrlRefusal } = await import(pathToFileURL(TOOL).href)
+    const embed = (over: Record<string, unknown>) => ({ id: 'e1', type: 'embed', x: 100, y: 80, w: 800, h: 450, rotation: 0, opacity: 1, app: 'web', live: true, view: '<svg xmlns="http://www.w3.org/2000/svg"/>', url: 'https://slides.betamobility.ai/scenes/harbour/?mode=wide&zoom=4#top', ...over })
+    const libDoc = { library: { id: 'harbour', version: 2 }, props: [{ key: 'mode', label: 'Mode', kind: 'text', default: 'wide', format: 'select:wide|near' }, { key: 'zoom', label: 'Zoom', kind: 'number', default: 4 }] }
+    const deckWith = (el: Record<string, unknown>) => ({ format: 'bento/slides', version: 1, title: 't', docId: 'd-1', size: { width: 1280, height: 720 }, slides: [{ id: 's1', background: '#FFFFFF', elements: [el, { id: 't1', type: 'text', x: 0, y: 0, w: 10, h: 10, html: 'hi' }] }] })
+    const run = (el: Record<string, unknown>, url: unknown, extra: Record<string, unknown> = {}) => {
+      try { return { doc: derive(deckWith(el), { scenes: [] }, [{ slideId: 's1', elementId: 'e1', url, ...extra }]).doc, err: '' } } catch (e) { return { doc: null, err: (e as Error).message } }
+    }
+    const plain = embed({})
+    let r = run(plain, 'https://slides.betamobility.ai/other/page?x=1')
+    const after = r.doc?.slides[0].elements[0]
+    ok(!r.err && after?.url === 'https://slides.betamobility.ai/other/page?x=1', `a url edit on a web embed lands${r.err ? `: ${r.err}` : ''}`)
+    ok(!!after && ['x', 'y', 'w', 'h', 'view', 'live', 'app'].every((k) => JSON.stringify(after[k]) === JSON.stringify((plain as Record<string, unknown>)[k])) && r.doc.slides[0].elements[1].html === 'hi',
+      'and nothing else on the element or the slide changes')
+    for (const [bad, why] of [
+      ['javascript:alert(1)', /http or https address/], ['data:text/html,<p>x</p>', /http or https address/], ['https://slides.betamobility.ai/a b', /http or https address/],
+      ['https://slides.betamobility.ai/"x', /http or https address/], [`https://slides.betamobility.ai/?q=${'x'.repeat(2048)}`, /at most 2048/], [42, /http or https address/],
+      ['https://user:pw@slides.betamobility.ai/', /login/], ['https://evil.test/page', /within its site only/], ['http://slides.betamobility.ai/page', /within its site only/],
+    ] as const) {
+      r = run(plain, bad)
+      ok(!r.doc && why.test(r.err) && /element "e1" on slide "s1"/.test(r.err), `refused, naming the element: ${String(bad).slice(0, 48)} (${r.err.slice(0, 110)})`)
+    }
+    r = run(embed({ app: 'bento/dash', url: 'https://slides.betamobility.ai/x' }), 'https://slides.betamobility.ai/y')
+    ok(!r.doc && /only a web page embed's url may change/.test(r.err), `another app's embed keeps its url (${r.err.slice(0, 100)})`)
+    for (const k of ['view', 'live', 'doc', 'app']) {
+      const v = k === 'live' ? false : k === 'doc' ? { a: 1 } : 'x'
+      try { derive(deckWith(plain), { scenes: [] }, [{ slideId: 's1', elementId: 'e1', [k]: v }]); ok(false, `an edit of ${k} is refused`) } catch (e) { ok(/is not a content change.*only url/.test((e as Error).message), `an edit of an embed's ${k} is refused: only url (${(e as Error).message.slice(0, 90)})`) }
+    }
+    try { derive(deckWith(plain), { scenes: [] }, [{ slideId: 's1', elementId: 'e1', url: 'https://slides.betamobility.ai/z', x: 5 }]); ok(false, 'moving it is refused') } catch (e) { ok(/x would change/.test((e as Error).message), 'and a url edit cannot move it') }
+
+    // a library web scene: only its declared settings, in the query
+    const lib = embed({ doc: libDoc })
+    r = run(lib, 'https://slides.betamobility.ai/scenes/harbour/?mode=near&zoom=6#top')
+    ok(!r.err && r.doc.slides[0].elements[0].url.includes('mode=near') && JSON.stringify(r.doc.slides[0].elements[0].doc) === JSON.stringify(libDoc), `a library web scene takes new settings in its query, its doc untouched${r.err ? `: ${r.err}` : ''}`)
+    for (const [bad, why] of [
+      ['https://slides.betamobility.ai/scenes/other/?mode=near&zoom=6#top', /its page stays/], ['https://slides.betamobility.ai/scenes/harbour/?mode=near&zoom=6', /its page stays/],
+      ['https://slides.betamobility.ai/scenes/harbour/?mode=near&zoom=6&evil=1#top', /"evil" in its query is not one of the library web scene's settings \(mode, zoom\)/],
+    ] as const) {
+      r = run(lib, bad)
+      ok(!r.doc && why.test(r.err), `library web scene: refused ${bad.slice(36)} (${r.err.slice(0, 120)})`)
+    }
+    ok(embedUrlRefusal(embed({ doc: libDoc, url: 'https://slides.betamobility.ai/scenes/harbour/?mode=wide&keep=1#top' }), 'https://slides.betamobility.ai/scenes/harbour/?mode=near&keep=1#top') === null,
+      'a query entry the scene does not declare may stay as it was')
+    // the safety net: checkOwnership refuses the same change when it did not come through derive
+    const read = deckWith(plain), out = structuredClone(read)
+    out.slides[0].elements[0].url = 'https://evil.test/'
+    let refused = ''
+    try { checkOwnership(read, out, { scenes: new Set(), edits: new Map([['s1\u001fe1', new Set(['url'])]]) }) } catch (e) { refused = (e as Error).message }
+    ok(/within its site only/.test(refused), `the ownership check holds an embed url to the same rule (${refused.slice(0, 90)})`)
+    const ro = (await import(pathToFileURL(TOOL).href)).readEdits
+    const f = join(mkdtempSync(join(tmpdir(), 'splice-embed-')), 'edits.json')
+    writeFileSync(f, JSON.stringify([{ slideId: 's1', elementId: 'e1', url: 'https://slides.betamobility.ai/x' }]))
+    ok(ro(f).length === 1, 'edits.json takes { slideId, elementId, url }')
+  }
+
   console.log('\nthe tool runs from a copy of plugins/beta-slides/ alone (R18, KTD11)')
   {
     const copy = mkdtempSync(join(tmpdir(), 'beta-slides-plugin-'))
