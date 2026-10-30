@@ -1463,6 +1463,18 @@ export class SlideCanvas {
       inner.innerText = model.content
       this.editingShowedRaw = true
     }
+    // BETA FORK (R2): a placeholder box whose own markup has structure but no
+    // text (a layout's empty `<ul><li></li></ul>`) starts editing from that
+    // markup, with the caret in its first item, so typing lands inside the
+    // list. The render put the prompt text in its place; editing the prompt
+    // would replace the list with plain text.
+    let caretInto: HTMLElement | null = null
+    if (model?.type === 'text' && model.placeholder && typeof model.html === 'string' && /<li\b/i.test(model.html) && !model.html.replace(/<[^>]*>/g, '').trim()) {
+      inner.innerHTML = sanitizeHtml(model.html)
+      inner.style.opacity = ''
+      this.editingShowedRaw = true
+      caretInto = inner.querySelector('li')
+    }
     // An inline code run that ENDS a line (last thing in the box, or right
     // before a <br>) has no text position after it, so the caret can only sit
     // inside it and everything typed at the end of the line became code (#626).
@@ -1483,6 +1495,7 @@ export class SlideCanvas {
     inner.contentEditable = 'true'
     inner.focus()
     document.getSelection()?.selectAllChildren(inner)
+    if (caretInto) { document.getSelection()?.collapse(caretInto, 0) } // BETA FORK (R2): see above
     this.editAutoSelected = true // cleared by the first key or click (see the ` toggle)
     this.syncTargets()
     this.watchSelection(inner)

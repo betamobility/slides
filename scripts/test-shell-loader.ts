@@ -247,7 +247,8 @@ async function browserSection(chrome: string, shell: string) {
   } finally {
     kill()
     server.close()
-    rmSync(profile, { recursive: true, force: true })
+    // BETA FORK: Chrome can still be writing its profile just after kill(); retry instead of failing with ENOTEMPTY
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
 }
 

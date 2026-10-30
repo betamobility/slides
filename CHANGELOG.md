@@ -11,6 +11,9 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.
+- **Native bullets in PowerPoint.** Lists export as PowerPoint bullets (nested and numbered too), not as "•" characters, and an empty list item exports nothing.
+
 ## [2026.10.11] — 2026-10-14
 
 - **New decks and every template in the current Beta design (v1.5.0).** New deck, the blank deck and the client-pitch, insight-brief and workshop templates now open white, in Geist, with the design system's chart colours and all 35 layouts of the general template. Decks you already have keep the look they were saved with.

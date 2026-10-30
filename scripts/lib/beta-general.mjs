@@ -52,14 +52,18 @@ const heading=(title,o={})=>text('title',title,64,56,1152,112,42,{fontWeight:500
 const sub=(html,x=64,y=185,w=920)=>text('subtitle',html,x,y,w,88,24,{ink:'tx2',role:'subtitle'})
 const notes='Duplicate this slide or apply its matching layout. Replace the sample copy and images. Keep the logo clear zone free. Sample content is illustrative, not research evidence.'
 const slide=(id,name,elements,{dark=false,bg='bg1',note=''}={})=>({id,name,background:P[bg],themeRefs:{background:bg},transition:'none',notes:notes+' '+note,elements:[...elements,...foot(dark)]})
+// A bulleted list is ONE text box holding a real <ul>, so Enter adds a bullet
+// inside the box, an empty row never leaves a stray dot in the show, and
+// PowerPoint receives native bullets. Items are spaced by the list's line
+// height (LIST_LEADING); the sanitizer keeps no attributes, so a per-item gap
+// cannot live in the markup.
+const LIST_LEADING=1.5
+const listHtml=items=>'<ul>'+items.map(h=>'<li>'+h+'</li>').join('')+'</ul>'
 function bullets(items,x=64,y=212,w=1070,_gap=98,size=30){
- const fontSize=metric(size>=32?'type-bullet':'type-body'), indent=metric('bullet-indent');let top=y
- return items.flatMap((html,i)=>{
-  const lines=Math.max(1,Math.ceil(html.length/((w-indent)/(fontSize*.55))))
-  const height=fontSize*metric('leading-body')*lines
-  const elements=[text('bullet-'+i,'•',x,top,22,height,fontSize,{role:'list-marker'}),text('point-'+i,html,x+indent,top,w-indent,height,fontSize,{role:'body'})]
-  top+=height+metric('bullet-gap');return elements
- })
+ const fontSize=metric(size>=32?'type-bullet':'type-body')
+ const lines=items.reduce((n,html)=>n+Math.max(1,Math.ceil(html.replace(/<[^>]+>/g,'').length/((w-fontSize*1.35)/(fontSize*.55)))),0)
+ const height=Math.ceil(fontSize*LIST_LEADING*lines+fontSize*.24*items.length)
+ return [text('point-list',listHtml(items),x,y,w,height,fontSize,{role:'body'})]
 }
 function gradient(id,a,b){return {...frame(id,0,0,1280,720),type:'svg',markup:`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720"><defs><linearGradient id="wash"><stop stop-color="${P[a]}"/><stop offset="1" stop-color="${P[b]}"/></linearGradient><radialGradient id="light"><stop stop-color="${P.bg1}" stop-opacity=".75"/><stop offset="1" stop-color="${P.bg1}" stop-opacity="0"/></radialGradient></defs><path fill="url(#wash)" d="M0 0H1280V720H0z"/><ellipse class="drift" cx="920" cy="280" rx="600" ry="440" fill="url(#light)"/></svg>`,css:'.drift{animation:beta-wash 18s ease-in-out infinite alternate;transform-origin:center}@keyframes beta-wash{to{transform:translate(-220px,100px) scale(1.15)}}'}}
 function icons(){return ['route','bus','bicycle'].map((name,i)=>({...frame('icon-'+i,64+i*392,230,48,48),type:'svg',markup:readFileSync(dir+name+'.svg','utf8').replaceAll('currentColor',P.tx1)}))}
@@ -71,7 +75,7 @@ export function generalTemplate(){
  slide('chapter-dark','Chapter / dark',[text('title','From observation\nto action.',64,216,1100,204,76,{fontFamily:SERIF,ink:'bg1',lineHeight:1.04,role:'title'}),text('subtitle','02 · Choosing what to change',64,473,1000,50,24,{ink:'bg1',role:'subtitle'})],{dark:true,bg:'accent1'}),
  slide('text','Text / single column',[heading('A useful slide makes one argument.'),text('body','<strong>Begin with the observation.</strong> Explain what it means, then make the next step clear.<br><br>Give the audience enough detail to understand your reasoning. Move supporting detail into the notes rather than shrinking the type.',64,214,890,360,32,{lineHeight:1.38})]),
  slide('bullets','Bullets / generous',[heading('Three things to make clear.'),...bullets(['What people need to do.','What gets in their way.','What we can change next.'],64,236,1110,100,32)]),
- slide('bullets-detail','Bullets / title and explanation',[heading('Make every point earn its place.'),...['Observe the situation','Name the decision','Choose a next step'].flatMap((s,i)=>[text('point-'+i,s,96,207+i*130,1040,45,30,{fontWeight:500}),text('dot-'+i,'•',64,207+i*130,24,45,30,{role:'list-marker'}),text('detail-'+i,['Describe what happens, without jumping to a solution.','Explain what the person needs to work out.','Keep the proposal specific enough to test.'][i],96,254+i*130,1030,62,24,{ink:'tx2'})])]),
+ slide('bullets-detail','Bullets / title and explanation',[heading('Make every point earn its place.'),...bullets(['Observe the situation','Name the decision','Choose a next step'].map((s,i)=>'<strong>'+s+'</strong><br>'+['Describe what happens, without jumping to a solution.','Explain what the person needs to work out.','Keep the proposal specific enough to test.'][i]),64,207,1070,130,30)]),
  slide('two-columns','Text / two columns',[heading('Two perspectives, one decision.'),text('left-heading','For the traveller',64,220,532,48,30,{fontWeight:500,role:'column-title'}),text('left','A clear route.<br>A legible entrance.<br>A reliable connection.',64,282,520,280,30,{lineHeight:1.55}),text('right-heading','For the operator',680,220,532,48,30,{fontWeight:500,role:'column-title'}),text('right','A workable service.<br>A simple handover.<br>A way to learn.',680,282,520,280,30,{lineHeight:1.55})]),
  slide('statement','Statement / centered',[text('title','The next step should\nbe easy to see.',112,230,1056,250,68,{align:'center',valign:'middle',fontFamily:SERIF,lineHeight:1.08,role:'title'})]),
  slide('statement-sage','Statement / sage',[text('title','Small changes can\nremove real friction.',80,192,1110,250,72,{fontFamily:SERIF,lineHeight:1.08,role:'title'}),text('subtitle','Use this layout for one thought worth pausing on.',80,495,1010,64,26,{ink:'accent4',role:'subtitle'})],{bg:'accent2'}),
@@ -115,7 +119,7 @@ export function generalTemplate(){
      else if(e.role==='number')e.fontSize=metric('type-statement')
      else if(e.role==='list-marker'||e.id.startsWith('point-'))e.fontSize=metric(s.id==='bullets'?'type-bullet':'type-body')
      else e.fontSize=metric(e.fontSize<=26?'type-compact':'type-body')
-     if(e.role!=='title')e.lineHeight=metric(e.role==='number'?'leading-display':'leading-body')
+     if(e.role!=='title')e.lineHeight=e.id==='point-list'?LIST_LEADING:metric(e.role==='number'?'leading-display':'leading-body')
      e.letterSpacing=-.01*e.fontSize
      if(e.fontFamily===SANS && (e.role==='title'||e.fontWeight===500))e.fontWeight=metric('weight-heading')
      if(['metadata','source','caption','number','metric'].includes(e.role)){e.fontFamily=MONO;e.fontWeight=400;e.letterSpacing=0}
@@ -133,6 +137,6 @@ export function generalTemplate(){
  }
  const base=betaFoundation()
  const assets={...base.assets,street:'data:image/jpeg;base64,'+readFileSync(dir+'images/cyclists-bus-lane.jpg').toString('base64'),workshop:'data:image/jpeg;base64,'+readFileSync(dir+'images/regulation-workshop.jpg').toString('base64')}
- const layouts=structuredClone(slides).map(s=>{for(const e of s.elements)if(e.type==='text'&&e.role!=='list-marker'&&!e.html.includes('{{')){e.placeholder=e.role==='title'?'Your slide title':e.role==='source'?'Source and date':'Replace with your content';e.html=''}return s})
+ const layouts=structuredClone(slides).map(s=>{for(const e of s.elements)if(e.type==='text'&&e.role!=='list-marker'&&!e.html.includes('{{')){e.placeholder=e.role==='title'?'Your slide title':e.role==='source'?'Source and date':e.id==='point-list'?'Your first point':'Replace with your content';e.html=e.id==='point-list'?'<ul><li></li></ul>':''}return s})
  return {format:'bento/slides',version:1,title:'Beta general template',template:true,size:{width:1280,height:720},theme:base.theme,meta:{...base.meta,author:''},fonts:base.fonts,assets,layouts,slides,beta:{...base.beta,template:'general-v131'}}
 }
