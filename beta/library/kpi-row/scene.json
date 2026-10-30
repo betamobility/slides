@@ -1,0 +1,35 @@
+{
+  "name": "KPI row",
+  "version": 1,
+  "description": "Two to four key figures in a row, each with a label and an optional change coloured by whether it is good news.",
+  "kind": "runtime",
+  "steps": 0,
+  "props": [
+    { "key": "title", "label": "Title (empty for none)", "kind": "text", "default": "Pilot results, first twelve months" },
+    { "key": "count", "label": "Figures in the row", "kind": "number", "default": 3, "format": "range:2:4:1" },
+    { "key": "k1Value", "label": "1: figure", "kind": "text", "default": "1.24 M" },
+    { "key": "k1Label", "label": "1: label", "kind": "text", "default": "trips in the pilot area" },
+    { "key": "k1Delta", "label": "1: change, starting with + or − (empty for none)", "kind": "text", "default": "+18 %" },
+    { "key": "k1Trend", "label": "1: which way is good", "kind": "text", "default": "up is good", "format": "select:up is good|down is good|neutral" },
+    { "key": "k2Value", "label": "2: figure", "kind": "text", "default": "87 %" },
+    { "key": "k2Label", "label": "2: label", "kind": "text", "default": "departures on time" },
+    { "key": "k2Delta", "label": "2: change, starting with + or − (empty for none)", "kind": "text", "default": "+4 pp" },
+    { "key": "k2Trend", "label": "2: which way is good", "kind": "text", "default": "up is good", "format": "select:up is good|down is good|neutral" },
+    { "key": "k3Value", "label": "3: figure", "kind": "text", "default": "6.5 min" },
+    { "key": "k3Label", "label": "3: label", "kind": "text", "default": "average wait at the stop" },
+    { "key": "k3Delta", "label": "3: change, starting with + or − (empty for none)", "kind": "text", "default": "−1.2 min" },
+    { "key": "k3Trend", "label": "3: which way is good", "kind": "text", "default": "down is good", "format": "select:up is good|down is good|neutral" },
+    { "key": "k4Value", "label": "4: figure", "kind": "text", "default": "312" },
+    { "key": "k4Label", "label": "4: label", "kind": "text", "default": "shared bikes in service" },
+    { "key": "k4Delta", "label": "4: change, starting with + or − (empty for none)", "kind": "text", "default": "" },
+    { "key": "k4Trend", "label": "4: which way is good", "kind": "text", "default": "neutral", "format": "select:up is good|down is good|neutral" },
+    { "key": "note", "label": "Note after each change (empty for none)", "kind": "text", "default": "vs. the year before" },
+    { "key": "accent", "label": "Rule colour", "kind": "color", "default": "#0F2A4A" },
+    { "key": "background", "label": "Background", "kind": "color", "default": "#FFFFFF" }
+  ],
+  "presets": [
+    { "name": "Three figures", "values": {} },
+    { "name": "Four figures", "values": { "count": 4 } },
+    { "name": "Two figures, no title", "values": { "count": 2, "title": "", "k1Value": "−23 %", "k1Label": "car kilometres in the zone", "k1Delta": "", "k2Value": "4 of 5", "k2Label": "residents want the scheme kept", "k2Delta": "" } }
+  ]
+}

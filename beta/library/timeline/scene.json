@@ -1,0 +1,32 @@
+{
+  "name": "Timeline",
+  "version": 1,
+  "description": "Up to six dated milestones on one line, placed in proportion to time, with an optional marker for today.",
+  "kind": "runtime",
+  "steps": 0,
+  "props": [
+    { "key": "title", "label": "Title (empty for none)", "kind": "text", "default": "From pilot to full service" },
+    { "key": "m1Date", "label": "1: date (2026, 2026-04, 2026-04-15 or Q2 2026)", "kind": "text", "default": "2025-01" },
+    { "key": "m1Label", "label": "1: milestone", "kind": "text", "default": "Feasibility study" },
+    { "key": "m2Date", "label": "2: date", "kind": "text", "default": "2025-06" },
+    { "key": "m2Label", "label": "2: milestone", "kind": "text", "default": "Pilot opens in two districts" },
+    { "key": "m3Date", "label": "3: date", "kind": "text", "default": "2025-11" },
+    { "key": "m3Label", "label": "3: milestone", "kind": "text", "default": "Interim evaluation" },
+    { "key": "m4Date", "label": "4: date", "kind": "text", "default": "2026-04" },
+    { "key": "m4Label", "label": "4: milestone", "kind": "text", "default": "Procurement of the full service" },
+    { "key": "m5Date", "label": "5: date", "kind": "text", "default": "2027-01" },
+    { "key": "m5Label", "label": "5: milestone", "kind": "text", "default": "Full service across the city" },
+    { "key": "m6Date", "label": "6: date (empty with its milestone to leave it out)", "kind": "text", "default": "" },
+    { "key": "m6Label", "label": "6: milestone", "kind": "text", "default": "" },
+    { "key": "today", "label": "Today marker at (a date as above; empty for none)", "kind": "text", "default": "2026-02" },
+    { "key": "todayLabel", "label": "Today marker label", "kind": "text", "default": "Today" },
+    { "key": "accent", "label": "Line and milestone colour", "kind": "color", "default": "#0F2A4A" },
+    { "key": "marker", "label": "Today marker colour", "kind": "color", "default": "#E4572E" },
+    { "key": "background", "label": "Background", "kind": "color", "default": "#FFFFFF" }
+  ],
+  "presets": [
+    { "name": "Two-year plan", "values": {} },
+    { "name": "Quarters", "values": { "title": "Procurement plan", "m1Date": "Q1 2026", "m1Label": "Market dialogue", "m2Date": "Q2 2026", "m2Label": "Tender published", "m3Date": "Q3 2026", "m3Label": "Bids evaluated", "m4Date": "Q4 2026", "m4Label": "Contract signed", "m5Date": "Q2 2027", "m5Label": "Operations start", "today": "2026-05" } },
+    { "name": "Phases, no today marker", "values": { "m1Date": "Phase 1", "m2Date": "Phase 2", "m3Date": "Phase 3", "m4Date": "Phase 4", "m5Date": "Phase 5", "today": "" } }
+  ]
+}

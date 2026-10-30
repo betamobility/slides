@@ -1,0 +1,25 @@
+{
+  "name": "Annotated bar chart",
+  "version": 1,
+  "description": "Up to twelve bars with up to two callouts pointing at the bars that matter. The callouts come in on the second step.",
+  "kind": "runtime",
+  "steps": 2,
+  "props": [
+    { "key": "title", "label": "Title (empty for none)", "kind": "text", "default": "Weekday boardings on line 31, thousands" },
+    { "key": "labels", "label": "Bar labels, separated by ;", "kind": "text", "default": "2019; 2020; 2021; 2022; 2023; 2024; 2025" },
+    { "key": "values", "label": "Values, separated by ; (12,5 and 12.5 both read)", "kind": "text", "default": "41; 22; 27; 35; 39; 44; 52" },
+    { "key": "unit", "label": "Unit after each value, as written (\" %\" keeps its space)", "kind": "text", "default": "" },
+    { "key": "note1Bar", "label": "Callout 1 points at bar (0 for none)", "kind": "number", "default": 2, "format": "range:0:12:1" },
+    { "key": "note1Text", "label": "Callout 1 text", "kind": "text", "default": "Pandemic: boardings fell by half" },
+    { "key": "note2Bar", "label": "Callout 2 points at bar (0 for none)", "kind": "number", "default": 7, "format": "range:0:12:1" },
+    { "key": "note2Text", "label": "Callout 2 text", "kind": "text", "default": "New timetable with a bus every 7.5 minutes" },
+    { "key": "bars", "label": "Bar colour", "kind": "color", "default": "#0F2A4A" },
+    { "key": "highlight", "label": "Callout and picked-out bar colour", "kind": "color", "default": "#E4572E" },
+    { "key": "background", "label": "Background", "kind": "color", "default": "#FFFFFF" }
+  ],
+  "presets": [
+    { "name": "Two callouts", "values": {} },
+    { "name": "One callout", "values": { "note1Bar": 0, "note1Text": "" } },
+    { "name": "Mode share", "values": { "title": "Share of trips by mode, 2025", "labels": "Car; Public transport; Bike; Walk; Other", "values": "48; 24; 9; 17; 2", "unit": " %", "note1Bar": 3, "note1Text": "Doubled since 2019", "note2Bar": 0, "note2Text": "" } }
+  ]
+}

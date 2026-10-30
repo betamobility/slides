@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as lib from './lib/beta-library.mjs'
+import { parseHint } from '../slides/src/beta/scenesettings.ts'
 
 let failures = 0, checks = 0
 const ok = (cond: boolean, msg: string) => { checks++; if (!cond) { failures++; console.log(`  FAIL  ${msg}`) } else console.log(`  ok    ${msg}`) }
@@ -60,7 +61,7 @@ console.log('\nthe seed scenes')
 {
   const m = lib.buildManifest(join(root, 'beta/library'))
   ok(m.format === 'beta/library' && m.v === 1, 'the manifest says what it is')
-  ok(m.scenes.map((s: { id: string; version: number }) => `${s.id}@${s.version}`).join(',') === 'counter@1,map@1', `it lists both seed scenes, sorted, with ids and versions (${m.scenes.map((s: { id: string }) => s.id)})`)
+  ok(m.scenes.map((s: { id: string; version: number }) => `${s.id}@${s.version}`).join(',') === 'annotated-bars@1,before-after@1,counter@1,kpi-row@1,map@1,timeline@1', `it lists every scene, sorted, with ids and versions (${m.scenes.map((s: { id: string }) => s.id)})`)
   for (const s of m.scenes) {
     ok(s.kind === 'runtime' && typeof s.html === 'string' && s.html.includes('bento:ready') && s.html.includes('bento:init'), `${s.id}: a runtime scene with its page inlined, speaking the scene contract`)
     ok(typeof s.still === 'string' && s.still.includes('<svg') && s.stillType === 'image/svg+xml' && Buffer.byteLength(s.still) <= 64 * 1024, `${s.id}: its still inlined, an SVG under 64 KB (${Buffer.byteLength(s.still)} bytes)`)
@@ -77,6 +78,44 @@ console.log('\nthe seed scenes')
   ok(lib.manifestShape(m) === true, 'the manifest passes the shape check the store applies')
   ok(lib.serialize(m) === lib.serialize(lib.buildManifest(join(root, 'beta/library'))), 'two builds give the same bytes')
   ok(!lib.serialize(m).includes('<') && lib.serialize(m).endsWith('\n') && JSON.stringify(JSON.parse(lib.serialize(m))) === JSON.stringify(m), 'the bytes carry no "<" and parse back to the same manifest')
+}
+
+console.log('\nthe R8 scenes: settings the panel can draw, colours from the design tokens')
+{
+  // beta/v131/tokens.json, the :root context with no condition, every var() resolved
+  const tokenFile = JSON.parse(readFileSync(join(root, 'beta/v131/tokens.json'), 'utf8'))
+  const rootTokens: Record<string, string> = tokenFile.contexts.find((c: { selector: string; conditions: unknown[] }) => c.selector === ':root' && !c.conditions.length).tokens
+  const resolve = (v: string, depth = 0): string => depth > 8 ? v : v.replace(/var\((--[\w-]+)\)/g, (_, k) => resolve(rootTokens[k] ?? '', depth + 1))
+  const norm = (v: string) => resolve(v).replace(/"/g, "'").trim().toUpperCase()
+  const HEX = /#[0-9A-Fa-f]{3,8}\b/g
+  const m = lib.buildManifest(join(root, 'beta/library'))
+  const r8 = ['annotated-bars', 'before-after', 'kpi-row', 'timeline']
+  for (const id of r8) {
+    const s = m.scenes.find((x: { id: string }) => x.id === id)
+    ok(!!s, `${id}: in the manifest`)
+    if (!s) continue
+    // the scene's token table, as written in its page
+    const table = /const TOKENS = \{([\s\S]*?)\n\s*\}/.exec(s.html)?.[1] ?? ''
+    const used = Object.fromEntries([...table.matchAll(/'(--[\w-]+)':\s*(?:'([^']*)'|"([^"]*)")/g)].map((x) => [x[1], x[2] ?? x[3]]))
+    const wrong = Object.entries(used).filter(([k, v]) => rootTokens[k] === undefined || norm(rootTokens[k]) !== norm(v as string))
+    ok(Object.keys(used).length >= 4 && wrong.length === 0, `${id}: every entry of its TOKENS table is the token's value in beta/v131/tokens.json (${wrong.map(([k, v]) => `${k}=${v}`).join(', ') || Object.keys(used).length + ' tokens'})`)
+    const palette = new Set(Object.values(used).filter((v) => /^#/.test(v as string)).map((v) => (v as string).toUpperCase()))
+    const strays = (text: string) => [...new Set((text.match(HEX) ?? []).map((h) => h.toUpperCase()).filter((h) => !palette.has(h)))]
+    ok(strays(s.html).length === 0, `${id}: the page writes no colour outside its token table (${strays(s.html).join(', ') || 'none'})`)
+    ok(strays(s.still).length === 0, `${id}: nor does its still (${strays(s.still).join(', ') || 'none'})`)
+    const colours = [...s.props.filter((p: { kind: string }) => p.kind === 'color').map((p: { default: string }) => p.default),
+      ...s.presets.flatMap((pr: { values: Record<string, unknown> }) => s.props.filter((p: { kind: string; key: string }) => p.kind === 'color' && typeof pr.values[p.key] === 'string').map((p: { key: string }) => pr.values[p.key] as string))]
+    ok(colours.length > 0 && colours.every((c: string) => palette.has(c.toUpperCase())), `${id}: every colour setting defaults to a token (${colours.join(', ')})`)
+    // the page's own defaults are the scene's, so it previews and captures what a fresh insert shows
+    const pageDefaults = /props: \{([\s\S]*?)\} \}/.exec(s.html)?.[1] ?? ''
+    const missing = s.props.filter((p: { key: string; default: unknown }) => !new RegExp(`\\b${p.key}: ${typeof p.default === 'string' ? `'${p.default.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'` : String(p.default)}[,\\s]`).test(pageDefaults))
+    ok(missing.length === 0, `${id}: the page's built-in defaults match scene.json (${missing.map((p: { key: string }) => p.key).join(', ') || 'all ' + s.props.length})`)
+    const unread = s.props.filter((p: { format?: string; kind: string }) => p.format !== undefined && parseHint(p.format, p.kind as 'text' | 'number' | 'color') === null)
+    ok(unread.length === 0, `${id}: every format hint is one the settings panel reads (${unread.map((p: { key: string }) => p.key).join(', ') || 'all'})`)
+    ok(/<svg id="scene"[\s>]/.test(s.html) && /bento:navigate/.test(s.html) && /ev\.source !== window\.parent/.test(s.html), `${id}: draws into svg#scene (so its still is captured), forwards keys, and hears only its parent`)
+    ok(Buffer.byteLength(s.still) < 16 * 1024, `${id}: its still is small (${Buffer.byteLength(s.still)} bytes)`)
+  }
+  ok(m.scenes.filter((s: { steps: number }) => s.steps === 2).length >= 3, 'map, before-after and annotated-bars step; the others do not')
 }
 
 console.log('\na scene that builds')
@@ -365,7 +404,7 @@ console.log('\nfolders on disk, and the manifest as a whole')
   const run = (args: string[], env: Record<string, string | undefined> = {}) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: { ...process.env, CF_ACCESS_CLIENT_ID: undefined, CF_ACCESS_CLIENT_SECRET: undefined, SLIDES_STORE_URL: undefined, ...env } as NodeJS.ProcessEnv })
   const out = join(dir, 'out', 'library.json')
   let r = run(['--check', '--out', out])
-  ok(r.status === 0 && /2 scenes/.test(r.stdout) && r.stdout.includes('counter') && r.stdout.includes('map') && !existsSync(out), `--check validates the real library, lists it and writes nothing (${r.status})`)
+  ok(r.status === 0 && new RegExp(`${lib.buildManifest(join(root, 'beta/library')).scenes.length} scenes`).test(r.stdout) && r.stdout.includes('counter') && r.stdout.includes('map') && !existsSync(out), `--check validates the real library, lists it and writes nothing (${r.status})`)
   r = run(['--out', out])
   ok(r.status === 0 && existsSync(out) && readFileSync(out, 'utf8') === lib.serialize(lib.buildManifest(join(root, 'beta/library'))), 'without --check it writes the manifest where asked')
   r = run(['--check', '--dir', dir])

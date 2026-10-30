@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>KPI row</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  svg { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<svg id="scene" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img"></svg>
+<script>
+  // Two to four key figures in a row, each with a label and an optional change.
+  // Defaults match scene.json, so the file previews on its own in a browser,
+  // and the drawing it makes before it is told anything IS its still
+  // (scripts/build-beta-library-stills.mjs saves it). So: every text names its
+  // font as an attribute (a still has no stylesheet), and the layout is
+  // arithmetic on character counts, never measured text, so the drawing is
+  // the same on every machine.
+
+  // Beta design tokens (beta/v131/tokens.json). Every colour and font drawn
+  // here comes from this table; scripts/test-beta-library.ts checks each value
+  // against the token file and that the page writes no other colour.
+  const TOKENS = {
+    '--beta-white': '#FFFFFF',
+    '--beta-charcoal': '#1A1A1A',
+    '--beta-muted': '#666666',
+    '--chart-1': '#0F2A4A',
+    '--color-positive': '#1F7A1F',
+    '--color-negative': '#B42318',
+    '--font-sans': "'Geist', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+    '--font-mono': "'DM Mono', 'Courier New', monospace",
+  }
+  const SANS = TOKENS['--font-sans'], MONO = TOKENS['--font-mono']
+  const INK = TOKENS['--beta-charcoal'], MUTED = TOKENS['--beta-muted']
+  const W = 1600, NS = 'http://www.w3.org/2000/svg', M = 120
+  let H = 900 // follows the frame's shape, so nothing is cropped on a 4:3 deck
+
+  const state = { ready: false, reduce: false,
+    props: {
+      title: 'Pilot results, first twelve months', count: 3, note: 'vs. the year before',
+      k1Value: '1.24 M', k1Label: 'trips in the pilot area', k1Delta: '+18 %', k1Trend: 'up is good',
+      k2Value: '87 %', k2Label: 'departures on time', k2Delta: '+4 pp', k2Trend: 'up is good',
+      k3Value: '6.5 min', k3Label: 'average wait at the stop', k3Delta: '−1.2 min', k3Trend: 'down is good',
+      k4Value: '312', k4Label: 'shared bikes in service', k4Delta: '', k4Trend: 'neutral',
+      accent: '#0F2A4A', background: '#FFFFFF',
+    } }
+  const svg = document.getElementById('scene')
+  let raf = 0
+
+  /** A colour a deck may set: a plain CSS colour, never something that loads (the shell refuses those too). */
+  const colour = (v, fallback) => (typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/.test(v) && !/url|expression|var\s*\(/i.test(v) ? v : fallback)
+  const text = (v, max) => String(v ?? '').trim().slice(0, max)
+  const r1 = (v) => Math.round(v * 10) / 10
+  const el = (name, attrs, content) => {
+    const n = document.createElementNS(NS, name)
+    for (const k in attrs) n.setAttribute(k, attrs[k])
+    if (content != null) n.textContent = content
+    return n
+  }
+  /** Words into at most `lines` lines of about `chars` characters; a cut ends in an ellipsis. */
+  function wrap(s, chars, lines) {
+    chars = Math.max(4, chars)
+    const words = String(s).trim().split(/\s+/).filter(Boolean).map((w) => (w.length > chars ? w.slice(0, chars - 1) + '…' : w))
+    const out = []
+    let cur = ''
+    for (const w of words) {
+      if (!cur) cur = w
+      else if (cur.length + 1 + w.length <= chars) cur += ' ' + w
+      else { out.push(cur); cur = w }
+    }
+    if (cur) out.push(cur)
+    if (out.length > lines) {
+      out.length = lines
+      out[lines - 1] = out[lines - 1].slice(0, chars - 1) + '…'
+    }
+    return out
+  }
+  /** Lines of text, one tspan each. */
+  function lines(list, x, y, step, attrs) {
+    const t = el('text', { x, y, ...attrs })
+    list.forEach((line, i) => t.appendChild(el('tspan', { x, y: r1(y + i * step) }, line)))
+    return t
+  }
+  /** Which way a change points, from its sign: up, down or none. */
+  const direction = (d) => (/^\+/.test(d) ? 'up' : /^[-−–]/.test(d) ? 'down' : '')
+
+  let groups = []
+  function draw() {
+    const p = state.props
+    H = Math.round(W * Math.max(0.3, Math.min(3, (window.innerHeight || 9) / (window.innerWidth || 16))))
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    const n = Math.max(2, Math.min(4, Math.round(Number(p.count) || 3)))
+    const accent = colour(p.accent, TOKENS['--chart-1'])
+    svg.replaceChildren(el('rect', { width: W, height: H, fill: colour(p.background, TOKENS['--beta-white']) }))
+    groups = []
+
+    let top = 0
+    const title = wrap(text(p.title, 200), 48, 2)
+    if (title.length) {
+      svg.appendChild(lines(title, M, 150, 62, { 'font-family': SANS, 'font-size': 50, 'font-weight': 500, fill: INK }))
+      top = 150 + (title.length - 1) * 62 + 40
+    }
+
+    const kpis = []
+    for (let i = 1; i <= n; i++) kpis.push({ value: text(p[`k${i}Value`], 24), label: text(p[`k${i}Label`], 200), delta: text(p[`k${i}Delta`], 16), trend: text(p[`k${i}Trend`], 40) })
+    const gap = 64, colW = (W - 2 * M - (n - 1) * gap) / n
+    // one size for every figure in the row: DM Mono advances 0.6 em a character
+    const longest = Math.max(1, ...kpis.map((k) => k.value.length))
+    const vs = Math.max(20, Math.min(n === 4 ? 128 : 150, Math.floor(colW / (longest * 0.6))))
+    const labelChars = Math.floor(colW / (30 * 0.56))
+    const labelLines = kpis.map((k) => wrap(k.label, labelChars, 3))
+    const most = Math.max(1, ...labelLines.map((l) => l.length))
+    const hasDelta = kpis.some((k) => k.delta)
+    const note = text(p.note, 60)
+    const blockH = 40 + vs * 0.78 + 58 + (most - 1) * 40 + (hasDelta ? 70 + (note ? 38 : 0) : 0)
+    const ruleY = r1(top + Math.max(40, (H - top - blockH) / 2))
+    const valueY = r1(ruleY + 40 + vs * 0.78)
+    const labelY = r1(valueY + 58)
+    const deltaY = r1(labelY + (most - 1) * 40 + 70)
+
+    kpis.forEach((k, i) => {
+      const x = r1(M + i * (colW + gap))
+      const g = el('g', {})
+      g.appendChild(el('line', { x1: x, y1: ruleY, x2: r1(x + colW), y2: ruleY, stroke: accent, 'stroke-width': 4 }))
+      g.appendChild(el('text', { x, y: valueY, 'font-family': MONO, 'font-size': vs, 'letter-spacing': r1(-vs * 0.02), fill: INK }, k.value))
+      if (labelLines[i].length) g.appendChild(lines(labelLines[i], x, labelY, 40, { 'font-family': SANS, 'font-size': 30, fill: MUTED }))
+      if (k.delta) {
+        const dir = direction(k.delta)
+        const good = k.trend === 'up is good' ? dir === 'up' : k.trend === 'down is good' ? dir === 'down' : null
+        const tone = good === null || !dir ? MUTED : good ? TOKENS['--color-positive'] : TOKENS['--color-negative']
+        let dx = x
+        if (dir) {
+          // a small triangle, drawn: a glyph would depend on the font
+          const cy = deltaY - 10
+          g.appendChild(el('path', { d: dir === 'up' ? `M${dx} ${cy + 8}L${dx + 9} ${cy - 8}L${dx + 18} ${cy + 8}Z` : `M${dx} ${cy - 8}L${dx + 9} ${cy + 8}L${dx + 18} ${cy - 8}Z`, fill: tone }))
+          dx += 30
+        }
+        g.appendChild(el('text', { x: r1(dx), y: deltaY, 'font-family': MONO, 'font-size': 30, fill: tone }, k.delta))
+        if (note) g.appendChild(lines(wrap(note, Math.floor(colW / (24 * 0.56)), 1), x, r1(deltaY + 38), 0, { 'font-family': SANS, 'font-size': 24, fill: MUTED }))
+      }
+      svg.appendChild(g)
+      groups.push(g)
+    })
+    svg.setAttribute('aria-label', [text(p.title, 200), ...kpis.map((k) => [k.value, k.label, k.delta].filter(Boolean).join(' '))].filter(Boolean).join('; '))
+  }
+
+  /** The entrance: each figure fades and rises in turn. Played once, when the show arrives, and never with motion reduced. */
+  function enter() {
+    cancelAnimationFrame(raf)
+    const all = groups.slice()
+    const set = (g, e) => { g.setAttribute('opacity', e.toFixed(3)); g.setAttribute('transform', `translate(0 ${(28 * (1 - e)).toFixed(1)})`) }
+    all.forEach((g) => set(g, 0))
+    const t0 = performance.now()
+    const tick = (t) => {
+      let done = true
+      all.forEach((g, i) => {
+        const k = Math.max(0, Math.min(1, (t - t0 - i * 140) / 600))
+        if (k < 1) { done = false; set(g, 1 - Math.pow(1 - k, 3)) } else { g.removeAttribute('opacity'); g.removeAttribute('transform') }
+      })
+      if (!done) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      Object.assign(state.props, m.props)
+      state.reduce = !!m.reduceMotion
+      state.ready = true
+      cancelAnimationFrame(raf)
+      draw()
+      if (!state.reduce) enter()
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+      cancelAnimationFrame(raf)
+      draw()
+    } else if (m.type === 'bento:motion') {
+      state.reduce = !!m.reduce
+      if (state.reduce) { cancelAnimationFrame(raf); draw() } // an entrance under way lands at once
+    }
+    // bento:step: this scene has no steps
+  })
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); draw() })
+
+  // Keys pressed inside the frame never reach the shell: forward them.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  draw()
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>

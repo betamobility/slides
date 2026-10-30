@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Timeline</title>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  svg { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<svg id="scene" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img"></svg>
+<script>
+  // Up to six dated milestones on one line, with an optional "today" marker.
+  // Dates written 2026, 2026-04, 2026-04-15, Q2 2026 or 2026 Q2 are placed in
+  // proportion to time; when any date is something else (a phase name, say)
+  // the milestones are spaced evenly and the marker is left out, because it
+  // would have nowhere true to stand.
+  // Defaults match scene.json, so the file previews on its own in a browser,
+  // and the drawing it makes before it is told anything IS its still
+  // (scripts/build-beta-library-stills.mjs saves it). So: every text names its
+  // font as an attribute (a still has no stylesheet), and the layout is
+  // arithmetic on character counts, never measured text, so the drawing is
+  // the same on every machine.
+
+  // Beta design tokens (beta/v131/tokens.json). Every colour and font drawn
+  // here comes from this table; scripts/test-beta-library.ts checks each value
+  // against the token file and that the page writes no other colour.
+  const TOKENS = {
+    '--beta-white': '#FFFFFF',
+    '--beta-charcoal': '#1A1A1A',
+    '--beta-muted': '#666666',
+    '--chart-1': '#0F2A4A',
+    '--chart-2': '#E4572E',
+    '--font-sans': "'Geist', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+    '--font-mono': "'DM Mono', 'Courier New', monospace",
+  }
+  const SANS = TOKENS['--font-sans'], MONO = TOKENS['--font-mono']
+  const INK = TOKENS['--beta-charcoal'], MUTED = TOKENS['--beta-muted']
+  const W = 1600, NS = 'http://www.w3.org/2000/svg', M = 120, MAX = 6
+  let H = 900 // follows the frame's shape, so nothing is cropped on a 4:3 deck
+
+  const state = { ready: false, reduce: false,
+    props: {
+      title: 'From pilot to full service', today: '2026-02', todayLabel: 'Today',
+      m1Date: '2025-01', m1Label: 'Feasibility study',
+      m2Date: '2025-06', m2Label: 'Pilot opens in two districts',
+      m3Date: '2025-11', m3Label: 'Interim evaluation',
+      m4Date: '2026-04', m4Label: 'Procurement of the full service',
+      m5Date: '2027-01', m5Label: 'Full service across the city',
+      m6Date: '', m6Label: '',
+      accent: '#0F2A4A', marker: '#E4572E', background: '#FFFFFF',
+    } }
+  const svg = document.getElementById('scene')
+  let raf = 0
+
+  /** A colour a deck may set: a plain CSS colour, never something that loads (the shell refuses those too). */
+  const colour = (v, fallback) => (typeof v === 'string' && /^[#a-zA-Z0-9(),.%\s/-]{1,64}$/.test(v) && !/url|expression|var\s*\(/i.test(v) ? v : fallback)
+  const text = (v, max) => String(v ?? '').trim().slice(0, max)
+  const r1 = (v) => Math.round(v * 10) / 10
+  const el = (name, attrs, content) => {
+    const n = document.createElementNS(NS, name)
+    for (const k in attrs) n.setAttribute(k, attrs[k])
+    if (content != null) n.textContent = content
+    return n
+  }
+  /** Words into at most `lines` lines of about `chars` characters; a cut ends in an ellipsis. */
+  function wrap(s, chars, lines) {
+    chars = Math.max(4, chars)
+    const words = String(s).trim().split(/\s+/).filter(Boolean).map((w) => (w.length > chars ? w.slice(0, chars - 1) + '…' : w))
+    const out = []
+    let cur = ''
+    for (const w of words) {
+      if (!cur) cur = w
+      else if (cur.length + 1 + w.length <= chars) cur += ' ' + w
+      else { out.push(cur); cur = w }
+    }
+    if (cur) out.push(cur)
+    if (out.length > lines) {
+      out.length = lines
+      out[lines - 1] = out[lines - 1].slice(0, chars - 1) + '…'
+    }
+    return out
+  }
+  function lines(list, x, y, step, attrs) {
+    const t = el('text', { x, y, ...attrs })
+    list.forEach((line, i) => t.appendChild(el('tspan', { x, y: r1(y + i * step) }, line)))
+    return t
+  }
+
+  /** A date as a point in time (in years), or NaN when it is not one of the forms this scene reads. */
+  function when(s) {
+    let m = /^(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?$/.exec(s)
+    if (m) {
+      const month = m[2] ? Number(m[2]) : 1, day = m[3] ? Number(m[3]) : 1
+      if (month < 1 || month > 12 || day < 1 || day > 31) return NaN
+      return Number(m[1]) + (month - 1) / 12 + (day - 1) / 372
+    }
+    m = /^Q([1-4])\s*(\d{4})$/i.exec(s) || /^(\d{4})\s*Q([1-4])$/i.exec(s)
+    if (m) {
+      const [q, y] = /^Q/i.test(s) ? [m[1], m[2]] : [m[2], m[1]]
+      return Number(y) + (Number(q) - 1) / 4
+    }
+    return NaN
+  }
+
+  let parts = { axis: null, progress: null, stones: [], marker: null }
+  function draw() {
+    const p = state.props
+    H = Math.round(W * Math.max(0.3, Math.min(3, (window.innerHeight || 9) / (window.innerWidth || 16))))
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+    const accent = colour(p.accent, TOKENS['--chart-1']), marker = colour(p.marker, TOKENS['--chart-2'])
+    const bg = colour(p.background, TOKENS['--beta-white'])
+    // text is drawn over a halo of the background, so a rule passing behind it never cuts a letter
+    const halo = { stroke: bg, 'stroke-width': 10, 'stroke-linejoin': 'round', 'paint-order': 'stroke' }
+    svg.replaceChildren(el('rect', { width: W, height: H, fill: bg }))
+    parts = { axis: null, progress: null, stones: [], marker: null }
+
+    let top = 60
+    const title = wrap(text(p.title, 200), 48, 2)
+    if (title.length) {
+      svg.appendChild(lines(title, M, 150, 62, { 'font-family': SANS, 'font-size': 50, 'font-weight': 500, fill: INK }))
+      top = 150 + (title.length - 1) * 62 + 40
+    }
+
+    let stones = []
+    for (let i = 1; i <= MAX; i++) {
+      const date = text(p[`m${i}Date`], 24), label = text(p[`m${i}Label`], 200)
+      if (date || label) stones.push({ date, label, t: when(date) })
+    }
+    const today = when(text(p.today, 24))
+    const timed = stones.length > 0 && stones.every((s) => Number.isFinite(s.t))
+    if (timed) stones = stones.map((s, i) => ({ ...s, i })).sort((a, b) => a.t - b.t || a.i - b.i)
+    let lo = Math.min(...stones.map((s) => s.t)), hi = Math.max(...stones.map((s) => s.t))
+    const showToday = timed && Number.isFinite(today)
+    if (showToday) { lo = Math.min(lo, today); hi = Math.max(hi, today) }
+    const proportional = timed && hi > lo
+    const A = M + 40, B = W - M - 40
+    const at = (t) => r1(A + (B - A) * (t - lo) / (hi - lo))
+    const xs = stones.map((s, i) => (proportional ? at(s.t) : r1(stones.length === 1 ? (A + B) / 2 : A + (B - A) * i / (stones.length - 1))))
+
+    const ay = r1(top + (H - top) * 0.5)
+    parts.axis = el('line', { x1: M, y1: ay, x2: W - M, y2: ay, stroke: INK, 'stroke-opacity': 0.15, 'stroke-width': 4, 'stroke-linecap': 'round' })
+    svg.appendChild(parts.axis)
+    const tx = showToday ? (proportional ? at(today) : (A + B) / 2) : null
+    if (showToday) {
+      parts.progress = el('line', { x1: M, y1: ay, x2: tx, y2: ay, stroke: accent, 'stroke-width': 6, 'stroke-linecap': 'round' })
+      svg.appendChild(parts.progress)
+    }
+
+    // the marker goes under the labels: a label crossing its rule stays readable on its halo
+    if (showToday) {
+      const word = text(p.todayLabel, 24)
+      const g = el('g', {})
+      g.appendChild(el('line', { x1: tx, y1: r1(ay - 30), x2: tx, y2: r1(ay + 30), stroke: marker, 'stroke-width': 4 }))
+      g.appendChild(el('circle', { cx: tx, cy: ay, r: 6, fill: marker }))
+      if (word) {
+        // under the lowest a label below the line can reach, joined to the marker by a dashed rule
+        const wy = r1(Math.min(H - 40, ay + 76 + 44 + 2 * 36 + 56))
+        g.appendChild(el('line', { x1: tx, y1: r1(ay + 30), x2: tx, y2: r1(wy - 34), stroke: marker, 'stroke-opacity': 0.6, 'stroke-width': 2, 'stroke-dasharray': '6 8' }))
+        g.appendChild(el('text', { x: tx, y: wy, 'font-family': MONO, 'font-size': 24, 'text-anchor': 'middle', fill: marker }, word))
+      }
+      svg.appendChild(g)
+      parts.marker = g
+    }
+
+    // labels alternate above and below the line; each may use the room up to its next neighbour on the same side
+    stones.forEach((s, i) => {
+      const x = xs[i], above = i % 2 === 0
+      // its share of the line: halfway to each neighbour on the same side, so two labels never overlap
+      const L = i >= 2 ? (xs[i - 2] + x) / 2 + 12 : M
+      const R = i + 2 < xs.length ? (x + xs[i + 2]) / 2 - 12 : W - M
+      const room = Math.max(120, Math.min(440, R - L))
+      const label = wrap(s.label, Math.floor(room / (28 * 0.56)), 3)
+      const longest = Math.max(s.date.length * 0.6 * 24, ...label.map((l) => l.length * 0.56 * 28))
+      const half = Math.min(room, longest) / 2
+      const cx = r1(Math.max(L + half, Math.min(R - half, x)))
+      const g = el('g', {})
+      const past = !showToday || s.t <= today
+      g.appendChild(el('line', { x1: x, y1: r1(above ? ay - 18 : ay + 18), x2: x, y2: r1(above ? ay - 40 : ay + 40), stroke: accent, 'stroke-opacity': 0.4, 'stroke-width': 2 }))
+      g.appendChild(el('circle', { cx: x, cy: ay, r: 11, fill: past ? accent : TOKENS['--beta-white'], stroke: accent, 'stroke-width': 4 }))
+      if (above) {
+        const last = ay - 64
+        if (label.length) g.appendChild(lines(label, cx, r1(last - (label.length - 1) * 36), 36, { 'font-family': SANS, 'font-size': 28, 'text-anchor': 'middle', fill: INK, ...halo }))
+        if (s.date) g.appendChild(el('text', { x: cx, y: r1(last - (label.length - 1) * 36 - (label.length ? 44 : 0)), 'font-family': MONO, 'font-size': 24, 'text-anchor': 'middle', fill: accent, ...halo }, s.date))
+      } else {
+        const first = ay + 76
+        if (s.date) g.appendChild(el('text', { x: cx, y: first, 'font-family': MONO, 'font-size': 24, 'text-anchor': 'middle', fill: accent, ...halo }, s.date))
+        if (label.length) g.appendChild(lines(label, cx, r1(first + (s.date ? 44 : 0)), 36, { 'font-family': SANS, 'font-size': 28, 'text-anchor': 'middle', fill: INK, ...halo }))
+      }
+      svg.appendChild(g)
+      parts.stones.push(g)
+    })
+
+    svg.setAttribute('aria-label', [text(p.title, 200), ...stones.map((s) => [s.date, s.label].filter(Boolean).join(' ')), showToday ? `${text(p.todayLabel, 24) || 'today'} ${text(p.today, 24)}` : ''].filter(Boolean).join('; '))
+  }
+
+  /** The entrance: the line draws from the left and each milestone appears as it passes. Never with motion reduced. */
+  function enter() {
+    cancelAnimationFrame(raf)
+    const { axis, progress, stones, marker } = parts
+    if (!axis) return
+    const x1 = Number(axis.getAttribute('x1')), x2 = Number(axis.getAttribute('x2'))
+    const px2 = progress ? Number(progress.getAttribute('x2')) : 0
+    const at = stones.map((g) => Number(g.querySelector('circle').getAttribute('cx')))
+    const t0 = performance.now(), ms = 1400
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 2)
+      const head = x1 + (x2 - x1) * e
+      axis.setAttribute('x2', r1(head))
+      if (progress) progress.setAttribute('x2', r1(Math.min(px2, head)))
+      stones.forEach((g, i) => g.setAttribute('opacity', Math.max(0, Math.min(1, (head - at[i] + 40) / 120)).toFixed(3)))
+      if (marker) marker.setAttribute('opacity', Math.max(0, (k - 0.85) / 0.15).toFixed(3))
+      if (k < 1) { raf = requestAnimationFrame(tick); return }
+      stones.forEach((g) => g.removeAttribute('opacity'))
+      if (marker) marker.removeAttribute('opacity')
+    }
+    raf = requestAnimationFrame(tick)
+    tick(t0)
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window.parent) return // never test ev.origin: a sandboxed frame's is 'null'
+    const m = ev.data || {}
+    if (m.type === 'bento:init') {
+      Object.assign(state.props, m.props)
+      state.reduce = !!m.reduceMotion
+      state.ready = true
+      cancelAnimationFrame(raf)
+      draw()
+      if (!state.reduce) enter()
+    } else if (m.type === 'bento:props') {
+      Object.assign(state.props, m.values)
+      cancelAnimationFrame(raf)
+      draw()
+    } else if (m.type === 'bento:motion') {
+      state.reduce = !!m.reduce
+      if (state.reduce) { cancelAnimationFrame(raf); draw() } // an entrance under way lands at once
+    }
+    // bento:step: this scene has no steps
+  })
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); draw() })
+
+  // Keys pressed inside the frame never reach the shell: forward them.
+  const NAV = { ArrowRight: 'next', ' ': 'next', PageDown: 'next', ArrowLeft: 'prev', PageUp: 'prev', Escape: 'exit' }
+  window.addEventListener('keydown', (ev) => {
+    const dir = NAV[ev.key]
+    if (!dir || ev.defaultPrevented) return
+    ev.preventDefault()
+    window.parent.postMessage({ type: 'bento:navigate', dir }, '*')
+  })
+
+  draw()
+  window.parent.postMessage({ type: 'bento:ready' }, '*')
+</script>
+</body>
+</html>
