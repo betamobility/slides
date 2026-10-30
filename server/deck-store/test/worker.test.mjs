@@ -2428,6 +2428,129 @@ export async function run(Miniflare) {
       eq(await r.text(), next, 'and the person reads the new manifest')
     }
 
+    // ------------------------------------- analytics on the publish path (R4)
+    //
+    // Every pairing, publish, revoke and upload outcome a route can produce,
+    // driven once each, and the event it sends read back from the Plausible
+    // stub. A FRESH isolate first (setOptions restarts the runtime), so the
+    // once-a-minute refusal throttle starts empty and the earlier 429 burst
+    // does not hide this section's.
+    console.log('\nanalytics on the publish path: one event per outcome, surface and outcome only (R4)')
+    await mf.setOptions(mfOptions)
+    await refreshKv()
+    {
+      const J4 = { 'content-type': 'application/json' }
+      const form = { ...sameOrigin, 'content-type': 'application/x-www-form-urlencoded' }
+      const tok4 = (await mintGrant(grantEnv, 'alice@betamobility.io', 'R4 rig')).token
+      // Wait for exactly the event this step should send, and nothing else.
+      const expect = async (step, name, outcome) => {
+        const mark = events.length
+        const res = await step()
+        const got = () => events.slice(mark).filter((e) => e.body.name === name && e.body.props.outcome === outcome)
+        ok(await waitFor(() => got().length >= 1, 2000), `${name}/${outcome} fires (HTTP ${res.status})`)
+        await new Promise((r2) => setTimeout(r2, 30))
+        const extra = events.slice(mark).filter((e) => !(e.body.name === name && e.body.props.outcome === outcome))
+        eq(extra.map((e) => `${e.body.name}/${e.body.props.outcome}`).join(','), '', `${name}/${outcome}: and no other event with it`)
+        return res
+      }
+      const silent = async (step, what) => {
+        const mark = events.length
+        await step()
+        await new Promise((r2) => setTimeout(r2, 150))
+        eq(events.length - mark, 0, `${what}: no event`)
+      }
+
+      // pairing_start
+      const p4 = await (await expect(() => startPair('R4 pairing'), 'pairing_start', 'ok')).json()
+      await expect(() => startPair(undefined, { body: '{not json' }), 'pairing_start', 'rejected')
+      // pairing_poll: pending and gone are silent, on purpose
+      await silent(() => pollPair(p4.handle), 'a pending poll')
+      await silent(() => pollPair('q'.repeat(43)), 'a poll for a handle nobody issued (the uptime probe)')
+      // pairing_page
+      const page4 = await (await expect(() => call('GET', `/link/${p4.code}`, { as: 'alice', headers: asDocument }), 'pairing_page', 'ok')).text()
+      await expect(() => call('GET', '/link/ZZZZZZZZZZ', { as: 'alice', headers: asDocument }), 'pairing_page', 'gone')
+      // pairing_approve
+      await expect(() => call('POST', `/link/${p4.code}/approve`, { as: 'alice', headers: { 'sec-fetch-site': 'cross-site', 'content-type': 'application/x-www-form-urlencoded' }, body: 'nonce=x' }), 'pairing_approve', 'refused')
+      await expect(() => call('POST', `/link/${p4.code}/approve`, { as: 'alice', headers: form, body: 'nonce=wrong' }), 'pairing_approve', 'nonce')
+      await expect(() => call('POST', `/link/${p4.code}/approve`, { as: 'alice', headers: form, body: `nonce=${nonceIn(page4)}` }), 'pairing_approve', 'ok')
+      await expect(() => call('POST', `/link/${p4.code}/approve`, { as: 'alice', headers: form, body: `nonce=${nonceIn(page4)}` }), 'pairing_approve', 'gone')
+      // pairing_poll: delivered, then collected
+      const delivered = await (await expect(() => pollPair(p4.handle), 'pairing_poll', 'ok')).json()
+      eq(delivered.state, 'delivered', 'the poll that fired pairing_poll/ok handed the grant over')
+      await expect(() => pollPair(p4.handle), 'pairing_poll', 'collected')
+
+      // publish_create and publish_save (a grant's writes no longer count as deck_save)
+      const made4 = await (await expect(() => publish('POST', '/api/publish/decks', { headers: asGrant(tok4), body: deck(slidesDoc('R4 deck')) }), 'publish_create', 'ok')).json()
+      await expect(() => publish('POST', '/api/publish/decks', { headers: asGrant(tok4), body: 'no block here' }), 'publish_create', 'rejected')
+      let rd = await publish('GET', `/api/publish/decks/${made4.id}`, { headers: asGrant(tok4) })
+      const etag4 = rd.headers.get('x-bento-etag'), body4 = await rd.text()
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}`, { headers: asGrant(tok4), body: body4 }), 'publish_save', 'precondition')
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}`, { headers: asGrant(tok4, { 'if-match': '"stale"' }), body: body4 }), 'publish_save', 'conflict')
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}`, { headers: asGrant(tok4, { 'if-match': etag4 }), body: 'no block' }), 'publish_save', 'rejected')
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}`, { headers: asGrant(tok4, { 'if-match': etag4 }), body: body4 }), 'publish_save', 'ok')
+      // the harness 428 is now told apart from a malformed body, too
+      await expect(() => call('PUT', `/api/harness/decks/${made4.id}`, { as: 'service', body: body4 }), 'deck_save', 'precondition')
+      // a bad bearer is still silent: refusing WHO is asking is never an event
+      await silent(() => publish('PUT', `/api/publish/decks/${made4.id}`, { headers: asGrant('x'.repeat(43), { 'if-match': etag4 }), body: body4 }), 'a write with a dead bearer')
+
+      // asset_upload, on both prefixes; a person's 403 is silent
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}/assets/r4.json`, { headers: asGrant(tok4, J4), body: '{}' }), 'asset_upload', 'ok')
+      await expect(() => publish('PUT', `/api/publish/decks/${made4.id}/assets/r4.exe`, { headers: asGrant(tok4, { 'content-type': 'application/x-msdownload' }), body: 'MZ' }), 'asset_upload', 'rejected')
+      await expect(() => call('PUT', `/api/harness/decks/${made4.id}/assets/r4b.json`, { as: 'service', headers: J4, body: '{}' }), 'asset_upload', 'ok')
+      await silent(() => call('PUT', `/api/harness/decks/${made4.id}/assets/r4c.json`, { as: 'alice', headers: J4, body: '{}' }), "a person's asset upload (403)")
+      // library_upload
+      const lib4 = serialize({ format: 'beta/library', v: 1, scenes: [] })
+      await expect(() => call('PUT', '/api/harness/library.json', { as: 'service', headers: J4, body: lib4 }), 'library_upload', 'ok')
+      await expect(() => call('PUT', '/api/harness/library.json', { as: 'service', headers: J4, body: '{"format":"nope"}' }), 'library_upload', 'rejected')
+      await silent(() => call('PUT', '/api/harness/library.json', { as: 'alice', headers: J4, body: lib4 }), "a person's library upload (403)")
+
+      // grant_revoke
+      const g4 = await mintGrant(grantEnv, 'alice@betamobility.io', 'R4 revoke')
+      await expect(() => call('POST', `/api/grants/${g4.hash}/revoke`, { as: 'alice', headers: { 'sec-fetch-site': 'cross-site' } }), 'grant_revoke', 'refused')
+      await expect(() => call('POST', `/api/grants/${g4.hash}/revoke`, { as: 'bob', headers: sameOrigin }), 'grant_revoke', 'missing')
+      await expect(() => call('POST', `/api/grants/${g4.hash}/revoke`, { as: 'alice', headers: sameOrigin }), 'grant_revoke', 'ok')
+
+      // 429 on the public routes: one event, however many refusals
+      const flood = { 'cf-connecting-ip': '203.0.113.44' }
+      let mark = events.length, limited4 = 0
+      for (let i = 0; i < 15; i++) {
+        const rr = await call('POST', '/api/link/start', { headers: { ...J4, ...flood }, body: '{}' })
+        if (rr.status === 429) limited4++
+      }
+      await waitFor(() => events.slice(mark).some((e) => e.body.props.outcome === 'limited'), 2000)
+      await new Promise((r2) => setTimeout(r2, 50))
+      ok(limited4 >= 2, `the flood was refused more than once (${limited4} times)`)
+      eq(events.slice(mark).filter((e) => e.body.name === 'pairing_start' && e.body.props.outcome === 'limited').length, 1,
+        'pairing_start/limited fires ONCE for the whole flood: an anonymous caller cannot buy events')
+      await expect(() => call('GET', `/api/link/${'q'.repeat(43)}`, { headers: flood }), 'pairing_poll', 'limited')
+
+      // 503: the limiter binding missing in production
+      await mf.setOptions({ ...mfOptions, ratelimits: undefined })
+      await expect(() => startPair('R4 no limiter'), 'pairing_start', 'unavailable')
+      await expect(() => pollPair('q'.repeat(43)), 'pairing_poll', 'unavailable')
+      await silent(() => startPair('again'), 'a second 503 inside the minute')
+      await mf.setOptions(mfOptions)
+      await refreshKv()
+
+      // The whole run, every event: the allowed fields and nothing minted here.
+      console.log('\nanalytics: every event of the run carries only name, domain, url and {surface, outcome}')
+      await new Promise((r2) => setTimeout(r2, 100))
+      const urlOk = /^https:\/\/(slides|decks)\.betamobility\.ai\/(d\/|api\/decks|api\/link\/|link\/|api\/publish\/decks|api\/grants\/|assets\/|library\/)$/
+      let shape = true, urls = true, secrets = true
+      const minted = [p4.code, p4.handle, delivered.grant, tok4, g4.hash, g4.token, made4.id, 'R4 pairing', 'R4 deck', 'alice', 'bob', aliceTok]
+      for (const e of events) {
+        if (Object.keys(e.body).sort().join(',') !== 'domain,name,props,url') shape = false
+        if (Object.keys(e.body.props).sort().join(',') !== 'outcome,surface' || e.body.props.surface !== 'deck-store') shape = false
+        if (!urlOk.test(e.body.url)) { urls = false; console.log(`        url: ${e.body.url}`) }
+        const flat = JSON.stringify(e.body)
+        for (const m of minted) if (m && flat.includes(m)) { secrets = false; console.log(`        ${e.body.name} carries ${m.slice(0, 12)}…`) }
+      }
+      ok(events.length > 30, `the run sent events to check (${events.length})`)
+      ok(shape, 'every event body is {name, domain, url, props:{surface:"deck-store", outcome}}')
+      ok(urls, 'every url is one of the fixed per-event pages, never a request path')
+      ok(secrets, 'no event carries a code, handle, grant, hash, deck id, label or email minted in this run')
+    }
+
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
     eq(r.status, 404, 'an unknown path with a valid assertion is 404')

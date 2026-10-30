@@ -6,6 +6,7 @@
 //
 //   BENTO_SITE_DIR=../bento-site node scripts/check-store-live.mjs
 //   node scripts/check-store-live.mjs --host https://slides.betamobility.ai
+//   node scripts/check-store-live.mjs --uptime      (one request; exit 1 = down)
 //
 // WHAT THIS PROVES, and why it is INVERTED. slides.betamobility.ai serves the
 // gated deck store and the public release channel from one worker, and which
@@ -202,6 +203,35 @@ export async function sweepRoutes(checks, fetchRoute) {
   return { results, checked: results.length, failures: results.filter((r) => !r.pass).length }
 }
 
+// ---- the pairing uptime probe (--uptime) -----------------------------------
+//
+// What an uptime monitor (Mission Control, or any HTTP checker) runs every few
+// minutes. ONE anonymous GET, no state: the agent's poll route, with a handle
+// of the right shape that nobody was ever issued. It travels the whole public
+// path an agent's pairing does — the Access Bypass on /api/link/, the worker,
+// the rate limiter, the GRANTS lookup — and creates nothing: no KV row, and no
+// analytics event, because the worker does not count a `gone` poll (a probe
+// would otherwise be a fake lapsed pairing every minute). Ten requests a minute
+// per address is the limiter's ceiling, so a monitor at one a minute never
+// trips it.
+//
+//   410  up: the route answered and found no such pairing, as it should
+//   429  up: the limiter is there and refusing — this address is polling too fast
+//   503  DOWN: the LINK_LIMIT binding is missing (or not answering) in production,
+//        so the store refuses every pairing rather than run unguarded
+//   401, 403, 3xx  DOWN: the request never reached the pairing route — the
+//        /api/link/ Bypass destination is gone, or the worker answers otherwise
+//   anything else, or no answer  DOWN
+export const UPTIME_PATH = `/api/link/${'u'.repeat(43)}`
+export function uptimeVerdict(status) {
+  if (status === 410) return { up: true, why: 'the pairing route answered' }
+  if (status === 429) return { up: true, why: 'the pairing route answered with its rate limit (probe too often from one address?)' }
+  if (status === 503) return { up: false, why: 'the pairing rate limiter is missing or not answering: every pairing is refused (README, "Uptime")' }
+  if (status === 401 || status === 403 || (status >= 300 && status < 400)) return { up: false, why: 'the request never reached the pairing route: check the /api/link/ Access Bypass destination' }
+  if (status === 0) return { up: false, why: 'no answer from the host' }
+  return { up: false, why: `unexpected status ${status}` }
+}
+
 // ---- self-test: the three cases, no network -------------------------------
 
 if (args.includes('--selftest')) {
@@ -283,6 +313,15 @@ if (args.includes('--selftest')) {
     : healthy(c)))
   ok(rt.failures === 1 && /\/schema\/ Bypass destination was entered without/.test(rt.results.find((r) => !r.pass).why), 'and a public bare /schema fails the other way round')
 
+  // --- the uptime probe's verdicts -----------------------------------------
+  ok(/^\/api\/link\/[A-Za-z0-9_-]{43}$/.test(UPTIME_PATH), 'the probe handle has the shape the poll route matches (TOKEN_PAT), so it reaches the limiter and the lookup')
+  ok(uptimeVerdict(410).up, 'uptime: a 410 (no such pairing) is up')
+  ok(uptimeVerdict(429).up, 'uptime: a 429 is up: the limiter is there')
+  ok(!uptimeVerdict(503).up && /limiter/.test(uptimeVerdict(503).why), 'uptime: a 503 is DOWN, and says the limiter is missing')
+  ok(!uptimeVerdict(302).up && /Bypass/.test(uptimeVerdict(302).why), 'uptime: a login redirect is DOWN, and names the Bypass destination')
+  ok(!uptimeVerdict(401).up, 'uptime: a 401 is DOWN')
+  ok(!uptimeVerdict(200).up && !uptimeVerdict(502).up && !uptimeVerdict(0).up, 'uptime: anything else, or no answer, is DOWN')
+
   console.log(`\n${checks - failures}/${checks} checks passed`)
   process.exit(failures ? 1 : 0)
 }
@@ -290,6 +329,20 @@ if (args.includes('--selftest')) {
 // ---- the live run ----------------------------------------------------------
 
 const host = (opt('host', DEFAULT_HOST)).replace(/\/+$/, '')
+
+// `--uptime` is one request and one line: what a monitor reads.
+if (args.includes('--uptime')) {
+  let status = 0
+  try {
+    const r = await fetch(host + UPTIME_PATH, {
+      headers: { 'user-agent': 'beta-store-uptime' }, redirect: 'manual', signal: AbortSignal.timeout(15_000),
+    })
+    status = r.status
+  } catch { status = 0 }
+  const v = uptimeVerdict(status)
+  console.log(`${v.up ? 'UP' : 'DOWN'} ${status} ${host}${UPTIME_PATH.replace(/u{43}$/, '<probe>')}: ${v.why}`)
+  process.exit(v.up ? 0 : 1)
+}
 
 // `--routes` is its own run: it needs no published tree, only the live host.
 if (args.includes('--routes')) {

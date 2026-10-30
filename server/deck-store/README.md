@@ -61,7 +61,24 @@ Every valid `@betamobility.io` identity may read, list, create and replace any d
 
 Scene assets are the heavy files a runtime slide's scene needs. The shell on this origin fetches them with the person's Access cookie and hands the bytes to the sandboxed scene, so the scene itself never makes a credentialed request. They are keyed by deck id: a duplicated deck has none until the splice tool uploads them again.
 
-Analytics: the worker posts `deck_open`, `deck_save` and `deck_new` to Plausible's events API for the `betamobility.ai` site with `surface: deck-store` and an `outcome`, and nothing else. No id, title, email, path or content leaves the worker. A Plausible failure never fails the response. Public pass-through fetches are **not** tracked: they are anonymous machine requests from shipped files, and they would add volume without insight.
+Analytics: the worker posts events to Plausible's events API for the `betamobility.ai` site with `surface: deck-store` and an `outcome`, and nothing else. Each event is filed under a fixed page per event name (`/d/`, `/api/decks`, `/api/link/`, `/link/`, `/api/publish/decks`, `/api/grants/`, `/assets/`, `/library/`), never the request path, so no id, code, handle, hash, title, email or content leaves the worker. A Plausible failure never fails the response. Public pass-through fetches are **not** tracked: they are anonymous machine requests from shipped files, and they would add volume without insight. Neither is a refusal of *who* is asking (a `401`, or a `403` for the wrong identity kind).
+
+| Event | Route | Outcomes |
+|---|---|---|
+| `deck_open` | `GET /d/:id` | `ok`, `missing` |
+| `deck_new` | `/new/blank`, `POST /api/decks?new=1` | `ok`, `rejected` |
+| `deck_save` | person and harness create and replace | `ok`, `rejected` (`400`), `conflict` (`412`), `precondition` (`428`, harness) |
+| `publish_create` | `POST /api/publish/decks` (a grant) | `ok`, `rejected` |
+| `publish_save` | `PUT /api/publish/decks/:id` (a grant) | `ok`, `rejected`, `conflict` (`412`), `precondition` (`428`) |
+| `pairing_start` | `POST /api/link/start` | `ok`, `rejected` (`400`), `limited` (`429`), `unavailable` (`503`) |
+| `pairing_poll` | `GET /api/link/:handle` | `ok` (the grant delivered), `collected` (asked again after delivery), `limited`, `unavailable`. A `pending` or `gone` poll is not counted: the first is every few seconds of every pairing, and the second cannot tell a lapsed pairing from the uptime probe |
+| `pairing_page` | `GET /link/:code` | `ok`, `gone` (the person opened a lapsed or used link) |
+| `pairing_approve` | `POST /link/:code/approve` | `ok`, `nonce` (an out-of-date form), `gone`, `refused` (not the store's own page), `error` (`502`) |
+| `grant_revoke` | `POST /api/grants/:hash/revoke` | `ok`, `missing`, `refused` |
+| `asset_upload` | both asset `PUT` routes | `ok`, `rejected` |
+| `library_upload` | `PUT /api/harness/library.json` | `ok`, `rejected` |
+
+`limited` and `unavailable` come from anonymous callers on public routes, so each is sent at most once a minute per worker isolate: the signal survives a flood and the flood does not become billable events. A pairing nobody approves leaves no event when it lapses; `pairing_start/ok` minus `pairing_approve/ok` is that count. There is no deny route: a person who does not want to approve closes the tab. Recorded in `docs/DECISIONS.md`, 2026-10-30.
 
 ### The agent prefixes — Access bypasses them, the worker guards them
 
@@ -261,5 +278,18 @@ Source layout: `worker.js` is the router and the deck handlers; `access.js` veri
 `scripts/test-beta-store.ts` runs `test/worker.test.mjs` under Miniflare (a devDependency of `slides/`, the `@gfx/zopfli` precedent): a local R2 bucket, RSA keys minted at run time, a stub JWKS the worker's outbound fetch is routed to, a stub Pages origin that records every subrequest, and a stub Plausible endpoint that records events. It pins the route contract, the Access refusals (missing, expired, wrong audience, wrong issuer, wrong email domain, unknown key id after one refresh, bad signature, service token off its routes), the public pass-through (anonymous, byte-identical, from `PAGES_ORIGIN`, carrying none of our credentials), the write validation, the harness read and the `If-Match` preconditions (`412`, `428`, `ETag` on every read and write, `HEAD /d/:id`, the service generation), the asset route (types, names, size, the SVG strip, the sandbox headers, revalidation with `304`, the delete cascade), byte-identical serving with the KTD9 headers, both `/new` branches, the old-host redirect and its two exemptions, and the analytics payload.
 
 The rig also pins the pairing flow (start, the approval page's copy and refusals, approve, poll, single use, expiry, the body caps and the `429`), the grant store (mint, verify, list, revoke, expiry, and that no stored value is ever a usable token), what a grant reaches and does not, the `collab` strip and restore, the shell pin, and the index's Agent access section.
+
+## Uptime
+
+The public pairing routes answer `503` on purpose when the `LINK_LIMIT` binding is missing in production (`LINK_LIMIT_REQUIRED`), so the one failure that stops every colleague from pairing is a status code an uptime monitor can see. The probe:
+
+```sh
+node scripts/check-store-live.mjs --uptime
+# UP 410 https://slides.betamobility.ai/api/link/<probe>: the pairing route answered
+```
+
+One anonymous `GET /api/link/<a well-formed handle nobody was issued>`, through the Bypass destination, the worker, the limiter and the `GRANTS` lookup. It writes nothing and sends no analytics event. Exit `0` on `410` (up) or `429` (up, limiter refusing this address); exit `1` on `503` (limiter missing), on `401`/`403`/`3xx` (the request never reached the route, so the `/api/link/` Bypass destination is gone), on any other status and on no answer within 15 s. The one line it prints is the alert text.
+
+**Mission Control, or any uptime monitor**, runs that command every 5 minutes from the repository root (Node 20 or later, no `npm ci` needed: the mode imports nothing outside `scripts/`) and alerts on a non-zero exit, attaching the printed line. A monitor that only speaks HTTP can call the URL directly instead: `GET https://slides.betamobility.ai/api/link/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu` (43 `u`), no headers, no redirects followed; healthy is status `410` or `429`, anything else is down. Keep the interval at or above one minute: the limiter allows ten requests a minute per address, and a monitor that polls faster reports `429` rather than measuring anything.
 
 `scripts/check-store-live.mjs` needs the network and the live host, so it is **not** a `test-*` rig and does not run in CI — only its own cases do (`--selftest`). Run the live sweep after any Access change: Bypassed requests are not logged, so drift there is otherwise silent. `--routes` is the second half of that and the only thing that notices if an agent prefix's Bypass destination is dropped or entered without its trailing slash.
