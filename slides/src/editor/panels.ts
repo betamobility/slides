@@ -382,6 +382,10 @@ export class PropsPanel {
       this.host.appendChild(hint)
     }
 
+    // BETA FORK (roadmap R3): speaker notes are per-slide, daily work, so they sit right under
+    // this slide's own properties, above every deck-wide section (Slideshow, Theme, Layout)
+    this.buildNotes(slide)
+
     // Deck-wide slideshow chrome, in its own section: these are not properties
     // of THIS slide (the section above) but of how the whole deck presents, and
     // mixing them in beside Background and Transition read as per-slide.
@@ -517,8 +521,7 @@ export class PropsPanel {
       }, true)
     })
     this.host.appendChild(saveLy)
-
-    this.buildNotes(slide) // BETA FORK
+    // BETA FORK (roadmap R3): buildNotes moved up, under the slide's own properties
   }
 
   private buildNotes(slide: Slide) {
