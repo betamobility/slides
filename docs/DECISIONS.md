@@ -179,6 +179,248 @@ document being published is discarded — the exact failure R11 forbids, reached
 through the fix for it. `POST /api/decks` is exempt too, and the old host's
 Access application is therefore *replaced* by path-scoped Allow applications on
 those two paths rather than simply deleted.
+## 2026-10-18 — Native hosts keep a document's recovery copy and member key outside the page
+
+**Decision.** The native hosts provide the per-document store that
+`kernel/src/docstore.ts` already speaks, so the kernel stops keeping two
+things in the page's own web storage: the crash-recovery copy (`recovery`) and
+this device's member key for the document (`memberkey`, whose private half is
+what lets this device act in the document's live room). Until now only the
+browser extension provided one, and on Android and iOS the whole member key,
+private half included, sat in the document origin's localStorage.
+
+**The shared half, `home/bridge.js`:**
+
+- **The host declares; the bridge obeys.** Each host prepends
+  `window.__bentoHostCaps = ['store']` to the injected bridge. Only then does
+  the bridge define `window.__bentoHost = {ops:['store']}` (non-writable) and
+  relay. A host that advertised a store it could not serve would lose the
+  member key on every reload: the kernel, finding a store present but refusing,
+  keeps the key for that page only and deliberately never falls back to
+  localStorage.
+- **Top frame only, page window only.** No store in a subframe, and a request
+  whose source is not the page's own window is ignored.
+- **The native contract**, written at the relay and enforced by
+  `scripts/test-home-docstore.mjs`. Requests are `{op, name, b64}`. Replies are
+  `(ok, value)`: `get` gives base64 or null; `set` and `delete` give null;
+  `list` gives a JSON array; any failure gives `'refused'` (a name other than
+  recovery/memberkey), `'too-large'` or `'unavailable'`. Bytes are rebuilt as a
+  `Uint8Array` in the page's own realm, because the kernel checks
+  `instanceof`.
+
+**Android, `DocStore.kt`:** partitioned by the document's claim (the identity
+that chooses its origin, 2026-10-18), never a path, URI or anything the page
+names. Encrypted with AES-GCM under a Keystore key. Kept in no-backup app
+storage. Written beside the entry, then renamed, so a crash leaves the old
+entry, not a truncated one. Capped at 64 MB. Runs on the same ordered thread
+as file writes.
+
+Each entry is authenticated with its claim and name (AES-GCM additional data):
+an entry file copied into another document's directory, or renamed from
+`recovery` to `memberkey`, fails authentication instead of decrypting as that
+document's (measured: a renamed genuine entry is refused, and the real one still
+reads). Such an entry reads as ABSENT, not as unavailable. The kernel refuses to
+mint a member key while the store "cannot answer", so treating it as unavailable
+would wedge that document's member identity for good. Absent lets it mint a
+fresh one; the next write replaces the bad entry.
+
+**Verified.** The rig drives the real bridge with the kernel's real client: no
+capability means no store at all; with the capability, 1 MiB round-trips and
+refusals pass through. The kernel's real `deviceIdentity` runs through it too:
+an existing member key in localStorage is adopted unchanged, with its private
+half moved into the store and only `{pub}` left behind; a new key is minted
+straight into the store; without the capability, nothing moves (the control). Removing the capability gate fails the three no-store
+checks. On the emulator the kernel's own autosave moved its recovery copy into
+the native store, and IndexedDB recovery came back empty.
+
+**With it:** the legacy-origin inspector now reads keys only (key cursors),
+attributes `bento-handles` by key, and refuses any other database that holds
+records. That includes `bento-blobcache`, which caches live-session media in
+plaintext. `scripts/test-home-inspector.mjs` runs the script as it ships; it
+also matched real Chromium IndexedDB case for case.
+
+**iOS** implements the same native contract (`home/ios/HostDocStore.swift`).
+The member key goes to the Keychain, this device only and never synchronised;
+the recovery copy goes to an app-private file. Both are partitioned by the
+origin string the iOS origin fix mints, so on iOS a moved document keeps its
+store. Measured on the iOS simulator with this bridge and a real invite copy
+joined as a member:
+- the private key lands in the Keychain, and localStorage keeps only `{pub}`
+- the key survives a fresh launch and a move
+- a different file at that path gets an empty partition and mints its own key
+
+An ad-hoc (unsigned) Mac Catalyst build can't reach the Keychain
+(`errSecMissingEntitlement`, -34018). Its store answers 'unavailable', and the
+kernel keeps the key for the session only, never in web storage. A signed build
+needs the Apple team. The iOS simulator works ad-hoc.
+
+## 2026-10-18 — Android: every docId form the apps mint counts as a docId
+
+**Supersedes "a strict UUID"** in the entry below. Spaces always mints
+`doc-<base36>`, and dash and slides fall back to `d-<base36>…` where
+`crypto.randomUUID` is missing. Read as "no docId", those documents fell back
+to the content hash: every external edit got fresh storage, losing the member
+key and recovery copy, and on update they refused their own legacy storage.
+Not a security issue, because a docId only ever refuses, but it orphaned state
+for whole apps.
+
+A docId is now any `^[A-Za-z0-9_-]{1,128}$`, compared exactly as stored with
+no case folding, the same as the iOS host. JVM cases go through `extractDocId`
+from real document HTML, because the bug was in reading the id: a doc- id and a
+d- id each adopt their own legacy storage, a different doc- id is refused, and
+a doc- id keeps its claim across an external edit. 4 of them fail against the
+strict check.
+
+## 2026-10-18 — A document's storage origin follows the file, not its path (iOS)
+
+**Corrects 2026-09-19**, which said the native hosts "were never exposed"
+because each document gets its own origin. That held **across paths**, and was
+false **across reuse of one path**. iOS derived the origin from a hash of the
+file's path, so a different file that later took the same path (the original
+deleted, a new download taking the name) inherited the previous file's web
+storage.
+
+Measured on a build of the host, with a real invite copy joined as a member:
+the successor read the old file's recovery copy, its version history, and this
+device's collab member private key for it. Encrypted decks skip the snapshots,
+but not the member key. Android derives its origin the same way, from the
+document's URI, and is fixing it separately.
+
+**Decision.** The origin follows the FILE (`home/ios/OriginIdentity.swift`):
+
+- **The anchor is the file's document identifier** (`NSURLDocumentIdentifierKey`),
+  with `UF_TRACKED` set on first open so a local file has one. Measured: it
+  survives the app's atomic saves, moves, and iCloud eviction and re-download;
+  a copy doesn't carry it; a new file at the same path gets a new one. It's
+  filesystem metadata, so nothing in a file can claim another's.
+- **A fresh origin is an HMAC under a device-local secret** (Keychain, this
+  device only), so knowing a path or an identifier doesn't reveal it.
+- **The host's index is the authority.** It maps a document to its origin
+  string. A moved file keeps its storage, recovery and member key included.
+- **A path that has had a document is never handed to another.** A newcomer
+  gets fresh storage. Old storage is never cleared, because its owner may simply
+  have moved.
+- **Files opened before this change keep their storage.** A legacy origin is
+  adopted only if everything stored there belongs to the file's own docId, so
+  nobody has to re-join a shared document. docId can refuse an origin, never
+  claim one: it's in the file's contents.
+- **The probe that looks (`home/ios/OriginProbe.js`) enumerates every database**
+  with `indexedDB.databases()`: each app's `${appId}-autosave`, the old shared
+  `bento-autosave`, and `bento-handles`, all attributed by docId. Anything it
+  can't attribute (a blob cache, an unknown database holding records, no
+  `databases()` at all, an error) refuses. "Couldn't look" never reads as
+  "empty". The first version looked only in `bento-autosave` and missed every
+  app's real data; `scripts/test-home-origin-probe.mjs` now runs the probe
+  itself in WebKit, including against a real deck's own autosave.
+- **Without a document identifier,** a random extended-attribute id is a hint,
+  honoured only where the index recorded it for this same file or a move of it.
+  Attributes travel with copies; only device-local state can tell "my file" from
+  someone else's copy of it.
+
+**Also:** the scheme handler serves a document only under its own host. It used
+to answer every `bento-tray://` host with the open document, so a page could
+frame another document's host and run itself there. Measured: WebKit partitions
+that frame's storage by the top-level page, so it read nothing, and the bridge
+already refuses frames. Defence in depth.
+
+**Guarded by** `scripts/test-home-origin.mjs`: the real `OriginIdentity.swift`,
+20 cases. It fails against a path-only origin.
+
+---
+## 2026-10-18 — Android: a document's web origin belongs to the document, not to its path
+
+**Supersedes one line of 2026-09-19** ("The native hosts were never exposed …
+cross-deck reads are impossible there"). That holds across different paths. It
+was false across ONE path reused by a different file.
+
+**What was measured** (emulator, Android 16, before this change). The Android
+host served each document from `https://<sha24(URI)>.bento-tray.invalid/`, and
+common document URIs are paths: the folder index's
+`primary:Documents/x.bento.html`, and the Files app's Downloads view, which
+hands over `raw:/storage/…` (a path) or `msf:<row>`, a MediaStore id that
+survives an overwrite. So a DIFFERENT file at the same place opened under the
+previous document's origin and read its localStorage, its autosave recovery
+copy and version history, and, because Android supplies no docstore, this
+device's member private key for that document. A different file elsewhere read
+nothing.
+
+**Decided.** The origin is a CLAIM in a device-local index, bound to the
+document (`DocumentOrigin.kt`, `OriginIndex.kt`):
+
+- **The docId refuses, never claims.** On every open, a URI's claim is reused
+  only for the same docId (a strict UUID read from the plaintext `#bento-doc`).
+  A different docId gets a fresh origin. A docId never selects an origin: an
+  unknown URI does not inherit another URI's claim because the docIds match.
+- **No docId** (an encrypted envelope, or a never-saved shell): reuse only for
+  exactly the bytes the host last read or wrote (SHA-256). Any other change gets
+  a fresh origin. A first save, which writes the docId the kernel just minted,
+  moves the claim to that docId, because the host itself wrote those bytes.
+- **New origins** are HMAC-SHA256(Keystore key, URI ‖ docId), or ‖ the content
+  hash when there is no docId. The key never leaves the device, and nothing in a
+  file selects or reproduces it.
+- **Legacy origins are adopted on update**, so existing recovery copies and
+  member keys survive. But only after an inspector page, served IN the legacy
+  origin before any document code runs there, finds no autosave record and no
+  member key belonging to another docId. Anything it can't attribute, or no
+  answer, gets a fresh origin.
+- **Nothing is cleared.** An abandoned origin's data stays, unreachable. Its
+  owner may have moved, and wiping it would destroy their recovery copy.
+- **A move or rename done outside the app gets a fresh origin.** The only
+  device-local evidence of a move would be the app performing it, and it has no
+  such feature. Letting a matching docId follow the file would let a docId claim
+  an origin, which is the hole this closes.
+
+**Verified on the emulator**, old build upgraded to new, app data kept:
+- the same document reopens on its legacy origin, with its own data;
+- a different document at a URI whose legacy storage holds another docId gets a
+  fresh origin and reads nothing;
+- an `msf:` overwrite by a different docId gets a fresh origin;
+- a successor at the same folder-index path after a delete gets a fresh origin;
+- a document reopened unchanged keeps its origin and data;
+- a never-saved shell keeps its storage across its first save and reopen.
+
+JVM rig: `DocumentOriginTest`, 18 cases. Removing the docId refusal fails 4;
+always adopting legacy storage fails 3. CI now runs the Android unit tests
+(`home-android-unit`); nothing ran them before.
+
+**Still open:** the member private key leaves localStorage only with a host
+docstore (`kernel/src/docstore.ts`). Android's, Keystore-backed and partitioned
+by this same claim, is next. iOS has the same path-derived origin and is fixing
+it in its own change.
+
+## 2026-10-18 — The Mac app is the iOS app, built for Mac Catalyst; a Mac double-click edits in place
+
+**Decision (maintainer, 2026-10-18).** Native desktop apps are the primary desktop
+host, and macOS comes from building the existing `home/ios` app for **Mac
+Catalyst**, not from a SwiftUI rewrite or a separate AppKit target. It ships with
+**Developer ID first** (notarised, outside the store); the Mac App Store comes
+later. A `.bento.html` double-click reaches the app through a per-file "open with"
+binding on documents it saves, plus an "Edit in bento/home" hand-off from the
+browser. A `.bento` extension is ruled out: a Bento file stays an HTML file that
+opens anywhere.
+
+**Why Catalyst.** The app builds for Catalyst with no source changes, so every
+host fix lands on the Mac for free.
+
+**Why a type can't do it.** macOS types a file by its last extension, so
+`x.bento.html` is always `public.html`. Measured: a declared, registered
+`bento.html` type with the app as Owner still left a double-click going to the
+browser.
+
+**What changes in code now.** On the Mac, a file the system hands over is opened
+**where it is**. iOS's `revealDocument(importIfNeeded:)` is right on a phone and
+wrong on a Mac: an unsandboxed Mac app's Documents is the person's real
+`~/Documents`, so the import wrote a copy there, and every save went to the copy.
+On the Mac, a double-click means "edit this file".
+
+The Mac bundle id stays `page.bento.home`: one app on every Apple platform.
+
+**Still open.** The browser hand-off's URL scheme needs a security ruling. Signing,
+notarisation, the keychain, passkeys and associated domains all wait on the paid
+Apple team. The scoping is in the private design notes.
+
+---
+
 ## 2026-09-10 — bento/spaces footnotes: the reference is a TEXT TOKEN, and the number is derived
 
 **Decision.** A footnote in `bento/spaces` is `doc.footnotes` (a document-level
@@ -10808,6 +11050,1370 @@ The cost is the risk accepted: a lost laptop's grant stays usable for up to a
 month. The person can end a grant early from Agent access on the deck list,
 and offboarding revokes a person's grants before removing them from Access.
 Grants approved before the deploy keep their seven days.
+
+## 2026-10-11 — Doc-level sync allowlist, and a residual for reclassified keys
+
+When a shape binds a field-class map, the sync engine (kernel/src/sync/crdt.ts)
+syncs doc-level keys by allowlist on top of the shipped `skipDoc` denylist: a
+peer emits only content-class keys and ignores non-content keys inbound, and an
+unknown key (one a newer build added) is applied but never re-emitted
+(`APPLY_UNKNOWN_DOC_KEYS = true` — option (a)). `skipDoc` is the floor under
+both directions and beats a content classification, verified by
+`scripts/test-sync-allowlist.ts` (a fixture classing skipDoc keys as content,
+with a red mutation per floor). With no map the engine is byte-identical to the
+shipped denylist, so this is dormant until an app opts in.
+
+RESIDUAL (security): because an unknown key is applied under option (a), a later
+build that newly PROTECTS a once-unknown field — reclassifies it from unknown to
+a non-content class — must treat that field's pre-existing value as UNTRUSTED. A
+peer could have planted it over the wire while the field was still unknown-and-
+applied. The new build stops syncing it, but the value already in the file is
+not evidence of anything; validate or discard it on adoption rather than trust
+it because it is "already there".
+
+
+## 2026-10-15 — bento/type binds its field classes to sync; comments and signatures still sync
+
+bento/type's sync shape (`type/src/sync/crdt.ts` `TYPE_SHAPE`) now binds the
+field-class map (`type/src/docclass.ts`). Doc-level keys therefore sync by the
+kernel's allowlist: only content keys, `maps`, and the history keys named in
+`syncHistory` are emitted. An undeclared key is applied but never re-emitted.
+
+Two history keys are named, `comments` and `signatures`. They sync as whole
+registers, exactly as before binding.
+
+- **`comments`** — a maintainer ruling (2026-10-15): comments sync live to
+  everyone in the room, readers included. Keeping them a whole `comments`
+  register makes the wire byte-identical to 1.2.7's, so a room mixing builds
+  converges. Moving them into `maps` for per-thread merging is NOT
+  mixed-version safe: a 1.2.7 peer writes the per-key ops as literal top-level
+  `comments.<id>` keys and loses the threads. That needs its own version-gated
+  migration, if it is ever wanted.
+- **`signatures`** — not a ruling. It preserves today's behaviour. Signatures
+  are classed 'history' only as an interim: they are dropped from view-only
+  copies until signing commits to the history rather than containing it (the
+  maintainer's 2026-10-15 ruling (3), which makes them content again). Before
+  binding they synced like any other key, and binding with `comments` alone
+  would silently have stopped a signature reaching the other people in the
+  room. When they return to 'content', `historySyncKeys` rejects them in
+  `syncHistory` AT COMPILE TIME, so that change is forced to remove them.
+
+`revisions` never syncs. Each replica keeps its own timeline, and it is in
+`skipDoc`.
+
+The 2026-10-11 residual (a key newly protected after being unknown-and-applied
+must have its existing value treated as untrusted) does not arise here. Every
+non-content type field is either in `skipDoc` and never synced (identity,
+modes, capability, revisions) or still named in `syncHistory`. Binding protects
+no field that synced before.
+
+Verified in `scripts/test-sync-type.ts`, against type's engine and a peer built
+from 1.2.7's exact shape:
+- comments and signatures are emitted, revisions and an undeclared key are not;
+- comments cross both ways between the two builds as one register;
+- the bound peer's silence on an undeclared key is not a delete.
+
+Mutations, all red by exit code:
+- unbinding the map;
+- dropping either key from `syncHistory`;
+- moving comments into `maps`.
+
+Naming a content key, an identity key, or a misspelled key in `syncHistory`
+fails tsc.
+
+
+## 2026-10-15 — bento/type signatures v2: content plus a salted commitment to the history
+
+Maintainer ruling (3), 2026-10-15. A type signature signs the document's
+CONTENT plus a COMMITMENT to its history, not the history itself. A view-only
+copy carries the commitment and no drafts, and its signatures verify. This is a
+pre-release format change: bento/type was unreleased, so v2 replaces v1 and no
+v1 signature exists to honour.
+
+Signed text:
+
+    bento-type-sig.v2|<docId>|<content digest>|<history commitment>|<prev sig or "">|<name>
+
+**What the content digest covers.** Every top-level field except the volatile
+set (`modified`, `sync`, `collab`, `preview`, `signatures`, `autosave`) and
+every field the class map classes history, capability or mode. That exclusion
+is DERIVED from `TYPE_FIELDS`, never hand-listed. Today the digest covers
+format, version, docId, title, subtitle, meta, page, body, footnotes, layout,
+styles, type, optical, track, merge, fonts and assets, plus any undeclared field
+(the exclude list fails safe). `scripts/test-type-canon.ts` derives the same
+list from the map and checks that each field moves the digest and each excluded
+one does not. Mode is excluded because a view-only copy SETS `readonly: true`;
+were it signed, every view-only copy would read "changed". Comments are history
+and outside the signature: a comment's author is a self-asserted name and
+signing never attested it.
+
+**The commitment.**
+
+    sha256("bento-type-history.v1" || historySalt || canonical(revisions))
+
+- `historySalt` is 16 random bytes per document, carried as 22 base64url
+  characters. It is minted at first sign, NEVER rotated (that would orphan
+  every signature), and classed history, so it is kept with the full history
+  only: dropped from view-only copies, Copy JSON and mail merge, and never
+  synced.
+- Revision ids carry only 32 bits (`uid()` keeps 8 hex characters of a UUID),
+  and timestamps are guessable. Without the salt, a commitment travelling in a
+  view-only copy would let someone who suspects a small edit brute-force the
+  earlier draft.
+- The domain tag stops cross-protocol reuse.
+- Salts are per-replica by design, because history does not sync. Two
+  replicas' commitments differ even for similar histories.
+
+**Verification reports two things, never folded into one.**
+
+- **Attestation:** the signature is valid and the content is what was signed.
+  It works anywhere, including a view-only copy.
+- **History:** what the commitment says about the history this copy holds:
+  - `matches`;
+  - `changed`, e.g. a Snapshot taken after signing, or a re-sign after a trim
+    (expected in that case, and the UI must say a trim does this);
+  - `missing`, a WARNING for an editable document that lost its revisions or
+    salt. Otherwise deleting `revisions` would turn "changed" into a neutral
+    grey;
+  - `not-included`, neutral, only for a read-only copy, which never carries
+    history.
+
+A forged commitment is not a history state: it is in the signed text, so it
+breaks the attestation.
+
+Signatures are therefore CONTENT again (classed history only as an interim, so
+they could leave view-only copies). They now sync as content and travel in
+view-only copies. Listing them in `syncHistory` became a compile error, which
+removed them from it.
+
+**Open.** How the Signatures panel shows the history state for a signature made
+on ANOTHER replica is a maintainer decision. Its history check would commonly
+read "changed", since each replica keeps its own revisions. Security's input:
+it must never warn on an expected condition.
+
+
+## 2026-10-15 — dash: Save a copy and the older-copy banner, per the maintainer ruling
+
+Dash adopts the maintainer's ruling and slides' wording (#713) verbatim. Two
+choices are dash's and are recorded because a later change could undo them:
+
+- **A copy never lands in the open file, whatever the kernel answers.**
+  `copyLanding` (dash/src/saving.ts) maps every result but `cancelled` to
+  "elsewhere", rather than listing the results that mean a copy. A future result
+  name, or an old one like `saved-as`, can then never retarget the workbook or
+  clear its unsaved dot.
+- **"Keep the file" dismisses; it never deletes.** The older-copy banner offers
+  Keep (default, focused) and Restore anyway, and no Discard. "Older" comes from
+  two clocks that need not agree (kernel `recoveryLooksOlder`), so the advice
+  must never cost the copy. It stays for the next open, as ✕ already left it.
+  `recoveryLooksOlder` is read against the workbook AS LOADED, because dash
+  stamps `modified` on every edit.
+
+
+## 2026-10-17 — the suite's one field look, set in slides
+
+Every text field, select and textarea in an app's chrome wears one look. The
+rule is the `THE FIELD` block in `slides/src/styles.css`; dash, spaces and type
+copy that block as it stands rather than restyling fields one by one:
+
+- the selector is `:where(…)` over every `input` except checkbox, radio,
+  range, file, colour, button types and hidden, plus `select` and `textarea`;
+  colour inputs get the same border, fill and radius from their own block;
+- 1px solid `--line` border, `--field` fill, `--ink` text, 6px radius,
+  `font: inherit` at 12.5px, 26px tall (border-box, `padding: 0 6px`);
+  textareas are `height: auto` with `padding: 6px 8px` and `line-height: 1.5`;
+- focus is `:focus-visible` → `outline: 2px solid var(--accent-ink);
+  outline-offset: -1px`. The ring sits on the border, so a scroll container
+  cannot clip it.
+
+Two choices here could be undone by accident:
+
+- **Zero specificity, no class.** A field that needs a class to look right
+  comes out in the browser's dress the day someone forgets it. That had
+  happened five times in slides: in dark theme those fields had the browser's
+  `#3b3b3b` fill, and About's theme select had the whole UA look (square, grey
+  `#767676` border, 19px tall). Context rules now only SIZE a field (width,
+  flex, monospace font); they never restate its look.
+- **Two deliberate exceptions, by class.** The deck title is a ghost field (no
+  box at rest, the field's border on hover, its fill once focused). The
+  password gate is its own card on the dark boot splash. Anything else that
+  overrides the look needs a reason recorded here.
+
+`scripts/test-slides-fields-browser.mjs` walks the panel for every element
+kind, the slide panel, About, Replace from JSON, Export images, Encrypt with
+password, the Share popover and the comment popover, in both themes, and fails
+on any field that differs. It plants a field with its author styles reverted
+to prove that the check catches the browser's dress.
+
+
+## 2026-10-17 — dash adopts the suite's one field look
+
+Dash copies slides' `THE FIELD` block as written, into `dash/src/styles.css`
+(see "the suite's one field look, set in slides"). What is dash's own:
+
+- **`--field` is `var(--surface)`.** It's the fill dash's fields have always
+  had, so dark theme keeps dash's palette instead of importing slides' value.
+  `--accent-ink` was already defined, and the ring uses it, not `--blue`. Dark
+  amber passes the 3:1 that WCAG 2.2 SC 1.4.11 asks of a focus indicator.
+- **One exception, by class: `.dx-title`**, the ghost workbook title, as in
+  slides. The boot password gate reuses that class and stays as it is.
+- **Formerly ghost fields are now ordinary fields:** the formula bar, tab
+  rename and the story caption. Each had been boxless at rest. Recording why:
+  only the title is a ghost, so anything else that should be one needs a reason
+  here.
+- **Context rules only size.** Every `:focus { outline: none }` is gone; it
+  would outrank the zero-specificity ring and remove it. The "colour not set"
+  strike on a colour well is now a `background-image` over the fill, because
+  the `background` shorthand reset the fill.
+
+`scripts/test-dash-fields-browser.mjs` is slides' rig ported to 17 dash
+surfaces. Its five mutations are slides' own, and each fails it.
+
+## 2026-10-17 — Rescue: a file moved onto the latest shell of its own app, its document block carried byte for byte
+
+Slides 1.2.4–1.2.8 cannot open password-protected decks: the loader refuses
+every path over the password gate. A fixed shell can't reach those files,
+because About → Update runs inside the app and the file never boots.
+bento.page/convert therefore offers every Bento `.bento.html` "The same
+file, on the latest version". `deliver.ts spliceVerbatim` puts the file's
+`#bento-doc` block, BYTE FOR BYTE, into the newest signed and pinned shell of
+the file's own app.
+
+- **Never parsed into a document, never re-serialised, never decrypted.** A
+  `bento/enc` envelope stays exactly as it was, so no password is involved.
+  The rig decrypts the carried envelope with the original password to prove
+  it was untouched. A re-serialising splice was hidden by compact-JSON
+  fixtures (JSON.stringify reproduces them byte for byte), so the rig also
+  carries a pretty-printed envelope and a plain deck with `\u003c` escapes.
+  A re-serialising mutant fails on both, and the splice's own read-back
+  refuses it.
+- **Which app:** the file's shell `<meta name="generator">`, or, for a plain
+  file from a shell older than that tag, the document's format. The signed
+  manifest's `app` and the downloaded shell's generator must both match the
+  file's, or the rescue is refused. `fetchVerifiedShell` takes the app id; the
+  version floor stays slides-only.
+- **Refused rather than guessed:** a block containing a raw `<` (every Bento
+  writer escapes it, and a raw one could change how the new shell parses),
+  an empty block, a block that isn't JSON, and a document whose format isn't
+  the app's.
+- **Carried:** the block, and for an UNENCRYPTED file its own `<title>`. An
+  encrypted file keeps the shell's neutral title: builds before 1.2.9 wrote
+  an encrypted deck's real title in clear, and carrying it would re-publish
+  what the password hides (security review). **Not carried:**
+  anything else the old shell held. Language packs are reported and can be
+  added again; a first-page preview is regenerated on the next save, and
+  encrypted files never have one.
+- An app with no published release says so plainly.
+- **Never onto a shell that cannot open the file.** `ENC_OPEN_MIN` holds the
+  oldest release of each app that opens encrypted files (slides 1.2.9; 1.2.0–
+  1.2.8 all refuse). An encrypted file is not moved onto an older latest
+  release, so the rescue only goes live with 1.2.9. Plain files may still
+  move onto 1.2.8. Measured on slides' hotfix build: encrypted fixtures from
+  live 1.2.8 and from 1.2.0–1.2.3 show three gates and the loader refusal as
+  they are. Rescued, each shows ONE gate and unlocks to the whole deck.
+
+
+## 2026-10-17 — the loader reads what the app published: running, locked or refused
+
+The compressed shell's loader (scripts/postbuild-compress.mjs) runs the app
+through a cascade: an inline classic script, then `new Function`, then a blob
+import. After each path it decides whether the app ran by reading
+`window.bento`. It used to read `window.bento.doc` alone.
+
+An encrypted deck's app is still at its password gate when the path returns,
+so it had published nothing. Every path read as refused, the app ran once per
+path (three password cards), and the loader painted "every loader path was
+refused" over all of them. Measured in Chromium and WebKit: released slides
+1.2.0 through 1.2.8 cannot open a password-protected deck. 1.1.0 and 1.0.19 can.
+The cascade first shipped in 1.2.0, since there was no 1.1.1 release.
+
+**The contract.** An app publishes `window.bento` before it hands control back
+to the loader:
+- `{ doc, … }` while running;
+- `{ format, locked: true }` while waiting at its password gate, set
+  synchronously BEFORE the gate is shown and replaced wholesale on unlock;
+- `{ format, refused: true }` after painting its OWN refusal of a file it will
+  not open. It may throw afterwards.
+
+Any of the three means the app ran: no later path runs it again, and the loader
+paints nothing. The loader's failure card is only for an app that published
+nothing at all. The decision is made from what was published, not from whether
+the app threw, so `runNow` and the blob step check `mounted()` after a throw
+too.
+
+The apps: slides sets `locked` (this change). Spaces sets `locked` on its own
+branch. Type will set `refused` once security clears its finding in that code.
+
+Guards: `scripts/test-shell-loader-published-browser.mjs` builds toy shells with
+the real postbuild script, for each state and with every path, blob only, and an
+`import.meta` bundle. `scripts/test-slides-encrypted-open-browser.mjs` tests the
+real deck.
+
+`docs/PLATFORM.md` is where cross-app invariants live, and it is the
+maintainer's to edit. This contract belongs there once the maintainer agrees.
+
+## 2026-10-15 — bento/spaces restores by direction, and a recovery unions the trail by day
+
+Every whole-document restore in bento/spaces now resolves through the kernel's
+`applyRestore` (`kernel/src/docfields.ts`) over one rule set,
+`spaces/src/store.ts` `RESTORE_RULES` = the field-class map plus two recover
+hooks, on `trail` and `revisions`. The hand-rolled keep-live in `store.ts` and
+`restoregate.ts` is gone. Each entry point names its direction:
+
+- **'back'** — undo, redo, a version restore from either timeline, Replace
+  from JSON and `bento.loadDoc`. Content follows. Identity, modes, capability
+  and history keep the live value, so a paste or a version can neither delete
+  this space's history nor install one.
+- **'recover'** — the crash-recovery banner only. `revisions` goes through
+  `history.ts` `revisionsRecover`, which applies these rules in order:
+  1. `[]` means the list was cleared. The hook returns `undefined`, so the
+     key is removed, just as Clear history deletes it rather than storing
+     `[]`.
+  2. A recovered list that is not an array, or that has even one entry
+     failing `readable`, is refused whole, and the live list stands. That
+     entry check is the same one a file's list passes (`historyIsForeign`).
+     A recovery snapshot is foreign input, and before this rule one
+     unreadable entry replaced the live, readable log.
+  3. A foreign live list is never written over (#671). This also keeps a
+     newer build's history intact.
+  4. Otherwise the readable recovered list follows the snapshot. This is the
+     crash case: a revision the last save wrote must survive.
+
+  The hook never merges and never picks entries.
+
+  **Cleared stays cleared.** The recovery snapshot is the whole document, so
+  a snapshot with no `revisions` means the person ran Clear history. Without
+  the rule below, Restore on the banner brought the cleared drafts back, and
+  the next copy the person shared carried them. That is a confidentiality
+  bug: here confidentiality wins over integrity, behind a banner the person
+  chose to accept. Since kernel #726, a whole snapshot removes an absent
+  history key by default, so cleared revisions stay cleared in the kernel
+  itself. Before #726 the kernel kept that key live before any hook ran. For
+  that reason `restoregate.ts` `asWholeRecovery` states an absent `revisions`
+  as `[]` on the 'recover' path, and the hook reads `[]` as cleared. That
+  normalisation is now redundant but harmless, since it gives the same
+  result. It stays for now, and removing it is a separate follow-up.
+
+  **The trail opts out.** `RECOVER_RULES` carries
+  `keepLiveWhenAbsent: ['trail']`, and only `trail`. Nobody clears a trail by
+  leaving it out: a snapshot with no trail means "no rows yet", and the live
+  rows are observations nobody can recompute. `revisions` must never be listed
+  there, because cleared history has to stay cleared. A rig row pins the list
+  to exactly `['trail']`. `trail` goes through `trail.ts` `trailRecover`.
+
+`trailRecover` keeps a day found on one side only. A day on both sides goes
+to the side whose whole document is later: the snapshot's `at` against the
+live `modified`, both in epoch ms. A tie keeps live. A live file with no
+`modified` counts as older. Next, so no day is counted twice, rows are walked
+newest first within each series, and a row whose day falls inside the span
+of a row already kept is dropped. That covers a weekly or monthly bucket
+against single days, and two buckets that overlap. Days are compared as
+labels with `dayIndex`, and only within one series. The result then goes
+through `pruneTrail`. Live's key order is kept, so a snapshot that adds
+nothing raises no banner.
+
+**Undo keeps the asset pool live.** Undo checkpoints omit `assets` for size.
+On 'back', `applyRestore` treats an absent content field as dropped, so a
+checkpoint applied as-is would empty the pool. The undo path alone overrides
+`assets` to 'live' (`UNDO_RULES`). That is what undo did before. A version
+restore and a paste carry their own pool, so there it follows.
+
+**A recovery removes what was removed.** The banner path passes
+`wholeSnapshot: true` explicitly. Kernel #716 made that the default, but the
+spaces call still states it, because the recovery snapshot is
+`contentOnly(doc)`, the whole document. So a content key or an unknown
+top-level key missing from the snapshot was deleted by the person, and it
+stays deleted after recovery. That covers a design, footnotes or a journal
+template removed after the last save. History follows its own rules. A
+snapshot with no `trail` keeps the live rows, through the
+`keepLiveWhenAbsent` opt-out. A snapshot with no `revisions` means they were
+cleared, as described above. The identity, mode and
+capability floor is unchanged.
+
+Verified in `scripts/test-spaces-restore.ts`. Mutations, all red:
+- recovery passed as 'back';
+- Replace from JSON passed as 'recover';
+- the hook returning the snapshot's trail wholesale;
+- the span drop removed;
+- the undo assets override removed;
+- `wholeSnapshot: false` on the recovery path;
+- the revisions hook unbound, or returning the snapshot's list;
+- the absent-to-`[]` normalisation removed;
+- the hook keeping live for `[]`;
+- rule 3 (a foreign live list is kept) dropped;
+- `keepLiveWhenAbsent` removed or emptied, which loses the live trail;
+- `'revisions'` added to `keepLiveWhenAbsent`, together with the
+  normalisation removed, which resurrects cleared drafts. With the
+  normalisation still in place, only the pins catch adding `'revisions'`.
+
+## 2026-10-17 — bento/spaces drops its own "absent revisions = cleared" step; the kernel does it
+
+This supersedes one part of the 2026-10-15 entry "bento/spaces restores by
+direction". That entry's `asWholeRecovery` step, which turned an absent
+`revisions` into `[]` before a recovery, is gone. Since kernel #726, a whole
+recovery snapshot removes an absent history key by default, so cleared
+history stays cleared without the spaces step. `RECOVER_RULES` still opts out
+exactly `['trail']` (`keepLiveWhenAbsent`), because a missing trail means "no
+rows yet", not a clear. `revisionsRecover` is kept unchanged:
+- a `[]` the snapshot carries still removes the key;
+- a foreign list on either side still keeps the live list;
+- a readable recovered list still follows the snapshot.
+
+With the step gone, the list is the only thing keeping cleared history
+cleared. `scripts/test-spaces-restore.ts` holds it two ways:
+- a pin that the list is exactly `['trail']`;
+- a behavioural row that plants `['trail', 'revisions']` on the real rules
+  and runs the real recovery path. The cleared drafts come back, and the row
+  asserts that the real rules do not do this.
+
+Mutations, all red:
+- adding `'revisions'` to the list: 8 rows in that rig and 1 in
+  `test-spaces-restore-gate.ts`, including every cleared-stays-cleared row
+  (before this change, only the 2 pins caught it);
+- removing the list: 6 + 1, covering the trail rows.
+
+## 2026-10-18 — bento/id: the identity agent contract (kernel/src/identity.ts)
+
+The document's side of the identity agent is ONE kernel module, so the hosts
+build against a single definition instead of each inventing one. The host
+defines `globalThis.__bentoIdentity` before the runtime boots, and only on a
+verified, signed shell (gate 1). `identityAgent()` returns it, or null when it
+is absent or malformed. On null every caller keeps today's behaviour.
+
+Settled here, so other zones don't redefine them:
+- **The contract version** is `IDENTITY_CONTRACT = 1`, an exact match. A host
+  advertising another version is treated as absent, never misread. Optional
+  members are additions within a version, and a breaking change bumps it.
+- **The calls.** Phase 1 has `whoami`, `sign(purpose, payload)` and
+  `resolve({pub} | {email})`. `unwrap` and `share` (phase 2) are typed as
+  optional members now, so the contract doesn't churn.
+- **No call takes a docId or a caller name.** The host identifies the calling
+  document from what the platform reports, never from the page.
+- **Results only.** A signature is raw r‖s (64 bytes, base64url), never DER.
+  Private keys never cross the bridge.
+- **`SignPurpose`** is one word per existing statement family: `frame`, `prove`,
+  `delegate`, `show`, `invite`, `revoke`. A signature is locked to its purpose.
+  The shared payload matcher and its vectors come with the statement formats
+  (K2).
+- **What a host must define.** The global is a non-writable, non-configurable
+  DATA property, never a getter. The agent object is frozen. Its methods are
+  closures, because they are called with `this` undefined. Anything else is
+  treated as no agent. Together these rules mean neither the page nor anything
+  later can redirect a call after capture: not by swapping the global, not by
+  patching the object, and not through `this` (security, #759).
+- **Capture.** A valid agent is captured once. An absent agent is not cached,
+  so a host that defines it late is still found.
+
+This change is contract only, with no callers. `scripts/test-identity.ts` pins
+that no runtime module imports it yet.
+
+## 2026-10-18 — bento/id: the signed statements and their family rules (kernel/src/statements.ts)
+
+Every bento/id statement is defined once, in the kernel, with conformance
+vectors (`kernel/fixtures/identity-v1.json`) that every host must pass: the
+Swift, Kotlin and Rust agents, the extension and the directory. The rules are
+the shipped collab statements' rules, made strict:
+- **Exact bytes.** Dot-joined UTF-8 text, signed over its exact bytes and never
+  re-canonicalised. No JSON inside a statement.
+- **Every field is a closed, dot-free token or base64url free text.** Free
+  text means an email address or a display name, encoded as base64url without
+  padding. A raw email would break the split.
+- **Strict parse.** Split on `.`, keep empty fields, require the exact field
+  count, check each field's grammar, and accept printable ASCII only. An absent
+  value is an empty field.
+- **Units and versions.** Times are epoch ms. The version is in the prefix
+  (`bind2.`), never a field.
+- **Keys and signatures.** Keys are raw P-256 points. Signatures are raw r‖s,
+  low-S, base64url. DER and high-S signatures are refused.
+
+The statements:
+- `dev.`: the device cert. The account key signs both the device's routine key
+  and its hardware CONSENT key, so a consent signature can be tied to the person.
+  It's one cert, not two, because both keys share the device's lifetime and
+  revocation. The light tier has no hardware consent key, so its `consentPub` is
+  empty.
+- `bind.`: the person cert, holder-signed, with `seq` and a `prev` chain for
+  rotation.
+- `att.` and `tomb.`: signed by the directory's online key, with the binding
+  state inside the signature.
+- `del.` and `cmp.`: holder requests to the directory.
+- `cns.`: host-stamped consent (security §24). Its transcript binds the
+  audience, a single-use challenge and the exact authorised statement. The
+  verifier recomputes the transcript and never trusts one from the request.
+- `pk.` is reserved for the phase-2 passkey statement.
+
+Two placements are left open on purpose:
+- **kx** (identity-design §6b, a maintainer decision). Both `bind.` and `dev.`
+  carry a kx slot, and until the ruling BOTH must be empty, so nothing accepts a
+  placement nobody chose. Phase 1 shares nothing and needs no kx.
+- **Addresses are ASCII-only in phase 1** (a maintainer decision). Platforms
+  disagree on international domains, and an address two hosts read differently
+  is exactly what the shared normal form exists to prevent.
+
+**What phase 1 does NOT guarantee:** invite and revoke (`inv.`/`rev.`) are
+verified by the relay with the room OWNER key's signature, not with a
+consent-key `cns.`. In phase 1, documents don't convert to identity mode, so
+the owner key still lives in the document file. The kernel signs `inv.`/`rev.`
+with it exactly as today: no agent prompt, no user-verification gate, no consent
+key. The agent holds an owner key only after conversion (phase 2). Then
+`inv.`/`rev.` get a host-drawn prompt and a user-verified owner key, and phase
+2's room-audience `cns.` (a relay change, deployed first) adds the consent-key
+guarantee. No consent-key (AAL3) guarantee exists for `inv.`/`rev.` before then
+(security §24).
+
+**UI rule: a display name is self-asserted.** A `bind.` name or a `dev.` label
+is whatever its holder typed. The kernel refuses invisible and layout characters,
+requires NFC, and caps the length. No filter stops homoglyphs, though: "Аlice"
+with a Cyrillic А passes. So no surface ever shows a name WITHOUT the verified
+address beside it, and the ✓ always belongs to the address, never to the name.
+(security, #764)
+
+## 2026-10-18 — bento/id: the desktop agent core and its Linux key store (home/desktop/agent)
+
+The Windows/Linux identity agent is a Rust library crate, `home/desktop/agent`.
+The Tauri host will call it after its own checks. Settled here, so the host and
+other zones build on the same ground:
+
+- **The statements are a PORT, and the vectors are the contract.**
+  `kernel/fixtures/identity-v1.json` is re-read on every run, never pinned.
+  Every row must reach the reference's verdict AND reason. Accepted rows must
+  round-trip through the builders and refuse three kinds of tampering. Every
+  `cns.` row must spend its challenge when `spendCalled` says so. The display
+  refusal set is embedded as the fixture's frozen Unicode 17.0 ranges, and a
+  test fails if the two ever differ. JavaScript string semantics that change
+  verdicts (`trim()`'s whitespace set, UTF-16 `length`) are reproduced on
+  purpose.
+- **One way in.** The agent answers only a `Caller` the host built after its
+  per-webview capability check, on a verified shell, carrying the docId the
+  host read from the file itself. It never takes a docId or a caller name from
+  the page.
+- **Routine signing** (`frame`, `prove`, `delegate`, `show`) uses the device
+  key, unprompted, inside a session: 1 h idle and 24 h overall by default, or
+  15 min and 12 h for organisations at AAL3. Past either limit, even routine
+  signatures are refused until the person re-authenticates.
+- **Consent is host-stamped.** The rp (`bento`), the audience (`dir`, phase 1's
+  only one), the docId and a 2-minute expiry are chosen by the host. The page
+  supplies only the statement and the directory's challenge. The consent key
+  signs, and prompts every time.
+- **`sign('invite' | 'revoke')` is refused** with `unavailable`. Those are signed
+  by the room's owner key, which the kernel holds in phase 1.
+- **The Linux key store** is the TPM, and the TPM counts only if this user can
+  open it:
+  - the routine key is created in the TPM, non-exportable, and needs no prompt;
+  - the consent key is created in the TPM with the person's PIN as its
+    authValue, so every use needs the PIN and the TPM's lockout limits guessing;
+  - the account key is shared across devices, so it can't be created inside
+    one TPM. It is sealed under the same PIN and unsealed only for a prompted
+    use, then zeroized.
+  What sits on disk are TPM-wrapped blobs that only this TPM can load.
+- **Two desktop-specific residuals, stated rather than hidden.**
+  - On a phone, other apps can't use our keys at all. On a desktop, any process
+    running as the same user can ask the TPM to sign with the routine key, so it
+    can edit as the person in rooms they already belong to. It can't copy the
+    key off the machine, and it can't use the consent or account key without
+    the PIN.
+  - The session timers bind the genuine agent only. A process calling the TPM
+    directly bypasses them.
+  Both are accepted: same-user malware can already edit the person's files and
+  drive the app.
+- **No key-agreement key** anywhere until its placement is ruled.
+
+Rigs:
+- `home/desktop/agent/tests/conformance.rs`, the vectors plus the mutations
+  that showed each check bites: accepting high-S, a late spend, and a dropped
+  display range;
+- `tests/tpm_linux.rs` via `tpm-rig.sh`, against two independent swtpm TPMs:
+  the routine key signs and verifies; a wrong PIN is the TPM's own AUTH_FAIL;
+  the sealed account key unseals only with the PIN; the key files fail on a
+  second TPM; and a second connection without the PIN gets neither the consent
+  key nor the account key, while the routine residual is asserted so it stays
+  visible.
+## 2026-10-18 — bento/id: the recovery code and key blobs (kernel/src/recovery.ts)
+
+The bytes behind identity-design §2f, signed by security §28, with
+deterministic vectors (`kernel/fixtures/recovery-v1.json`) that every host must
+reproduce exactly:
+- **Argon2id** v0x13 with p = 1 (safest for WASM and phones), 64 MiB, t = 3, a
+  32-byte tag and 16-byte salts. The wrap salt and the verifier salt are
+  independent. Hosts check their primitive against RFC 9106 §5.3 first.
+- **The recovery code** is 80 random bits, printed as 16 Crockford base32
+  symbols plus a CHECK symbol (mod 37): `XXXX-XXXX-XXXX-XXXX-C`. With the check,
+  a typo is caught on the device before it costs one of the directory's five
+  daily attempts (vault, as §2f's author). Parsing forgives case, separators and
+  O/I/L. Argon2id takes the decoded bytes, never the typed string.
+- **Wrap key and verifier.** wrap key = HKDF(Argon2id(code, salt), empty,
+  "bento/id/rc-wrap/v1"); verifier = Argon2id(code, salt_v).
+- **The PRF KEK** is §2f's formula.
+- **Blob plaintext** is raw 32-byte private scalars. Each one is checked on
+  import to be in 1..n−1 and to match its directory-signed public half (computed
+  as d·G, the same on every platform). The layout follows the kx placement
+  (§6b): the account scalar alone until it's ruled.
+- **AAD binds every blob.** The PRF blob is bound to its credential, the
+  recovery blob to its account, and the pepper layer to its account.
+- **Argon2id is injected.** The kernel takes it as a parameter and ships no
+  WASM: documents never derive these keys, and only agents do.
+## 2026-10-18 — bento/id in the extension: the statement code is generated from kernel
+
+`kernel/src/statements.ts` and `address.ts` are the one definition of every
+byte a host signs or checks, and `kernel/fixtures/identity-v1.json` is the
+contract. The native hosts must reimplement them (Swift, Kotlin and Rust can't
+import TypeScript). The extension ships plain JavaScript, so it doesn't have
+to: `scripts/gen-webext-id.mjs` type-strips the two files into
+`home/webext/src/id/gen/`, and `scripts/test-webext-id.ts` fails if the copy is
+stale. The same rig runs kernel's own conformance rig with its imports pointed
+at the extension's copy, so every fixture row is checked against the code the
+extension ships. A hand port would pass the vectors today and drift later.
+
+The passkey blob and the recovery code follow the exact bytes in the identity
+design's §2f (raw 32-byte scalars checked to lie in 1..n−1 and to match the
+binding; the code is 16 Crockford base-32 characters plus a mod-37 check
+symbol, and the 10 decoded bytes, never the string, feed the derivation).
+
+## 2026-10-18 — bento/id: one "body is sealed" predicate, and the sealed TEST document
+
+The kernel half of identity-kernel §E.2 (security §31):
+- **`isBodySealed()` is THE question for every plaintext-to-disk guard**
+  (recovery snapshots, version history, previews, filenames, native
+  indexes). It is true when the body is sealed by a password OR by the
+  identity seal. `isEncryptionActive()` stays, and means only "there is a
+  password": the password UI asks that, and a guard must not. A document sealed
+  to people has no password, so a guard asking the old question writes it to
+  disk in plaintext. Measured on slides before its guards switch: a sealed
+  deck's edit lands in both IndexedDB stores.
+- **`setIdentitySeal(kdoc)`** is synchronous, so the predicate is true from the
+  call on. It imports the 32-byte document key non-extractable as an HKDF base.
+  Each save draws a fresh 16-byte salt and IV, and bodyKey = HKDF(K_doc, salt,
+  "bento/body.v1"). The body is a GENUINE bento/enc v1 envelope with
+  `kdf:'hkdf-kdoc'`. Never v:2: an old shell's parseEnvelope would reject it,
+  boot the starter deck, and overwrite the sealed block on its next save. The
+  password path is unchanged and wins when both are set. Each path refuses the
+  other's envelope.
+- **The sealed TEST document is compiled only into test builds.** Phase 1 has no
+  real way to seal a document at boot (the per-recipient wraps are phase 2), so
+  `npm run build:sealtest` (→ `dist-sealtest/`) builds a shell whose
+  `capturePristine()` consumes a one-shot key handoff before any editor exists.
+  `scripts/lib/sealed-boot.mjs` is the one helper every app and security use. It
+  never runs in a release: in phase 1 nobody holds a wrap for such a body, so
+  one stray global would make a person's file unrecoverable. The flag
+  `__BENTO_TEST_SEAL__` is false in every release build and the minifier drops
+  the branch. shell-gate.mjs refuses any shell carrying the handoff's name,
+  scanning the deflated payloads too. `scripts/test-seal-gate.mjs` proves the
+  gate refuses a real test shell.
+## 2026-10-18 — bento/id: the desktop agent's recovery code, key blobs and no-TPM store (home/desktop/agent)
+
+Follows the desktop agent core entry above.
+
+- **The recovery code and key blobs are a byte-exact port of
+  `kernel/src/recovery.ts`.** `kernel/fixtures/recovery-v1.json` is
+  deterministic, so every printed code, parse result, derivation, blob and
+  pepper value must match to the byte. Argon2id is checked against the RFC 9106
+  §5.3 vector before anything relies on it, and the port's parameters are
+  asserted equal to the fixture's.
+- **The scalar import is constant-time.** A recovered private scalar is checked
+  through p256's constant-time decode (which refuses 0 and anything ≥ n) and
+  its constant-time scalar multiplication. Only public points are compared.
+  There is no bignum and no hand-rolled d·G.
+- **Display names need Unicode 17.0 or later.** A test fails if the
+  normalisation data ever drops below 17.0.
+- **The no-TPM Linux store** is the Secret Service, used when there is no TPM
+  this user can open. The routine key and the account key are software keys,
+  loaded only while in use and zeroized afterwards. There is no consent key, so
+  every high-assurance consent is refused and routed to a phone or security
+  key. The exposure is stated and asserted by a rig: once the keyring is
+  unlocked, any same-user process can read these keys with no prompt.
+  Organisations can refuse such machines.
+- **The Windows consent key** must be a P-256 key that prompts for Windows
+  Hello on every use. The Passport key storage provider is preferred, once it is
+  measured on real Windows. If it can't do that, consent falls back to a
+  device-bound Windows Hello WebAuthn assertion, verified by the directory with
+  an empty `consentPub`, which is the existing light-tier path and not a format
+  change. RSA consent keys and the legacy password dialog are both refused.
+
+Rigs: `tests/recovery.rs`, where each of these mutations turns a test red: the
+old pepper labels, losing O→0 when reading a code, and skipping the range
+check. Also `tests/secret_linux.rs` via `keyring-rig.sh`.
+
+## 2026-10-18 — dash's plaintext guards ask isBodySealed()
+
+Following kernel's K3 (`isBodySealed()` = a password OR the identity seal), dash
+switches every guard that keeps a workbook's plaintext off the disk:
+
+- the recovery snapshot and version timeline written on edit (main.ts), and
+  `rememberVersion` behind it (about.ts);
+- reading a recovery snapshot back (recovery.ts);
+- the file-manager preview (preview.ts), behind kernel's own `previewAllowed`;
+- drop-open (dropopen.ts): the seal's key is per document, so a window holding
+  one refuses to adopt a dropped workbook, exactly as it does for a password.
+
+The Save menu's "Set a password…" / "Remove password…" stays on
+`isEncryptionActive()`: it is about a password being held.
+
+Neutral title while sealed, matching the saved file's title.
+
+Rigs: `scripts/test-dash-sealed-browser.mjs` on the shared sealed TEST document
+(scripts/lib/sealed-boot.mjs), and the gate rows in
+`scripts/test-dash-gate-browser.mjs`.
+
+## 2026-10-18 — slides: a sealed document never offers or keeps an unsealed snapshot
+
+Slides' plaintext-to-disk guards (the autosave's recovery copy and versions, the
+⌘S checkpoint, the recovery-off notice) use kernel's `isBodySealed()`, a password
+OR the identity seal. The password menu items stay on `isEncryptionActive()`,
+because they are about the password.
+
+When a document boots sealed, any recovery copy or versions stored for ITS docId
+by an earlier unsealed session are deleted, and no Restore banner or version
+history is offered. Another document's snapshots are untouched.
+
+Two consequences, both following from the rule:
+
+- **A sealed copy can delete the original's unsaved recovery.** "Save a copy…"
+  keeps the docId. If a password is set on the copy, the copy and the unsealed
+  original share a docId, so opening the sealed copy deletes the original's
+  recovery copy and versions in that browser, including unsaved work it was
+  holding. The original FILE is untouched.
+- **A player file does not purge.** A read-only player never builds the editor,
+  so it never offers or writes a snapshot. A leftover unsealed snapshot for its
+  docId stays until the deck is opened in the editor. Security accepted this as
+  a stated residual.
+
+Guard: `scripts/test-slides-sealed-guards-browser.mjs`.
+
+
+## 2026-10-18 — bento/connect on Android (Bento ID): the agent's two keys, the routine session, and host-stamped consent
+
+The Android agent core (phase-1 plan A1). It isn't wired to any page yet: the
+`__bentoIdentity` global goes in only after the Android host verifies the
+shell it serves (gate 1, A2).
+
+- **Two Keystore keys.** The ROUTINE key signs collaboration traffic without a
+  prompt. The CONSENT key needs an authentication for every use: a
+  BiometricPrompt authorises exactly one signature (a CryptoObject), and the
+  Keystore, not the UI, refuses a second (measured on the emulator). The
+  consent key lives in StrongBox where the device has one. A `dev.`
+  certificate names it as `consentPub`, and it is a different key from the
+  routine one.
+- **The consent key accepts the device credential as well as a strong
+  biometric (API 30+), as security ruled (threat model §29).** People without
+  biometrics aren't excluded, matching iOS's `.userPresence`. An organisation
+  setting, "biometric-only consent", is OFF by default and not built yet. The
+  residual risk, stated plainly: a thief holding the phone AND its passcode
+  passes user verification. Notification to every device, the contest/freeze
+  and the recovery code catch that, not the key. On API 26–29, a per-use key
+  accepts biometrics only, so a phone without one gets no consent key: it can
+  do routine work but not consent (security §29, option a). A time-windowed
+  PIN key was rejected: it breaks "one prompt, one signature". Requiring API
+  30 was rejected too: it excludes people for no gain. In phase 1 that device
+  can't authorise link, rotate or unbind. Invite and revoke are unaffected,
+  since they are still owner-key statements the kernel signs (§24b). It can
+  still BE linked, because the consenting device or the passkey authorises
+  that. Its message reads: "Approving new devices or account changes needs a
+  fingerprint on this Android version. Do it from another device."
+- **§2e (B) is enforced in two layers, each with its own bound.** The routine
+  key carries a Keystore validity window of the OVERALL timeout (24 h). That is
+  the hardware floor, and it means "since the device was last unlocked": a
+  lock-screen unlock reopens it with no app prompt (measured, with a control).
+  `RoutineGate` enforces "since Bento was last used": idle 1 h, overall 24 h,
+  tightenable by an organisation (15 min / 12 h) but never loosened. A clock
+  that goes backwards locks the session.
+- **Enrolling a fingerprint doesn't destroy the routine key**
+  (`setInvalidatedByBiometricEnrollment(false)`). It carries no consent, and
+  losing it would drop the device from every room it is in.
+- **Nor does it invalidate the consent key, so a CANARY is the tripwire
+  (threat model §29b).** Measured on the emulator with a positive control:
+  a per-use key that also accepts the device credential survives new
+  fingerprints. Only a biometric-ONLY key is invalidated, and a control key
+  read `KeyPermanentlyInvalidatedException` after a new finger. Removing a
+  fingerprint invalidates neither (measured). So a biometric-only canary key
+  stands beside the consent key. It never signs: before every consent it is
+  read with `initSign`, which needs no prompt. A missing or invalidated canary,
+  biometrics gone under a "bio" record, biometrics present under a "none"
+  record, or no record at all reads CHANGED. A Keystore error reads UNKNOWN
+  and refuses. On CHANGED the gate is home/ios's: the notice "biometrics
+  changed on <device>" goes to the durable outbox FIRST, then the person
+  re-confirms, then the canary is re-minted under the new enrolment. There is
+  no forced re-link; that rested on an invalidation that doesn't happen. The
+  canary and the baseline are made WITH the consent key, so a brand-new
+  identity's first consent reads unchanged and sends no false notice. A busy
+  sensor (`HW_UNAVAILABLE`, often transient) doesn't block a consent the PIN
+  could complete: under a "bio" record the canary, a Keystore check, decides
+  alone. Under a "none" record it can't tell whether biometrics were added,
+  so it refuses, as does any answer the platform can't name. No baseline is
+  ever recorded under a state the platform can't name.
+- **Notices follow §29a, ported from home/ios** (`Notices.kt`). Recipients are
+  snapshotted when a notice is queued: the devices then, plus the address.
+  Removed devices still receive it and still hold it back. It never clears
+  without the address. A silent device stops holding it back after 7 days,
+  and only once the address has confirmed. A device-list change sends its own
+  notice to the list as it was BEFORE the change, and may not be published
+  until that notice is queued. Every device also checks each fetched list
+  itself and raises a local alert if it, or a device it didn't remove, is
+  gone. The alert is written before the new list becomes the baseline.
+- **Signatures leave as raw r‖s, low-S.** The Keystore emits DER and doesn't
+  normalise, so the host converts and folds s.
+- **The host stamps every field of a `cns.`.** The relying party is the app's
+  own (`bento`). The audience is phase 1's only one (`dir`). The docId is the
+  one the host read from the file it opened (#755's rule), never one the page
+  names. The expiry is 2 minutes. A page supplies only the statement and the
+  verifier's challenge. The host refuses to stamp a request a verifier would
+  refuse: wrong family, a document-scoped purpose without a docId, or a
+  malformed challenge.
+- **Conformance is kernel's fixture, re-read on every run.** `ConsentTest`
+  reaches the stated verdict on every `cns` row, rebuilds every accepted row's
+  text byte for byte, and passes the transcript, purpose and low-S rows. It
+  never pins a signature.
+- **Measured end to end on the emulator.** A consent signed inside a
+  BiometricPrompt by the real Keystore key is accepted by kernel's reference
+  `verifyConsent`. Re-presenting it is rejected as `replay`; presenting it to
+  a room verifier, or applying it to another statement, as `transcript`;
+  checking it against another relying party as `rp`; checking it against the
+  routine key as `signature`; and presenting it after expiry as `expired`.
+
+Still for a real phone: TEE and StrongBox residency (the emulator reports
+software keys), and the API 26–29 consent path, which allows biometrics only.
+
+## 2026-10-20 — spaces top bar: Reading view → floating button, Properties out (⋯ and ]), Graph → page-list header, Search stays — maintainer, 2026-10-20
+
+The maintainer ruled that bento/spaces' top bar should come closer to slides'
+(slides is the chrome reference). This supersedes the line in the
+2026-09-26 entry that made Graph "a bar button beside Reading view".
+
+- **Reading view is a floating pill**, shaped as slides' Slideshow pill
+  (`.ed-present-pill`: surface fill, hairline, 999px radius, the same soft
+  shadow, 600 weight, `--chrome` on hover) and placed in slides' corner:
+  bottom-END, 14px in, by a logical inset so RTL mirrors it. It hangs off the
+  page's own end edge (a zero-width box between the page and the properties
+  panel), so it moves with the panel instead of covering it. It is the way out
+  of reading view as well as in, so it stays there while reading. A sealed
+  reading copy has no pill, as it had no bar button.
+- **Properties left the bar.** Where the panel is a column, its chevron is
+  docked flush to the window edge when shut (the 5px-strip problem that once
+  justified a bar button no longer exists), and `]` toggles it. Folded, ⋯
+  keeps the Properties row.
+- **Graph is on the page list's header**, beside ＋ ▾. It is a view of the
+  tree, and it stays there in reading view. `bento.graph()` is unchanged.
+- **Search stays in the bar.** ⋯ no longer lists Reading view or Graph.
+
+test-spaces-chrome reads the pill's values from slides' stylesheet and holds
+the computed pill to them at 1440 and 390. It presses each new home with
+trusted input, and its before/after command walk maps each moved command to
+its new home rather than dropping it.
+
+## 2026-10-18 — Android: no recents snapshot while a sealed document is open
+
+While the open document is password-protected or identity-sealed, the Android
+editor turns off its app-switcher snapshot (`setRecentsScreenshotEnabled(false)`,
+API 33+), so the recents card is blank. The decision comes from the bytes the
+host opened or last wrote (`DocumentIndex.isEncrypted`), so it switches on at
+the save that encrypts the file and back off at the save that removes the
+password. The page can also say so first, over the bridge (`seal` capability,
+`seal.state {sealed}`, fire-and-forget), the moment a password is set and
+before any save lands. It can only ADD blanking: recents stays blank while
+the file OR the page says sealed. It comes back only when the file was
+written unsealed AND the page says unsealed (security). Below API 33 the only tool is `FLAG_SECURE`, which also blocks
+screenshots, so it is not set by default there; it can come later as an
+opt-in setting. Measured on the emulator (API 36), with recents opened from
+Home so the stored snapshot is what shows: a sealed document's card is blank;
+the same file on a build without this change shows its screen; an unsealed
+document's card still shows its content. With the page signal (sent here
+through the same postMessage channel the kernel will use): an unsealed file
+whose page says sealed is blank; a sealed file whose page says unsealed is
+still blank; an unsealed file whose page says unsealed again shows content.
+## 2026-10-18 — bento/connect on Android: the recovery code and key blobs (Recovery.kt)
+
+The Android port of `kernel/src/recovery.ts` (K2b). It reproduces every byte of
+`kernel/fixtures/recovery-v1.json`, which `RecoveryTest` re-reads on every run.
+The directory's pepper layer is server code and is not ported.
+
+- **Argon2id is Bouncy Castle's** (`bcprov-jdk18on` 1.86, security §35),
+  pinned exactly. Gradle dependency verification
+  (`home/android/gradle/verification-metadata.xml`, sha256) now covers every
+  dependency of the Android build. A wrong checksum fails the build (checked:
+  a zeroed sha256 fails on `bcprov-jdk18on-1.86.jar`). The recorded sha256
+  matches the jar fetched independently from Maven Central, whose published
+  sha1 also matches. Changing any dependency now means regenerating the file
+  (`./gradlew --write-verification-metadata sha256 testDebugUnitTest
+  assembleDebug assembleRelease bundleRelease`).
+- **Correctness:**
+  - the RFC 9106 §5.3 row;
+  - every fixture derivation, code, parse, blob and scalar row;
+  - a randomized cross-check against Node's native Argon2id on every run
+    (`crypto.argon2Sync`; CI's Android job now sets up Node, and the check
+    never skips);
+  - the v1.0 mutant (Argon2 without the v1.3 XOR) fails the RFC row.
+
+  The reference-area off-by-one mutant can't be applied to a library we don't
+  patch. The fixture's full-parameter rows exercise that code path instead.
+- **Memory.** Argon2's blocks come from a pool that zeroes each block as it is
+  handed back and keeps none. A probe reads every block back as zero, and a
+  control pool that doesn't wipe is caught by the same probe. This is best
+  effort: the garbage collector may already have copied a block before it was
+  cleared.
+- **Low memory fails CLOSED, decided BEFORE allocating.** Measured on an
+  emulator with a 48 MiB app heap: catching `OutOfMemoryError` alone did NOT
+  hold. Filling the heap made the runtime's own threads throw it and the
+  process died. So `argon2id` first checks the heap left against the
+  blocks' real cost (1040 bytes per 1 KiB block, measured) plus 16 MiB, and
+  refuses ("recovery is unavailable on this device") without allocating. On
+  48 MiB it refuses in milliseconds and the app stays up. On the normal
+  192 MiB heap the full 64 MiB, t = 3 derivation takes 0.7–2.3 s on the
+  emulator, and matches Node byte for byte. The parameters are never weakened.
+## 2026-10-18 — bento/spaces: which checks ask isBodySealed, and the tab title while sealed
+
+Every plaintext-to-disk guard in spaces asks `isBodySealed()` (a password OR the
+identity seal): the recovery snapshot and throttled version on the autosave
+debounce, the version added on save, and the recovery-off notice (main.ts). The
+two places that still ask `isEncryptionActive()` are the password UI in
+doccmds.ts: the Change/Remove password rows act on a password an
+identity-sealed space does not have, and the version-history note names the
+password. A new guard on anything written beside the file asks
+`isBodySealed()`.
+
+Neutral title while sealed, matching the saved file's title. Every write to
+`document.title` goes through `spaces/src/tabtitle.ts` (boot, the password
+gate, rename, setting or removing a password).
+
+Guarded by `scripts/test-spaces-sealed-browser.mjs` on the build:sealtest
+shell, with an unsealed control. Reverting either main.ts guard, or the title
+helper, turns it red.
+
+**Plaintext an unsealed session left behind (security ruling, option a).** A
+sealed boot (the seal is in place before boot(), so this is the proven state)
+never offers a recovery snapshot for its docId and lists no version history;
+it then DELETES that docId's recovery snapshot and versions through the
+kernel's `clearRecovery`/`clearVersions`, the calls the password flow already
+makes. Only that docId's entries; another document's are untouched; an
+unsealed boot deletes nothing. Residual the app cannot scrub: a deleted
+IndexedDB record can linger in the browser's on-disk database files until the
+browser compacts them.
+
+The recovery-off notice's own seal check is redundant with the autosave guard
+(a sealed space never asks for a recovery copy), and is kept on purpose; a
+mutation of it alone stays green for that reason.
+## 2026-10-18 — bento/connect: the plaintext store refuses while sealed (a backstop)
+
+Each app guards its own calls to the recovery and version store, about 11
+sites across four apps. kernel/src/autosave.ts is the one place they all go
+through, so it now fails closed (security): while `isBodySealed()`,
+`putRecovery` and `addVersion` refuse, and `getRecovery` and `listVersions`
+offer nothing. Deleting still works (`clearRecovery`, `clearVersions`): a sealed
+boot purges plaintext copies left from an earlier unsealed session, for that
+document only, and depends on it. The apps KEEP their guards and their purge
+calls. So the backstop can't mask a missing guard, each refusal is counted, and
+the count is readable only through the test-build probe. The sealed-test helper
+fails any sealed page whose rig leaned on it (`close()`/`reload()` throw), so an
+app's guard mutants stay red with no local kernel mutant. `build:sealtest` also
+writes `dist-sealtest/.complete` as its last step, and the helper refuses a shell
+without it: a build that fails after vite wrote the shell can no longer be scored.
+
+## 2026-10-18 — bento/connect: the page tells its host whether it is sealed
+
+A host that declares `'seal'` in `__bentoHost.ops` (Android, through
+home/bridge.js) blanks its app-switcher snapshot while a sealed document is open
+(security §30.6). kernel/src/save.ts posts `{__bento_tray__, dir:'req',
+op:'seal.state', payload:{sealed: isBodySealed()}}` at boot (capturePristine)
+and on every change: a password set or removed, the identity seal on or off. It
+posts the moment the change happens, before any save, because a password set but
+not yet saved is already a secret. The payload is a bare boolean, fire-and-forget,
+and not deduplicated: the host can only ADD blanking, so a missed `true` is the
+only failure and a redundant post costs nothing. Hosts that don't declare
+`'seal'` are sent nothing.
+
+## 2026-10-18 — CI is split by zone; `validate` stays one required job
+
+`.github/workflows/ci.yml` held every CI step, and every zone added its rig at
+the same few places: the end of its section of `validate`, or after the last
+job. So nearly every open PR conflicted with whichever PR merged before it. The
+file is now split by zone, and nothing about merging changes:
+
+- **The required check is still `validate`, and it is still ONE job.** Its
+  steps live in composite actions, one per zone
+  (`.github/actions/validate-<zone>/action.yml`). `ci.yml` runs them in order
+  on the same runner. Each app's slice builds its own shell, and the convert,
+  kernel, home and shared slices run after all four apps, so every step has at
+  least what was installed and built before it ran in the old order. Composite
+  actions were chosen over reusable workflows because reusable workflows would
+  make each zone a separate job. That would rename checks, rebuild every shell
+  once per job, and turn `validate` into an aggregator, where a skipped
+  dependency reads as success.
+- **Jobs outside `validate` live in `.github/workflows/ci-<zone>.yml`**, with
+  their job ids unchanged (the job id is the check name). Like before, they
+  are not required checks.
+- **Where a new rig goes:** at the end of your own zone's slice, or as a job in
+  your zone's `ci-<zone>.yml`. Never in `ci.yml`, which changes only when a
+  slice is added. Composite steps must say `shell:` on every `run:`.
+- `scripts/test-ci-registered.ts` and `test-spaces.mjs --manifest` read all of
+  it through `scripts/lib/ci-files.mjs`. An action counts only if a workflow
+  runs it, and the rig fails on an action nobody uses or a rig-running workflow
+  with no `pull_request` trigger. Those are the two silent holes a split opens.
+
+What this costs: in the Actions UI, a failing `validate` names the zone slice.
+To find the failing step inside it, open that slice's log.
+
+
+## 2026-10-18 — Under CI, a rig that skips fails its step
+
+A rig that can't run what it needs prints a skip line and exits 0, so its step
+went green. Three rigs had skipped in every CI run since they were written:
+encrypted-title (the #742 guard for shipped slides), type preview and type
+font. All three print "skipped: jsdom is not installed", and CI never
+installed jsdom.
+
+- `validate` installs a pinned jsdom at the repo root, as test tooling (it
+  never ships in a document). All three rigs now run.
+- Every rig step runs under `scripts/ci/bento-step`: the `shell:` of every
+  validate slice step, and the default shell of the `ci-<zone>.yml` jobs.
+  It runs the script as `shell: bash` would, then fails the step on any
+  output line that reads as a skip. The one exception is
+  `ci-home-android.yml`, where Gradle prints SKIPPED as a task outcome.
+- **The allowlist** (`ALLOWED_SKIPS` in `scripts/lib/ci-skips.mjs`) names the
+  rig, the exact line and the reason. It holds the dash xlsx/zip interop
+  checks, which need LibreOffice or a real Excel-made workbook, and, on Linux
+  only, the three home/ios Swift rigs, which need Apple frameworks and run for
+  real on a macOS job. An allowed line counts only in its own rig's step.
+- `scripts/test-ci-skips.mjs` is the positive control. It checks the detector
+  against the exact lines from a real main run, and runs the wrapper end to
+  end, including the encrypted-title rig with jsdom hidden, which must turn the
+  step red. It also checks that every allowlist entry's rig still prints its
+  line, and that every rig step in every CI file runs through the wrapper.
+
+## 2026-10-20 — dash: the shell takes slides' chrome (Share popover, measured bar, live language)
+
+Dash's bar, Save menu and sharing now follow slides and spaces, per the rule
+that slides is the chrome reference. Four things a later session could undo
+by accident:
+
+- **Sharing is a popover, and connecting needs eligibility.** The one-click
+  "Start live session" chip is gone; dash/src/shareui.ts is spaces' Share
+  panel. Nothing connects until Go live (or a live copy is sent). A workbook
+  that arrives SHARED — saved with its session on, an invite, a view-only copy
+  — rejoins its room on open through `SyncSession.shareEligible()`, which is
+  what slides and spaces do. Before this, dash never joined on open, so a copy
+  sent to someone stayed offline. A fresh workbook or template still never
+  connects: the keys are minted a beat after boot, so only the eligibility
+  test stands between the first edit and the relay.
+- **Copies for someone else go through the kernel copy table.**
+  dash/src/docclass.ts is dash's field map (exhaustive over DashDoc's declared
+  keys, enforced by tsc); dash/src/share.ts builds the reading copy ('package'),
+  the invite ('invite') and the view-only copy ('reader') with it, so a
+  top-level field this build does not declare is dropped from all three.
+- **The bar is fitted by measuring, not by breakpoints.** dash/src/topbar.ts
+  ports slides' fitTopbar and fold. Below the fold the BAR scrolls, never the
+  document, and the ＋/⋯ menus are position: fixed under it. Widgets parked in
+  ⋯ (Share, 🌐, Data) render inline (CLAUDE.md hard-won 9 and 10).
+- **The language switches live by translating in place.** Slides rebuilds its
+  editor. Dash builds its app once from one template, so re-running boot would
+  mint a second store and sync session, and a reload of a file:// page drops
+  unsaved work. Instead the visible strings are mapped back to their
+  English-as-key source under the old locale and re-translated. Interpolated
+  strings are re-rendered by their owners.
+
+Comments take the accent colour. The violet `--cmt` was dash's own and read as
+a third accent next to amber and the selection blue; slides' comment pins are
+amber.
+
+## 2026-10-20 — dash: a column header click selects; sorting is a command
+
+In dash a click on a column header (dataset name or spreadsheet letter) selects
+the column, shift extends, ⌘/Ctrl adds, and it never sorts. Excel, Sheets,
+Numbers and Airtable all do this, and the old click-to-sort left the selection
+on its screen rectangle, which after the sort held different records. Sorting
+lives in the header's ▾ menu and the right-click menu. Double-clicking a
+dataset column's name renames it in place. A sort or filter now carries the
+selection by ROW identity: whole columns stay whole, single-row ranges move
+with their row, and a taller block collapses to the cursor cell (its rows no
+longer sit together). Point mode inserts a dataset reference in the FILE's
+row and column numbering (`tableCellSource`), not the sorted view's.
+
+## 2026-10-20 — bento/dash: what typing into a spreadsheet cell stores, and text in arithmetic
+
+Typing into a spreadsheet cell (and pasting text into one) goes through
+`cellprops.ts coerceInput`. It was written and tested earlier but never wired:
+grid.ts kept a narrower reader, so `15%` and `$5` were stored as TEXT. The rules
+are in cellprops.ts's header. Two of them changed here:
+
+- **Unambiguous dates are read from typing.** ISO (`2026-03-04`) and a named
+  month (`Mar 4 2026`, `4 March 2026`) store the canonical `YYYY-MM-DD` string
+  and stamp the Date format. A slash date stays text from typing even when the
+  day is over 12. Otherwise `13/2/2026` would be a date and `12/2/2026` one row
+  up would be text. In a cell already formatted Date, every unambiguous spelling
+  is read, as before. The refusal of `3/4/2026` is unchanged.
+- **One digit reader.** `import.ts readEntryNumber` reads typed entry, the
+  formula engine's text coercion, and (through the same digit shapes)
+  `inferColumn`. A field that fits only one decimal convention reads that way
+  for everyone (`3,50` is 3.5). A field that fits both (`1,234`) follows the
+  viewer's locale when typed, because the typist meant something by it. The
+  formula engine always uses '.', import's own tie-break, because a computed
+  value is document data and must not depend on who opens the file.
+
+**Text in arithmetic follows Excel** (formula.ts, the block above `num`). A
+range or reference given to an aggregate counts only its numbers: text, even
+numeric-looking text, and booleans are skipped. This includes the step
+engine's open-coded fast path, which test-dash-steps.ts keeps bit-identical. A
+value written directly as an argument is coerced, and #VALUE! if it is not a
+number (COUNT just doesn't count it). Direct arithmetic coerces text only when
+the whole string reads as a typed number (`"15%"` is 0.15, `"(5)"` is -5).
+Anything else is #VALUE!; the old code read whatever digits were left after
+stripping symbols. Aggregates take every argument (`SUM(1,2,3)` was 1), and
+`%` is a postfix operator (`=10*15%` was 150).
+
+**A cell formula that does not parse is refused at entry**, in the cell editor
+and in the formula bar (`cellFormulaProblem` → `formula.ts syntaxProblem`). It
+is never refused on evaluation: formulas already in a file evaluate as
+leniently as before, because refusing them would put a blank where an answer
+was. The formula bar shows a value cell's ENTERED form (`cellprops.ts
+enteredForm`): `100%`, `$300.50`, or `'15%` for text that would otherwise be
+read back as a number. Re-entering what the bar shows always stores the same
+value again.
+
+Guarded by scripts/test-dash-entryparse.ts and
+scripts/test-dash-entryparse-browser.mjs.
+
+## 2026-10-20 — dash: a pivot opens as a sheet; the chart is edited in the panel
+
+A pivot sheet now OPENS where the grid was (its tab works), and the properties
+panel becomes its field editor — Excel's PivotTable Fields layout. Which pivot
+is up is view state, like which tab is up; the grid stays on its last sheet
+underneath, and `isOpenable` still means "the grid can show it" (tabs.ts takes a
+separate `SheetViews` hook for kinds another owner draws). The pivot's own
+filters are stored in model.ts's `StoredFilter` spelling (`isOneOf` as a
+`values` array, never a Set); a Filters-area field with no `pred` means
+"(All)". A grouping field sits in one of Filters/Columns/Rows; Values may repeat
+a column but not a column-and-function.
+
+The 2D chart is edited in the properties panel while it is selected (clicking
+the plot or Edit), as a slides chart is. New `ChartBinding` fields are additive:
+`title`, `legend`, `colors` (keyed by column id, never position) and
+`allowLine`. A line whose category column has no order (text, enum, bool) is
+drawn as bars unless `allowLine` is set, and the refusal is made in
+`optionFor`, so the panel, a story and a dashboard all refuse alike. The value
+axis takes its label pattern from the series columns only when they all share
+one format; percent axes are scaled by 100.
+
+3D is hidden behind a per-viewer developer flag
+(`localStorage['bento-dash-dev-3d'] = 'on'`), never in the document; viz3d.ts
+stays.
+
+Escape does not leave a pivot: it is a sheet now, and as in Excel you leave a
+sheet by its tab. #808's Escape-closes-Pivot existed for the Pivot side panel
+(review 4.8), which this removes; Escape still closes the Story panel.
+
+## 2026-10-20 — dash: the grid owns Tab only inside itself; F6 walks regions; slides' focus ring
+
+dash's document key handler took every key from every target that was not a
+text field, so Tab moved the grid's cursor from anywhere — the top bar, panel
+and sheet tabs could not be reached by keyboard — and Enter on a focused button
+moved the cursor instead of pressing it. Now: off the grid, Tab is always the
+browser's, and on a focused control Enter, Space and the navigation keys are
+the control's; other keys (a letter typed after clicking a toolbar button, ⌘Z)
+still reach the grid. Inside the grid Tab stays "next cell" (the data-entry
+run every spreadsheet keeps), and at the sheet's first or last column it hands
+the key back to the browser so the grid is not a keyboard trap. F6 / ⇧F6 move
+between top bar, formula bar, grid, panel and sheet tabs, Excel's key for it.
+Focus rings move from --blue to --accent-ink, the token slides' buttons and
+every field already use, with a zero-specificity floor for any reachable
+control that has no ring of its own. This supersedes the --blue choice recorded
+in dash's styles.css comment.
+
+Also settled the same day: a stored `bento-lang` is validated before `Intl`
+sees it (dash/src/i18n.ts `intlLocale`), because the key is shared across every
+file on the origin and a bad value used to stop boot.
+
+## 2026-10-21 — bento/connect K4: release pins and the signed release history
+
+A host that SERVES a document (iOS, Android, desktop, the hosted runtime)
+decides "genuine runtime" by hashing the file's code blocks and serving it under
+a hash-pinned script CSP (security §18). K4 publishes what that needs, per
+release, signed with the release key:
+- **Pins, in the manifest (additively: shipped shells read only
+  app/version/sha256/url):** `pins = { v: 1, blocks: { bento-rt, bento-rt-css,
+  loader, remover }, scriptSrc: [loader, remover] }`. Blocks are sha256 hex of
+  each code block's text; `scriptSrc` is the CSP form. They're derived from the
+  release's OWN bytes: the built shell, and a file it saved through its real ⌘S
+  fallback (`scripts/derive-pins.mjs`). The remover exists only in saved files,
+  and one app's scripting API returns JSON, not a file.
+- **A signed, cumulative history:** `releases/<app>/history.json`, the release
+  envelope over `{ app, v: 1, releases: [{ version, sha256, at, pins }] }`,
+  newest first. It's append-only: a release must be newer than everything held,
+  and a held entry never changes. The first history is backfilled from every
+  earlier release with a signed manifest, each shell checked against its own
+  manifest's sha256 first. For slides that's 66 versions, 0.7.0 to 1.2.9.
+  Earlier shells have no compressed runtime blocks, so they're unknown to hosts.
+- **The host rules (scripts/lib/release-history.mjs, security §36):**
+  - a file matches a release only if ONE entry matches EVERY block, with
+    exactly one block per id. A partial or ambiguous match is UNKNOWN:
+    restricted mode or an update offer, never a borrowed pinned CSP.
+  - a host keeps the newest history it has verified and refuses one that lacks
+    a held entry or rolls its newest version back. (With a well-formed history
+    the second check is implied by the first, and is kept as defence in depth.)
+- **The signing gate:** `release.mjs` refuses to sign on any pins mismatch, on
+  any executable inline script in a saved file other than the pinned loader and
+  remover, and on any CSP refusal while the release is driven under its pins,
+  except the loader's two designed fallbacks (an inline script, then `new
+  Function`). Those are matched on directive AND on a line inside the pinned
+  loader's span: matching on the source file alone excused an injected script.
+  There's no unchecked path. CI runs the same check on every PR's build of all
+  four apps, and the required `validate` job's release rehearsal runs the whole
+  pipeline.
+- **Refusal COLUMNS aren't reliable across Chrome versions.** Chrome Headless
+  Shell 149, Playwright's bundled browser and the one CI runs, reports a script
+  injected right after the loader's `</script>` at column 0, a position INSIDE
+  the loader's span. Chrome 155 reports its real column. So on CI's browser the
+  line-and-column rule alone would excuse that script, and the ONCE-EACH CAP
+  (at most one inline and one eval refusal excused) is what catches it. The cap
+  is the real guard and the column a refinement (security, measured). Rigs
+  identify an injected refusal by its line, with its column matching or 0, and
+  run under the bundled browser as well as system Chrome.
+- **The verdict is a GRAMMAR, not a list of cases (security, 2026-10-21).** A
+  `<script>` is inert only if its type is exactly one of the data types Bento
+  writes (`application/bento+json`, `application/bento+lang`,
+  `bento/deflate-b64`, `bento/deflate-b86`). Everything else is executable,
+  including no type, any JavaScript type, `module`, an unknown type, a
+  differently cased data type, and any `src=`. An executable script must then
+  be exactly the pinned loader or remover by hash. A file carrying `<iframe>`,
+  `<object>`, `<embed>`, `<base>`, a `<meta>` refresh or CSP, an `on*=`
+  attribute, a comment or `<style>` holding a `<script>`, or a data block
+  containing `<` is UNKNOWN. Bento's data blocks never contain `<`: the JSON is
+  escaped and the b64/b86 alphabets exclude it. Every genuine build of the four
+  apps, a real deck with a live embed and an svg diagram, and all 66 backfilled
+  slides releases pass it unchanged. Agreement between the hosts' scanners
+  (Rust, Swift, Kotlin, JS) is K5's shared corpus.
+- **No style pins in phase 1 (security §36a).** The policy is
+  `script-src <pins> blob:; style-src 'unsafe-inline'`. A document's own svg
+  `<style>` (an svg element's `css`, sanitized and scoped) can't be pinned per
+  release: measured, the pinned style policy refused it, which breaks every
+  user diagram with hover or animation. Style injection gives no route to
+  Bento's secrets: keys and the document JSON live in script text, which CSS
+  selectors can't read, and document CSS is sanitized and scoped. So pinning
+  would only remove what the svg element provides on purpose. The style control
+  is the SANITIZER, whose rig covers the obfuscated url() forms with a browser
+  fetch check. The route to style pins later is moving svg CSS into constructed
+  stylesheets (a slides change); collecting the hashes from the browser's own
+  CSP engine under a report-only policy was measured to work.
+## 2026-10-20 — calendar span renamed Agenda (gantt keeps Timeline); calendars prefer Due — maintainer, 2026-10-20
+
+Two rulings on the bento/spaces calendar layout, made by the maintainer.
+
+- **The calendar's second shape is "Agenda" on screen.** It was "Timeline",
+  the word the gantt layout also uses, so the view head could show two
+  different pictures under one name. Only the words changed: the span button
+  reads "Agenda" and its tooltip "Show an agenda"; the gantt layout keeps
+  "Timeline" everywhere (layout button, Insert menu, "Show as a timeline").
+- **The stored value stays `span: "timeline"`.** Files written since the
+  calendar shipped carry it, the format is additive, and renaming the value
+  would open every one of those views as a month grid. Do not "tidy" it to
+  `"agenda"`; a reader that wants the new name gets it from the label, never
+  from the file. `CAL_SPANS` in `spaces/src/calendar.ts` says so beside it.
+- **A calendar prefers Due.** The date a page sits on is: its journal date;
+  else `due`, when the schema declares it as a date field and the page carries
+  a real ISO value; else the other date fields in schema order; else "No
+  date". A task with both a Start and a Due belongs on the day it is due —
+  that is what a calendar of work is opened to answer. `DEFAULT_FIELDS` is
+  NOT reordered: the property strip still shows Start before Due. The order
+  lives in one function, `dateOrderOf`, which both `dateOf` and the hint above
+  the grid read, so the sentence cannot drift from the behaviour.
+
+## 2026-10-20 — Designs: system font stacks or embedded fonts, never web fonts — maintainer, 2026-10-20
+
+Fonts in a bento/spaces design are system font stacks (`FONT_STACKS`) or fonts
+an author embeds in the file (`asset:`). No bundled or downloaded web fonts —
+maintainer, 2026-10-20. This is already how `spaces/src/designs.ts` validates
+fonts: `validFont` accepts a `FONT_STACKS` name, or an `asset:` key that
+resolves to a `data:` font in the document's own assets, and drops anything
+else to the base design's font. It is recorded so that a later change does not
+add a web-font fetch.
+
+## 2026-10-21 — bento/connect K5: one gate-1 verifier, and the corpus every host runs
+
+`kernel/src/gate1.ts` is the ONE gate-1 implementation for every JavaScript
+host (the extension, the hosted runtime) and for the release tooling. The K4
+scripts import its scanner, grammar and host rules rather than carrying copies.
+It hashes with WebCrypto, so it runs in a page, a worker, an extension and node.
+- **`verifyServed(html, history)`** is the PRIMARY path, for a host that serves
+  the bytes it verified (security §17). ONE release must match EVERY block
+  under the grammar (§36 and the 2026-10-21 ruling). The answer carries the CSP
+  to serve under (`hostPolicy`). Unknown never borrows a release's CSP.
+- **`verifyStrict(html, expected)`** is the file:// fallback: vault's strict
+  verifier, signed off in security §15. The final whole-string compare, bound
+  at both ends, is the load-bearing part. Its expectation comes from a genuine
+  saved file of the release (`strictExpectedFrom`). A signed skeleton waits for
+  canonical save, and a file:// result is never grounds for identity (§16).
+- **`home/fixtures/gate1/`** is the conformance corpus: a synthetic app's signed
+  history (with a test key), served rows, the 16 strict tamper rows plus two
+  genuine saves, anti-rollback rows, and an ambiguous-history row. Every row
+  DECLARES its verdict, and the generator refuses to write the corpus if the
+  reference disagrees, so the answers are the rules, not what the JS happens to
+  do. Native hosts (Swift, Kotlin, Rust) port gate 1 and must pass every row.
+  Encodings are stated per field: block pins are sha256 HEX of the block text,
+  `scriptSrc` is `'sha256-'` + BASE64, and the entry `sha256` is HEX of the
+  shell file.
+## 2026-10-21 — bento/connect in the extension: Argon2id is @noble/hashes, and the recovery code is generated from kernel
+
+**Argon2id is `@noble/hashes` 2.4.0, vendored, not hash-wasm.** The recovery
+code is stretched with Argon2id, which WebCrypto lacks, so the extension
+vendors one. hash-wasm was the first choice, but its Argon2id takes no
+associated data, so it can't run the RFC 9106 §5.3 test vector, which has
+some. Security requires that vector. Noble's `argon2idAsync` runs it, equals
+Node's native Argon2id at Bento's parameters, and is pure JavaScript, so the
+extension needs no `'wasm-unsafe-eval'` anywhere. It takes about a second per
+derivation at 64 MiB, which is fine for a code used at setup and recovery.
+
+The files are copied unmodified from the npm tarball, each pinned by sha256 in
+`home/webext/src/id/vendor/noble-hashes/VENDOR.json`. `scripts/test-webext-id.ts`
+recomputes the hashes on every run, then checks RFC 9106, every
+`recovery-v1.json` derivation, and a randomized cross-check against Node's
+native Argon2id. It proves by probe that the 64 MiB block array reads zero
+afterwards. A derivation that can't allocate that memory reports "recovery
+unavailable on this device" and never retries with weaker parameters.
+
+**The recovery code and the key blobs are generated from kernel too.**
+`kernel/src/recovery.ts` now covers everything the extension's hand-written
+`id/blob.js` and `id/recovery.js` did, plus the recovery wrap. So it is
+type-stripped into `id/gen/` like the statements, and the hand-written
+modules are gone: one implementation, held to `recovery-v1.json` by kernel's
+own rig run against the extension's copy.
+
+## 2026-10-18 — bento/connect: the desktop agent's security-key ceremony, and one rule for C libraries (home/desktop/agent)
+
+- **One authenticator stack per platform.**
+  - **Linux** uses the distribution's **libfido2** (Yubico, BSD-2-Clause,
+    minimum 1.12). **Windows** will use only the platform WebAuthn API
+    (`webauthn.dll`), which covers security keys, Windows Hello and phone
+    hybrid: non-admin apps can't reach CTAP-HID keys directly there. libfido2 is
+    never shipped on Windows.
+  - **The PRF → CTAP hmac-secret transform**, SHA-256("WebAuthn PRF" ‖ 0x00 ‖
+    input), is applied exactly once. On Linux the agent applies it before
+    libfido2. On Windows the raw input goes to `webauthn.dll`'s PRF path, which
+    applies it itself. Applying it twice still gives deterministic output, but
+    it never matches what the same key gives on the web.
+- **The desktop's clientDataJSON origin** is exactly `bento-desktop:linux` or
+  `bento-desktop:windows`, never `https://bento.page`. A native app
+  self-asserts its origin; on the web the browser vouches for it, which is where
+  phishing resistance comes from. The fields are type, challenge, origin and
+  crossOrigin, in spec order, with CCDToString escaping and no topOrigin.
+- **C libraries are the distribution's, behind a thin in-tree FFI.** That
+  applies to libfido2 and to the keyring. The keyring moved from the
+  secret-service crate to libsecret, which removed a zbus tree carrying three
+  RustSec "unmaintained" notices. There are no binding crates, no bundled
+  copies and no OpenSSL crate in the shipped graph. Any future bundled build
+  must say so and pin and checksum its source.
+- **Supply chain (`supply-chain-check.sh`).** cargo-deny runs over the shipped
+  graph: a permissive-only licence allow-list, RustSec advisories and
+  crates.io-only sources. A second check proves the test-only authenticator is
+  absent from that graph. Each has a positive control: an LGPL crate, and the
+  testkit as a normal dependency, must both be refused.
+- **The test authenticator is Google's OpenSK** (Apache-2.0, pinned commit and
+  nightly), in a separate test-only crate with our own MIT uhid adapter. An
+  AGPL alternative was rejected even for tests.
+- **The PRF interop rig.** One virtual key and one credential, with an
+  independent WebAuthn client (Yubico python-fido2, BSD-2, hash-pinned) that
+  applies the PRF transform itself, as a browser does. The agent's output must
+  be byte-equal to it. Two mutant builds, double-hash and raw-input-hash, must
+  each fail ON THAT COMPARISON, not by failing to build or to reach the key.
+- **The no-TPM store's wipe** re-counts every item, locked or not, after
+  clearing. Measured: libsecret's clear silently skips items in a locked
+  keyring, so the re-count is what keeps a wipe from reporting success while
+  keys remain.
 
 ## 2026-10-30 — BETA FORK: the deck store counts the publish path, inside KTD12
 

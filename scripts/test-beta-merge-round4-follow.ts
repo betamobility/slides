@@ -61,7 +61,7 @@ function fixture(start = 0, readyDeck = true, reduce = false, lock = false, muta
     currentSection: () => sections[index], anim: { killTweensOf: noop }, opts: {},
     setTimeout: noop,
   }
-  for (const n of ['revealStep', 'hideStep', 'updateSpeakerControls', 'sweepSymbolSpans', 'applyElementFrame', 'resetXform', 'applyRevealSet', 'applyStep', 'runMorph', 'runMorphArrivalCountUps', 'runEnterFx', 'runAmbientFx', 'restartSvgAnimations', 'wireHoverFocus', 'disposeLiveCharts', 'mountLiveCharts', 'pauseMediaIn', 'startMediaIn', 'cacheSlideSymbols', 'updateSpeaker', 'onResize', 'buildSection']) deps[n] = noop
+  for (const n of ['settleTypeWriter', 'revealStep', 'hideStep', 'updateSpeakerControls', 'sweepSymbolSpans', 'applyElementFrame', 'resetXform', 'applyRevealSet', 'applyStep', 'runMorph', 'runMorphArrivalCountUps', 'runEnterFx', 'runAmbientFx', 'restartSvgAnimations', 'wireHoverFocus', 'disposeLiveCharts', 'mountLiveCharts', 'pauseMediaIn', 'startMediaIn', 'cacheSlideSymbols', 'updateSpeaker', 'onResize', 'buildSection']) deps[n] = noop
   let body = [...decls.values()].map(d => 'const ' + d + ';').join('\n')
   // Failing-first control: remove just the round-3 prerequisite, the follower hook.
   if (mutant) body = body.replace('if (runtimeShow.follow(index, step)) return', 'if (false) return')

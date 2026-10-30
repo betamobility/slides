@@ -20,8 +20,12 @@ import type { SaveQueue } from '../../kernel/src/savequeue.ts'
 import type { SpacesDoc } from './model'
 import type { Store } from './store'
 
-/** What `saveFile` answers; 'cancelled' is the picker closed. */
-export type WriteResult = 'saved' | 'saved-as' | 'downloaded' | 'cancelled'
+/** What `saveFile` answers; 'cancelled' is the picker closed. 'copied' is a
+ *  "Save a copy…" write that went to a DIFFERENT file (the kernel does not route
+ *  spaces' copy through here today, so it does not occur at runtime yet — but
+ *  the kernel type includes it, and a 'copied' save must never clear THIS
+ *  document's dot). */
+export type WriteResult = 'saved' | 'saved-as' | 'copied' | 'downloaded' | 'cancelled'
 
 export type SaveOutcome =
   /** the space was swapped for another document while this save waited */
@@ -59,6 +63,10 @@ export async function saveRevision(
   const result = saved.value
   if (result === 'cancelled') return { kind: 'cancelled' }
   const current = saved.isCurrent()
+  // A 'copied' write went to another file, so it is never a save of THIS
+  // document — do not clear the dot for it (keeps the fix robust if spaces ever
+  // routes "Save a copy…" through the queue).
+  if (result === 'copied') return { kind: 'written', result, doc: saved.doc, current: false }
   // setDirty, not a bare assignment: it raises 'dirty', which is what repaints
   // the dot, and it never advances the revision when clearing.
   if (current) store.setDirty(false)

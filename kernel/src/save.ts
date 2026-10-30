@@ -38,6 +38,43 @@ let pristine: Document | null = null
 /** Call first thing at boot, before any DOM mutation. */
 export function capturePristine() {
   pristine = document.cloneNode(true) as Document
+  if (typeof __BENTO_TEST_SEAL__ !== 'undefined' && __BENTO_TEST_SEAL__) consumeTestSeal()
+  announceSeal() // boot: the host learns the starting state before anything else happens
+}
+
+/**
+ * TEST BUILDS ONLY (security §31): the sealed TEST document's key handoff.
+ * Phase 1 has no real path that seals a document at boot (the per-recipient
+ * wraps are phase 2), yet all four apps' plaintext-to-disk guards must be
+ * exercised end to end against an identity-sealed document. A rig installs a
+ * one-shot global with the raw document key before the page loads (Playwright
+ * addInitScript, scripts/lib/sealed-boot.mjs). Every app calls capturePristine()
+ * at boot before its editor exists, so the seal is in place before any autosave
+ * can start: the §E.2 ordering invariant, by construction.
+ *
+ * NEVER in a release shell. In phase 1 nobody holds a wrap for such a body, so a
+ * stray global (an extension, a host user script, a future bug) would seal a
+ * person's file to a key no one can recover. Each app's vite config defines
+ * __BENTO_TEST_SEAL__ false unless BENTO_TEST_SEAL=1, the minifier drops this
+ * branch, and the release conformance gate (shell-gate.mjs) refuses any shell
+ * containing the global's name.
+ */
+declare const __BENTO_TEST_SEAL__: boolean | undefined
+function consumeTestSeal() {
+  const g = globalThis as { __bentoTestSeal?: unknown; __bentoTestSealProbe?: unknown }
+  const key = g.__bentoTestSeal
+  delete g.__bentoTestSeal
+  if (!(key instanceof Uint8Array)) return
+  setIdentitySeal(key)
+  // What the rigs read back: did the seal take, and what would a save write?
+  // (Its name carries the same mark, so the gate refuses it in a release too.)
+  g.__bentoTestSealProbe = Object.freeze({
+    sealed: () => isBodySealed(),
+    body: (doc: KernelDoc) => encodeDocBody(doc),
+    file: (doc: KernelDoc) => serializeAuto(doc),
+    fileName: (doc: KernelDoc) => suggestedFileName(doc),
+    storeRefusals: () => storeRefusalCount(),
+  })
 }
 
 export function readEmbeddedDoc(): string | null {
@@ -57,7 +94,12 @@ export function readEmbeddedDoc(): string | null {
  * lookalike — which is linear, where a regex over an unterminated `<script` is
  * quadratic. CRLF is normalised so a file saved with CRLF line endings still
  * compares equal. The body is <-escaped at write time so it can never itself
- * contain the close tag. null if there is no block. */
+ * contain the close tag. Returns '' for a present-but-EMPTY block (a pristine
+ * New shell), and null only when there is NO readable block at all — the two are
+ * different documents, and the launch adopter (consumeLaunchQueue) must tell a
+ * pristine shell from a non-Bento file. (readEmbeddedDoc deliberately still
+ * collapses both to null — dash's boot dispatcher depends on that; this is the
+ * string-level extractor, where '' vs null is meaningful.) */
 const DOC_BLOCK_ID_ATTR = ` id="${DATA_BLOCK_ID}"`
 export function embeddedDocBlock(html: string): string | null {
   const at = html.indexOf(DOC_BLOCK_ID_ATTR)
@@ -66,7 +108,7 @@ export function embeddedDocBlock(html: string): string | null {
   if (start < 0) return null
   const end = html.indexOf(SCRIPT_CLOSE, start + 1)
   if (end < 0) return null
-  return html.slice(start + 1, end).replace(/\r\n/g, '\n').trim() || null
+  return html.slice(start + 1, end).replace(/\r\n/g, '\n').trim()
 }
 
 /**
@@ -136,7 +178,7 @@ function serializeBody(shell: Document, body: string, doc: KernelDoc): string {
     el.id = b.id
     for (const [k, v] of Object.entries(b.attrs ?? {})) el.setAttribute(k, v)
     // same <-escape as the doc block: these can never contain "</script>"
-    el.textContent = '\n' + b.body.replace(/</g, '\\u003c') + '\n'
+    el.textContent = '\n' + (b.body.includes('<') ? b.body.replace(/</g, '\\u003c') : b.body) + '\n'
     clone.head.appendChild(el)
   }
 
@@ -148,17 +190,36 @@ function serializeBody(shell: Document, body: string, doc: KernelDoc): string {
     clone.head.appendChild(block)
   }
   // <-escape so the JSON can never contain "</script>" and break the file.
-  block.textContent = '\n' + body.replace(/</g, '\\u003c') + '\n'
+  block.textContent = '\n' + (body.includes('<') ? body.replace(/</g, '\\u003c') : body) + '\n'
 
   writePreview(clone, body, doc)
 
+  // An encrypted file must not carry the document title in plaintext: the
+  // <title> would sit in the file beside the ciphertext that exists to hide the
+  // content, readable by anything that lists the file. Same veto as the preview
+  // (previewAllowed covers both the live password flag and an already-encrypted
+  // body), so write a generic title — the app name — instead. This touches only
+  // the CLONE written to disk; the live tab's title is set elsewhere and keeps
+  // the real title after unlock.
   const titleEl = clone.querySelector('title')
-  if (titleEl) titleEl.textContent = doc.title + ' — ' + appConfig().appName
+  if (titleEl) {
+    titleEl.textContent = previewAllowed(body)
+      ? doc.title + ' — ' + appConfig().appName
+      : appConfig().appName
+  }
 
   const html = '<!DOCTYPE html>\n' + clone.documentElement.outerHTML
   // Belt-and-braces: an unescaped close tag anywhere in generated output would
   // corrupt the file; this should never trigger given the escaping above.
-  if (html.split(SCRIPT_CLOSE).length !== clone.querySelectorAll('script').length + 1) {
+  // Count occurrences with indexOf instead of splitting the multi-megabyte string into an array.
+  let scripts = 0
+  let position = 0
+  // Use `indexOf` here to avoid allocations galore.
+  while ((position = html.indexOf(SCRIPT_CLOSE, position)) !== -1) {
+    scripts += 1
+    position += SCRIPT_CLOSE.length
+  }
+  if (scripts !== clone.querySelectorAll('script').length) {
     console.warn('bento: unexpected script-close count in serialized file')
   }
   return html
@@ -220,7 +281,7 @@ export function registerPreview(fn: PreviewProvider): void {
  * Pure and exported so `scripts/test-preview.ts` can exercise it directly —
  * the surrounding DOM work is not unit-testable in node, this decision is.
  */
-export function previewAllowed(body: string, encrypted = isEncryptionActive()): boolean {
+export function previewAllowed(body: string, encrypted = isBodySealed()): boolean {
   return !encrypted && parseEnvelope(body) === null
 }
 
@@ -399,7 +460,10 @@ export function serializeFile(doc: KernelDoc): string {
 export interface EncEnvelope {
   format: 'bento/enc'
   v: 1
-  it: number
+  /** PBKDF2 rounds (password envelopes) */
+  it?: number
+  /** 'hkdf-kdoc' = identity-sealed (§E.1): opened by the document key, never a password */
+  kdf?: 'hkdf-kdoc'
   salt: string
   iv: string
   data: string
@@ -442,9 +506,71 @@ let encPassword: string | null = null
 /** Set (or clear with null) the password used for every subsequent save. */
 export function setEncryptionPassword(p: string | null) {
   encPassword = p
+  announceSeal()
 }
 
 export const isEncryptionActive = () => encPassword !== null
+
+/**
+ * The identity seal (identity-kernel §E.2): K_doc as an HKDF base key, set when
+ * a person's agent unwraps the document key, cleared on lock. With no password
+ * set, every save seals the body under it (encodeDocBody).
+ */
+let sealBodyKey: Promise<CryptoKey> | null = null
+
+/**
+ * Set (or clear with null) the identity seal. `kdoc` is the raw 32-byte
+ * document key, imported NON-EXTRACTABLE as an HKDF base. Synchronous on
+ * purpose: isBodySealed() is true from this call on, before the import settles,
+ * so no guard can slip a plaintext write into that gap. A failed import fails
+ * every later save closed rather than letting it write plaintext.
+ */
+export function setIdentitySeal(kdoc: Uint8Array | null): void {
+  if (kdoc === null) { sealBodyKey = null; announceSeal(); return }
+  if (!(kdoc instanceof Uint8Array) || kdoc.length !== 32) throw new Error('the document key is 32 bytes')
+  sealBodyKey = crypto.subtle.importKey('raw', kdoc.slice() as BufferSource, 'HKDF', false, ['deriveKey'])
+  announceSeal()
+}
+
+/**
+ * Is the body sealed on disk, by a password OR the identity seal? THE question
+ * for every plaintext-to-disk guard (recovery snapshots, version history,
+ * previews, the filename). `isEncryptionActive()` answers only "is there a
+ * password", which is what the password UI wants and what a guard must not ask:
+ * an identity-sealed document has no password, so a guard reading that flag
+ * writes it to disk in plaintext.
+ */
+export const isBodySealed = () => encPassword !== null || sealBodyKey !== null
+
+/**
+ * How many times the plaintext store (autosave.ts) refused a write or a read
+ * because the body is sealed. The store's refusal is a BACKSTOP under each app's
+ * own guards: an app that leans on it has a missing guard. Readable only through
+ * the test probe, so the sealed-test rigs can fail on any refusal (security).
+ */
+/**
+ * Tell the HOST whether this document is sealed (security §30.6): a host that
+ * declares 'seal' (home/bridge.js, Android today) blanks its app-switcher
+ * snapshot while it is. Sent at boot and on EVERY change (password set or
+ * removed, identity seal on or off), the moment it happens and before any save,
+ * because a password set but not yet saved is already a secret. A bare boolean,
+ * fire-and-forget: the host never replies, and it can only ADD blanking, so a
+ * missed `true` is the only failure and a redundant post is free. Not
+ * deduplicated, for that reason.
+ */
+let sealPostId = 0
+function announceSeal(): void {
+  const host = (globalThis as { __bentoHost?: { ops?: readonly string[] } }).__bentoHost
+  if (typeof window === 'undefined' || typeof window.postMessage !== 'function') return
+  if (!Array.isArray(host?.ops) || !host.ops.includes('seal')) return
+  window.postMessage({ __bento_tray__: true, dir: 'req', id: `seal-${++sealPostId}`, op: 'seal.state', payload: { sealed: isBodySealed() } }, '*')
+}
+
+let storeRefusals = 0
+export function noteStoreRefusal(): void { storeRefusals++ }
+/** For rigs only (node, or a page through the test probe). Unreachable from page
+ *  script in a release: a module export inside the bundle, and unused there. */
+export function storeRefusalCount(): number { return storeRefusals }
 
 /** Parse a data-block body as an encryption envelope; null if it is not one. */
 export function parseEnvelope(text: string): EncEnvelope | null {
@@ -482,6 +608,48 @@ async function encryptBody(json: string, password: string): Promise<string> {
   return JSON.stringify(env)
 }
 
+const BODY_INFO = new TextEncoder().encode('bento/body.v1')
+
+/** bodyKey = HKDF-SHA-256(K_doc, salt, "bento/body.v1") as an AES-256-GCM key. */
+const bodyKeyFor = (kdoc: CryptoKey, salt: Uint8Array) => crypto.subtle.deriveKey(
+  { name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: BODY_INFO as BufferSource },
+  kdoc, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+
+/**
+ * The identity-sealed body: a GENUINE bento/enc v1 envelope (§E.1), so frozen
+ * shells, previewAllowed and convert all read it as sealed. Never v:2, never
+ * without salt: an old parseEnvelope would reject it, boot the starter deck, and a
+ * later save would overwrite the sealed block. `salt` is the real HKDF salt,
+ * fresh on every save as the password path's is, and `kdf` (ignored by old
+ * shells) says which key opens it.
+ */
+async function sealBody(json: string, kdoc: CryptoKey): Promise<string> {
+  const salt = new Uint8Array(16)
+  const iv = new Uint8Array(12)
+  crypto.getRandomValues(salt)
+  crypto.getRandomValues(iv)
+  const ct = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource }, await bodyKeyFor(kdoc, salt), new TextEncoder().encode(json))
+  const env: EncEnvelope = {
+    format: 'bento/enc', v: 1, kdf: 'hkdf-kdoc',
+    salt: eb64.enc(salt), iv: eb64.enc(iv), data: eb64.enc(new Uint8Array(ct)),
+  }
+  return JSON.stringify(env)
+}
+
+/** Open an identity-sealed envelope with the raw document key; null if it isn't one or the key is wrong. */
+export async function openIdentitySealed(env: EncEnvelope, kdoc: Uint8Array): Promise<string | null> {
+  if (env.kdf !== 'hkdf-kdoc') return null
+  try {
+    const base = await crypto.subtle.importKey('raw', kdoc as BufferSource, 'HKDF', false, ['deriveKey'])
+    const pt = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: eb64.dec(env.iv) as BufferSource }, await bodyKeyFor(base, eb64.dec(env.salt)), eb64.dec(env.data) as BufferSource)
+    return new TextDecoder().decode(pt)
+  } catch {
+    return null
+  }
+}
+
 /** Decrypt an envelope with a candidate password; null on wrong password. */
 export async function decryptEnvelope(env: EncEnvelope, password: string): Promise<string | null> {
   try {
@@ -505,7 +673,9 @@ export async function decryptEnvelope(env: EncEnvelope, password: string): Promi
  * it is DOM-free, so it is the seam a rig can drive the real write path with.
  */
 export async function encodeDocBody(doc: KernelDoc): Promise<string> {
-  return encPassword ? encryptBody(JSON.stringify(doc), encPassword) : JSON.stringify(doc)
+  if (encPassword) return encryptBody(JSON.stringify(doc), encPassword)
+  if (sealBodyKey) return sealBody(JSON.stringify(doc), await sealBodyKey)
+  return JSON.stringify(doc)
 }
 
 export async function serializeDocInto(shell: Document, doc: KernelDoc): Promise<string> {
@@ -519,13 +689,17 @@ export async function serializeAuto(doc: KernelDoc): Promise<string> {
 }
 
 export function suggestedFileName(doc: KernelDoc, suffix = ''): string {
-  const base = doc.title.replace(/[^\w\d-]+/g, '_').replace(/^_+|_+$/g, '') || 'Untitled'
+  // An encrypted deck should not carry its title in the download filename
+  // either — use a neutral default (the app name). The real title is kept in the
+  // live tab and returns to the filename once the password is cleared.
+  const source = isBodySealed() ? appConfig().appName : doc.title
+  const base = source.replace(/[^\w\d-]+/g, '_').replace(/^_+|_+$/g, '') || 'Untitled'
   return `${base}${suffix ? `-${suffix}` : ''}.bento.html`
 }
 
 // --- writing to disk --------------------------------------------------------
 
-type SaveResult = 'saved' | 'saved-as' | 'downloaded' | 'cancelled'
+type SaveResult = 'saved' | 'saved-as' | 'copied' | 'downloaded' | 'cancelled'
 
 interface FsFileHandle {
   createWritable(): Promise<{ write(data: Blob): Promise<void>; close(): Promise<void> }>
@@ -659,6 +833,10 @@ async function pickHandle(
 }
 
 async function writeHandle(handle: FsFileHandle, html: string) {
+  // Yield to the event loop before disk I/O.
+  // On Linux + Wayland it is important to give the compositor a chance to
+  // commit pending frames, before Disk I/O.
+  await new Promise((r) => setTimeout(r, 0))
   const writable = await handle.createWritable()
   await writable.write(new Blob([html], { type: 'text/html' }))
   await writable.close()
@@ -697,18 +875,27 @@ function handleDb(): Promise<IDBDatabase> {
     req.onerror = () => reject(req.error)
   })
 }
-async function idbHandle(op: 'get' | 'put' | 'delete', docId: string, val?: unknown): Promise<unknown> {
+async function idbHandle(op: 'get' | 'put' | 'delete', key: string, val?: unknown): Promise<unknown> {
   const db = await handleDb()
   try {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(HANDLE_STORE, op === 'get' ? 'readonly' : 'readwrite')
       const store = tx.objectStore(HANDLE_STORE)
-      const r = op === 'get' ? store.get(docId) : op === 'put' ? store.put(val, docId) : store.delete(docId)
+      const r = op === 'get' ? store.get(key) : op === 'put' ? store.put(val, key) : store.delete(key)
       r.onsuccess = () => resolve(op === 'get' ? r.result : undefined)
       r.onerror = () => reject(r.error)
     })
   } finally { db.close() }
 }
+
+/** The store key for one FILE's handle. A copy shares its origin's docId
+ *  ("Save a copy…" is the same deck, same live session), so keying by docId
+ *  ALONE let the last-saved file evict the other's handle: saving a copy
+ *  overwrote the original's entry, and reopening the original then fell back to
+ *  the picker (#556). Keying by docId AND file name gives each file its own
+ *  entry — correct whichever deck "Save a copy…" leaves open, because it keys
+ *  by the file that was actually written. U+001F can't occur in a file name. */
+const handleKey = (docId: string, name: string) => `${docId}\u001f${name}`
 
 /** A FileSystemFileHandle with the permission methods (not in every lib.dom). */
 type PermHandle = FsFileHandle & {
@@ -728,9 +915,10 @@ const isRealHandle = (h: unknown): h is PermHandle =>
  *  There a persistent grant has no identity to bind to, so it is not offered;
  *  the per-session handle still works. Real web origins and real-origin host
  *  apps (isolated storage) persist as normal. */
-async function persistHandle(doc: KernelDoc, handle: FsFileHandle): Promise<void> {
+export async function persistHandle(doc: KernelDoc, handle: FsFileHandle): Promise<void> {
   if (sharedStorageOrigin() || !doc.docId || !isRealHandle(handle)) return
-  try { await idbHandle('put', doc.docId, handle) } catch { /* best effort — a lost handle just means tomorrow's picker */ }
+  // Per FILE (docId + name), not per docId — see handleKey (#556).
+  try { await idbHandle('put', handleKey(doc.docId, handle.name), handle) } catch { /* best effort — a lost handle just means tomorrow's picker */ }
 }
 
 /**
@@ -753,22 +941,33 @@ export async function reconnectHandle(doc: KernelDoc): Promise<FsFileHandle | nu
   // the planted-entry path. Real, isolated origins reconnect as normal.
   if (sharedStorageOrigin()) return null
   if (!doc.docId) return null
-  let stored: unknown
-  try { stored = await idbHandle('get', doc.docId) } catch { return null }
-  if (!isRealHandle(stored)) return null // absent, or a host polyfill handle
-  // the remembered handle must be the file on screen: docId + name. isSameEntry
-  // needs a second handle we do not have on a bare file:// reopen, so the name
-  // check is the guard.
+  // The remembered handle must be the file ON SCREEN, and the only check we have
+  // on a bare reopen is its NAME (isSameEntry needs a second handle we do not
+  // have). With no name on screen — the hosted app, nothing open — there is
+  // nothing to verify against, so we do NOT reconnect: reading a docId-only entry
+  // unchecked could re-permission a handle to a different file. A real reopen
+  // always has a name.
   const onScreen = openedFileName()
-  if (onScreen && stored.name !== onScreen) return null // mismatch → picker, entry kept
+  if (!onScreen) return null
+  // Primary key is per FILE (docId + name). Fall back to the legacy docId-only
+  // key for entries written before #556 — the name guard below validates it too,
+  // so the fallback is no weaker than the primary.
+  let key = handleKey(doc.docId, onScreen)
+  let stored: unknown
+  try {
+    stored = await idbHandle('get', key)
+    if (!isRealHandle(stored)) { key = doc.docId; stored = await idbHandle('get', key) }
+  } catch { return null }
+  if (!isRealHandle(stored)) return null // absent, or a host polyfill handle
+  if (stored.name !== onScreen) return null // mismatch → picker, entry kept
   try {
     let perm = await stored.queryPermission({ mode: 'readwrite' })
     if (perm !== 'granted') perm = await stored.requestPermission({ mode: 'readwrite' })
     if (perm === 'granted') return stored
-    void idbHandle('delete', doc.docId) // denied → forget it, use the picker
+    void idbHandle('delete', key) // denied → forget it, use the picker
     return null
   } catch { // NotFoundError (file moved/deleted) or any handle failure
-    void idbHandle('delete', doc.docId)
+    void idbHandle('delete', key)
     return null
   }
 }
@@ -791,10 +990,17 @@ export async function saveFile(doc: KernelDoc, forcePicker = false): Promise<Sav
     if (forcePicker || !fileHandle) {
       // forcePicker is only ever "Save a copy…"; a first save of an unsaved
       // document is in-place by intent even though it must also pick.
-      const handle = await pickHandle(doc, '', undefined, forcePicker ? 'copy' : 'in-place')
+      const isCopy = forcePicker
+      const handle = await pickHandle(doc, '', undefined, isCopy ? 'copy' : 'in-place')
       if (!handle) return 'cancelled'
-      fileHandle = handle
       await writeHandle(handle, html)
+      // "Save a copy…" keeps the open deck on the ORIGINAL (maintainer ruling,
+      // 2026-10-15): the copy is written, but the editor's handle stays with the
+      // original and the copy is NOT remembered as this doc's handle — so the
+      // next ⌘S still targets the original and reopening it still reconnects.
+      // Only a first in-place save retargets onto the file it just created.
+      if (isCopy) return 'copied'
+      fileHandle = handle
       void persistHandle(doc, handle)
       return 'saved-as'
     }
@@ -852,15 +1058,22 @@ export function consumeLaunchQueue(): void {
   }
   const lq = w.launchQueue
   if (!lq || typeof lq.setConsumer !== 'function') return
-  // The open document's #bento-doc, captured now (boot, before any edit), CRLF
-  // normalised to match embeddedDocBlock. The handle we adopt must still hold THIS
-  // document: a host bug that vends the wrong file would otherwise have the first
-  // autosave silently overwrite it.
-  const booted = readEmbeddedDoc()?.replace(/\r\n/g, '\n') ?? null
+  // The open document's #bento-doc, captured now (boot, before any edit), read
+  // from the element directly and normalised EXACTLY as embeddedDocBlock does, so
+  // the two compare equal. This distinguishes a present-but-EMPTY block (a pristine
+  // New document → '') from a MISSING one (not a Bento document → null), which
+  // readEmbeddedDoc collapses: a New document must still adopt the host's handle
+  // (B6), or its first ⌘S becomes a Save-As picker that writes a second file. The
+  // handle we adopt must still hold THIS document: a host bug that vends the wrong
+  // file would otherwise have the first autosave silently overwrite it.
+  const blockEl = document.getElementById(DATA_BLOCK_ID)
+  const booted = blockEl ? (blockEl.textContent ?? '').replace(/\r\n/g, '\n').trim() : null
   try {
     lq.setConsumer(async (params) => {
       const handle = params?.files?.[0]
-      if (!handle || !booted || typeof handle.getFile !== 'function') return
+      // booted === null means no block at all (not a Bento document) — nothing to
+      // verify against; '' (a pristine shell) is a real, adoptable document.
+      if (!handle || booted === null || typeof handle.getFile !== 'function') return
       try {
         const text = await (await handle.getFile()).text()
         // Adopt only if the file is still this document AND nothing claimed a handle

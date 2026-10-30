@@ -292,5 +292,21 @@ console.log('\nmain.ts records the revision inside the queue for both writes of 
   check((src.match(/recordOnSave\(|recordRevision\(/g) ?? []).length === 2, 'and nowhere else in main.ts (no second, out-of-queue call)')
 }
 
+// Save a copy… (a 'copied' result) is never a save of THIS document: it wrote a
+// different file, so it must not clear the dot or count as current. (Spaces'
+// copy does not route through saveRevision today, so this is the kernel #705
+// type-widen made safe at the saveRevision seam.) Mutation: saving.ts clearing
+// the dot / reporting current:true for 'copied' reds this.
+{
+  const p = parseSpace(JSON.stringify({ format: 'bento/spaces', version: 1, docId: 'cp', title: 'Copy', pages: [{ id: 'p', title: 'P', blocks: [{ id: 'b', type: 'p', html: 'x' }] }] }))
+  assert(p.ok)
+  const store = new SpacesStore(p.doc)
+  const queue = new SaveQueue({ getDocument: () => store.doc, getRevision: () => store.revision })
+  store.setDirty(true)
+  const out = await saveRevision(store, queue, () => Promise.resolve('copied' as const))
+  check(out?.kind === 'written' && out.current === false, 'a \'copied\' write is reported as NOT the current save of this document')
+  check(store.dirty, 'and the open space stays dirty — the copy went to another file')
+}
+
 if (failures) { console.error(`\n${failures} save-race check(s) FAILED`); process.exit(1) }
 console.log('\nspaces save race: an edit made during a write stays unsaved until a write that holds it lands')

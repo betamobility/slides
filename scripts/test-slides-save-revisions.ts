@@ -192,5 +192,20 @@ console.log('\nthe editor writes through the queue')
     'the CRDT stamp happens in the queue\'s prepare step, for auto-save and ⌘S')
 }
 
+console.log('\nSave a copy… (a \'copied\' result) leaves the open deck dirty')
+{
+  // "Save a copy…" writes a DIFFERENT file (kernel returns 'copied' and keeps
+  // the editor on the original). The open deck still has unsaved edits, so the
+  // dot and the beforeunload prompt must STAY. Mutation: saving.ts clearing the
+  // dot for 'copied' (the old `if (current) setDirty(false)`) reds this.
+  const doc = newDoc(); doc.title = 'orig'
+  const store = new Store(doc)
+  const queue = createSaveQueue(store)
+  store.setDirty(true) // unsaved edits in the editor
+  const out = await saveRevision(store, queue, () => Promise.resolve('copied' as const))
+  check(out.kind === 'written' && (out as { result?: string }).result === 'copied', 'the copy write reports \'copied\'')
+  check(store.dirty, 'the open deck stays DIRTY after Save a copy — its edits are not on the original')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

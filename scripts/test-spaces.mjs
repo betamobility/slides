@@ -32,6 +32,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, readdirSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ciText } from './lib/ci-files.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const esbuild = join(root, 'slides/node_modules/.bin/esbuild')
@@ -74,6 +75,7 @@ const RIGS = [
   { name: 'reading', file: 'scripts/test-spaces-reading.ts', bundle: true },
   { name: 'md-strict', file: 'scripts/test-spaces-md-strict.ts', bundle: true },
   { name: 'restore-gate', file: 'scripts/test-spaces-restore-gate.ts', bundle: true },
+  { name: 'restore', file: 'scripts/test-spaces-restore.ts', tzs: TZS_TRAIL, bundle: true },
   { name: 'history', file: 'scripts/test-spaces-history.ts', bundle: true },
   { name: 'mentions', file: 'scripts/test-spaces-mentions.ts' },
   { name: 'size',    file: 'scripts/test-spaces-size.mjs' },
@@ -81,6 +83,14 @@ const RIGS = [
   // built spaces shell and Playwright/Chrome (the CI browser job provides both).
   { name: 'save-revisions', file: 'scripts/test-spaces-save-revisions.ts' },
   { name: 'save-browser', file: 'scripts/test-spaces-save-browser.mjs' },
+  // every chrome field styled, light and dark — the built shell in Chromium
+  { name: 'fields-browser', file: 'scripts/test-spaces-fields-browser.mjs' },
+  { name: 'encrypted-browser', file: 'scripts/test-spaces-encrypted-browser.mjs' },
+  // the older-copy warning and the recovery-off notice, in the built shell
+  { name: 'recovery-browser', file: 'scripts/test-spaces-recovery-browser.mjs' },
+  // a sealed space (identity seal or password) on the build:sealtest shell:
+  // nothing readable in IndexedDB, no preview, neutral tab title, no notice
+  { name: 'sealed-browser', file: 'scripts/test-spaces-sealed-browser.mjs' },
   // drives the BUILT shell in Chrome; self-skips outside CI without one
   { name: 'chrome',  file: 'scripts/test-spaces-chrome.ts' },
 ]
@@ -118,7 +128,10 @@ if (missing.length) {
 //     withheld all eight rigs from someone who asked for the rigs and never
 //     mentioned CI, and told them about CI registration instead. Measured: zero
 //     rig-output lines. Found by bento-team-home-ios.
+// CI is several files (scripts/lib/ci-files.mjs); spaces' steps live in
+// .github/actions/validate-spaces/action.yml, which ci.yml's validate job runs.
 const WORKFLOW = '.github/workflows/ci.yml'
+const WHERE = 'CI (.github/workflows/ + the validate actions they run)'
 const argv = process.argv.slice(2)
 
 if (argv.includes('--manifest')) {
@@ -135,14 +148,14 @@ if (argv.includes('--manifest')) {
     console.error('the whole of what --manifest does. Run it from a full checkout.')
     process.exit(2)
   }
-  const ci = readFileSync(join(root, WORKFLOW), 'utf8')
+  const ci = ciText(root)
   const unregistered = RIGS.filter((r) => !ci.includes(r.file.replace(/^scripts\//, '')))
   if (unregistered.length) {
-    console.error(`these spaces rigs are not registered in ${WORKFLOW}: ${unregistered.map((r) => r.name).join(', ')}`)
-    console.error('A rig nobody runs is not a rig. Add a step for each, or remove it from RIGS.')
+    console.error(`these spaces rigs are not registered in ${WHERE}: ${unregistered.map((r) => r.name).join(', ')}`)
+    console.error('A rig nobody runs is not a rig. Add a step for each to .github/actions/validate-spaces/action.yml, or remove it from RIGS.')
     process.exit(2)
   }
-  console.log(`manifest ok — ${RIGS.length} spaces rigs, all listed here and all registered in ${WORKFLOW}`)
+  console.log(`manifest ok — ${RIGS.length} spaces rigs, all listed here and all registered in ${WHERE}`)
   process.exit(0)
 }
 

@@ -5,7 +5,8 @@
 
 import './styles.css'
 import { anim } from './anim'
-import { configureApp, appConfig } from '../../kernel/src/app.ts'
+import { configureApp } from '../../kernel/src/app.ts'
+import { deckWindowTitle } from './wintitle'
 import { startTheme } from '../../kernel/src/theme.ts'
 import { startNetGuard } from '../../kernel/src/net.ts'
 import {
@@ -30,6 +31,7 @@ function reportGuard(dropped: Dropped[]) {
 import { validateDoc, type ValidateOpts } from './validate'
 import { buildSchema } from './schema'
 import { resolveThemeRefs } from './palette'
+import { routeAllConnectors } from './connectors'
 import { measureText, measureElement, type TextMeasureSpec } from './measure'
 import { betaStarterDoc } from './betastarter'
 import { isStoreOrigin, installStoreHost } from './beta/store' // BETA FORK (v1.1 U8)
@@ -111,6 +113,13 @@ applyDirection()
 const embedded = readEmbeddedDoc()
 const envelope = embedded ? parseEnvelope(embedded) : null
 if (envelope) {
+  // Published BEFORE the gate, synchronously: the shell's loader decides the
+  // app mounted by reading window.bento as soon as this script returns, and an
+  // app waiting for a password has no doc yet. Without this stub every loader
+  // path read as refused, re-ran the app (one gate per path) and painted
+  // "every loader path was refused" over the gates (1.2.4–1.2.8). bootWith
+  // replaces it wholesale after unlock.
+  ;(window as any).bento = { format: 'bento/slides', locked: true }
   void passwordGate()
 } else {
   const parsed = embedded ? parseDoc(embedded) : null
@@ -175,6 +184,12 @@ function bootWith(doc: BentoDoc, docIsFresh = false) {
   // re-derives through the editor's `doc` hook; nothing else would visit a
   // player file at all.
   resolveThemeRefs(doc)
+  // Same reason, connectors (#493): a hand- or agent-written deck can name a
+  // connector's from/to elements with endpoints that are stale or placeholder.
+  // The editor re-routes on edits, but nothing routed a slide nobody touched,
+  // and a player or audience file never meets the editor at all. Derived, not
+  // an edit: it does not dirty the deck or make an undo step.
+  routeAllConnectors(doc)
   if (doc.collab?.role === 'audience') audienceMode(doc)
   else if (doc.readonly) playerMode(doc)
   else editorMode(doc, docIsFresh)
@@ -193,7 +208,7 @@ function bootWith(doc: BentoDoc, docIsFresh = false) {
  * the editor. (docs/DECISIONS.md, the broadcast entry.)
  */
 function audienceMode(doc: BentoDoc) {
-  document.title = `${doc.title} — ${appConfig().appName}`
+  document.title = deckWindowTitle(doc.title)
   if (doc.fonts?.length) injectFonts(doc)
   document.getElementById('bento-splash')?.remove()
 
@@ -252,7 +267,7 @@ function audienceMode(doc: BentoDoc) {
  * never expose the editor. Leaving the presentation lands on a minimal card.
  */
 function playerMode(doc: BentoDoc) {
-  document.title = `${doc.title} — ${appConfig().appName}`
+  document.title = deckWindowTitle(doc.title)
   if (doc.fonts?.length) injectFonts(doc)
   document.getElementById('bento-splash')?.remove()
   const card = document.createElement('div')
@@ -279,7 +294,7 @@ function playerMode(doc: BentoDoc) {
 
 function editorMode(doc: BentoDoc, docIsFresh = false) {
 
-document.title = `${doc.title} — ${appConfig().appName}`
+document.title = deckWindowTitle(doc.title)
 
 // Embedded fonts: register @font-face rules from the asset table so text
 // elements can use bundled families in the editor, presenter and thumbnails.

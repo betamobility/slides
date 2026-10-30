@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { TIPS, TIP_KINDS, tipSpec, tipInsetPx, endTangent, shortenPathEnds, movePathEnds, pathEnds } from '../slides/src/tips.ts'
 import { parseBezier } from '../slides/src/editor/bezier.ts'
+import { routeConnectors, routeAllConnectors } from '../slides/src/connectors.ts'
 import { borderPoint, lineEndpoints, setLineEndpoints, boxCenter, sideMidpoint, connectorEndpoint, boxAnchors, nearestAnchor, boxContains, type ConnectorSide, type Box, type Pt as GPt } from '../kernel/src/geom.ts'
 
 let failures = 0
@@ -48,6 +49,7 @@ const gate = read('slides/src/untrusted.ts')
 ok(/lineStart: oneOf\(\.\.\.TIP_KINDS\), lineEnd: oneOf\(\.\.\.TIP_KINDS\)/.test(gate), 'the shape gate admits exactly the catalogue')
 const panels = read('slides/src/editor/panels.ts')
 const editor = read('slides/src/editor/editor.ts')
+const lineedit = read('slides/src/connectors.ts') // the routing moved here (#493)
 ok(/TIPS\.map\(\(tip\) => \[tip\.kind, t\(tip\.label\)\]\)/.test(panels), 'the panel lists the catalogue — model words as values, translated labels for display')
 ok(/el\.shape === 'line' \|\| \(el\.shape === 'path' && !\/z\\s\*\$\/i\.test/.test(panels), 'tips are offered on lines and OPEN paths, never on a polygon')
 const render = read('slides/src/render.ts')
@@ -203,7 +205,7 @@ console.log('\nthe legacy straight connector\n')
 }
 // and the marker numbers an old deck was drawn with
 ok(/inset the endpoints so the tip's point lands on the box edge/.test(shape) && /tipInsetPx\(el\.lineStart, lw\)/.test(shape), 'a line insets by the catalogue — 2.6 for the original three (asserted above)')
-ok(/el\.shape !== 'line' && el\.shape !== 'path'/.test(editor) && /if \(isPath\) setPathEndpoints\(c, na, nb\)\n\s+else setLineEndpoints\(c, na, nb\)/.test(editor), 'syncConnectors routes lines through setLineEndpoints and paths through setPathEndpoints')
+ok(/el\.shape !== 'line' && el\.shape !== 'path'/.test(lineedit) && /if \(isPath\) setPathEndpoints\(c, na, nb\)\n\s+else setLineEndpoints\(c, na, nb\)/.test(lineedit), 'routeConnectors routes lines through setLineEndpoints and paths through setPathEndpoints')
 const canvas = read('slides/src/editor/canvas.ts')
 ok(/kind === 'curve-connector'/.test(canvas) && /el\.lineEnd = 'arrow'\n\s+if \(fromA\) el\.from/.test(canvas), 'the Curved connector tool draws a path with a tip and anchors like Connector')
 ok(/label: 'Curved connector'/.test(editor) && /label: 'Double arrow'/.test(editor), 'both new shapes are in the Shape menu')
@@ -284,8 +286,45 @@ console.log('\nconnector routing + snapping moved to the kernel (byte-identical)
 
   // slides imports the kernel helpers through ./lineedit (the one import site)
   ok(/export \{ boxCenter, borderPoint, sideMidpoint, boxAnchors, connectorEndpoint, nearestAnchor, boxContains/.test(read('slides/src/editor/lineedit.ts')), 'lineedit re-exports the connector geom — ./lineedit stays the import site')
-  ok(/connectorEndpoint\(fromBox, c\.from\?\.side/.test(editor) && !/const end = \(box/.test(editor), 'editor.ts syncConnectors calls connectorEndpoint, inline end() gone')
+  ok(/connectorEndpoint\(fromBox, c\.from\?\.side/.test(lineedit) && !/const end = \(box/.test(editor), 'routeConnectors (connectors.ts) calls connectorEndpoint, inline end() gone')
   ok(/boxAnchors\(this\.store\.slide\.elements\.find/.test(canvas) && /nearestAnchor\(anchorsFor\(id\)/.test(canvas) && /boxContains\(e, pt, pad\)/.test(canvas), 'canvas.ts uses boxAnchors / nearestAnchor / boxContains, inline dups gone')
+}
+
+// #493 — a deck authored OUTSIDE the editor (by hand, or an agent) names a
+// connector's from/to elements with stale or placeholder endpoints. Every
+// slide is routed at boot (main.ts bootWith) and on every 'doc' event
+// (editor.syncConnectors), not just the slide on screen.
+console.log('\n#493: every slide routes, from the model alone\n')
+{
+  const box = (id: string, x: number) => ({ id, type: 'shape', shape: 'rect', x, y: 300, w: 200, h: 100, rotation: 0, opacity: 1 })
+  const conn = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'shape', shape: 'line', x: 5, y: 5, w: 10, h: 2, rotation: 0, opacity: 1, from: { el: 'A' }, to: { el: 'B' }, ...extra })
+  const deck: any = {
+    slides: [
+      { id: 's1', elements: [box('A', 100)] },
+      { id: 's2', elements: [box('A', 100), box('B', 800), conn('c')] },
+      { id: 's3', elements: [box('A', 100), conn('gone', { to: { el: 'nobody' } })] },
+    ],
+    layouts: [{ id: 'L', elements: [box('A', 100), box('B', 800), conn('lc')] }],
+  }
+  const ends = (el: any) => lineEndpoints(el)
+  ok(routeAllConnectors(deck) === true, 'routing a deck with stale endpoints reports a change')
+  const [a, b] = ends(deck.slides[1].elements[2])
+  ok(Math.abs(a.x - 300) < 1 && Math.abs(a.y - 350) < 1 && Math.abs(b.x - 800) < 1 && Math.abs(b.y - 350) < 1,
+    `slide 2 (not the first) lands on the two borders (${Math.round(a.x)},${Math.round(a.y)} → ${Math.round(b.x)},${Math.round(b.y)})`)
+  const [la, lb] = ends(deck.layouts[0].elements[2])
+  ok(Math.abs(la.x - 300) < 1 && Math.abs(lb.x - 800) < 1, 'a layout\'s connector is routed too')
+  const gone = deck.slides[2].elements[1]
+  ok(gone.to === undefined && gone.from?.el === 'A', 'a ref to an element that is not on the slide is dropped; the live one is kept')
+  const snap = JSON.stringify(deck)
+  ok(routeAllConnectors(deck) === false && JSON.stringify(deck) === snap, 'routing again changes nothing (idempotent — safe on every doc event)')
+  const one: any = { id: 'x', elements: [box('A', 100), box('B', 800), conn('c2')] }
+  ok(routeConnectors(one) === true, 'routeConnectors routes a single slide')
+  // the two entry points
+  const main = read('slides/src/main.ts')
+  const boot = main.slice(main.indexOf('function bootWith('), main.indexOf('function bootWith(') + 1200)
+  ok(/routeAllConnectors\(doc\)[\s\S]*audienceMode\(doc\)[\s\S]*playerMode\(doc\)[\s\S]*editorMode\(doc/.test(boot), 'boot routes the whole deck before editor, player or audience render anything')
+  const sync = editor.slice(editor.indexOf('  private syncConnectors() {'), editor.indexOf('  private syncConnectors() {') + 300)
+  ok(/routeAllConnectors\(this\.store\.doc\)/.test(sync) && !/this\.store\.slide/.test(sync), 'the editor re-routes the whole deck on a doc event, not only the slide on screen')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

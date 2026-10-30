@@ -11,6 +11,9 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.
+- **Native bullets in PowerPoint.** Lists export as PowerPoint bullets (nested and numbered too), not as "•" characters, and an empty list item exports nothing.
+
 ## [2026.10.11] — 2026-10-14
 
 - **New decks and every template in the current Beta design (v1.5.0).** New deck, the blank deck and the client-pitch, insight-brief and workshop templates now open white, in Geist, with the design system's chart colours and all 35 layouts of the general template. Decks you already have keep the look they were saved with.
@@ -173,6 +176,144 @@ Beta deck only ever checks Beta's own signed channel at `slides.betamobility.ai`
   betamobility/slides` installs a skill that downloads this shell, starts from
   Beta templates, applies the design rules and exports PPTX; the published
   agent guide carries a Beta build section.
+## [1.2.10] — 2026-10-24
+
+- **Code can type itself out.** Give a code block the new Typewriter effect
+  (Presenting panel) and, in the show, its code appears character by character
+  behind a moving cursor. Morphing from one code slide to the next keeps the
+  lines that stay and types only the new ones. A long snippet types faster, so
+  no block takes more than six seconds, and reduced motion (M) shows it all at
+  once. Thanks to tikurahul.
+- **Saving a large deck is faster.** Saving no longer rebuilds the file's
+  thumbnail preview from scratch when a slide's images are too big for it, and
+  does its bookkeeping after the file is written rather than before. On a deck
+  with large images, a save took about a third of the time in our tests.
+  Thanks to tikurahul.
+- **A new document saves where it was created.** A document made with New in
+  the Bento app on iPhone, iPad or Android, or in installed Bento, saved its
+  first changes into a second file and left the one you created empty. Its
+  first save now writes to that file.
+- **Clicking a slide no longer makes the slide list jump.** In a long deck,
+  clicking a thumbnail could scroll the list so a different slide ended up
+  under the pointer. The list now only scrolls when it needs to bring the
+  current slide into view.
+- **Security: update this file. This release closes issues found in our own
+  review.** What they were is described here once people have had time to
+  update.
+
+## [1.2.9] — 2026-10-17
+
+- **Password-protected decks open again.** Since 1.2.0, a deck saved with a
+  password showed "This file could not start" instead of asking for the
+  password. It now asks for the password and opens as before. Nothing in the
+  file was lost: the deck was intact, it just could not show the prompt.
+- **A password-protected deck that won't open can be moved to the latest
+  version on bento.page/convert.** Drop the `.bento.html` and choose "The
+  same file, on the latest version". The page puts the file's document,
+  still encrypted and byte for byte, into the newest signed release of its
+  app. It never asks for the password and never decrypts anything. Open the
+  new file and enter your password as usual. It works for any Bento file
+  whose app has a published release, encrypted or not. As always, nothing is
+  uploaded. An encrypted deck is only moved onto a release that can open it
+  (1.2.9 or later).
+- **Security: update this file. This release closes an issue found in our own
+  review.** After updating, **open each password-protected deck, unlock it, and
+  save it once.** What the issue was is described here once people have had time to
+  update.
+- **A browser too old for Bento now names the right app.** The notice it shows
+  said every file was a spreadsheet; a deck now says it is a presentation.
+- **A table written without a style opens.** A deck from another tool or an AI
+  agent whose table had no style settings stopped the properties panel from
+  opening; it now uses the default style.
+
+- **Every text field looks the same.** Text boxes, dropdowns and text areas
+  across the editor share one look: the same height, rounded corners, border
+  and background, and Bento's amber focus ring instead of the browser's blue.
+  The Appearance menu no longer has the browser's plain look, and in the dark
+  theme the speaker notes, comment replies, position and size boxes, chart JSON
+  and the Share name field no longer show a grey browser fill.
+
+## [1.2.8] — 2026-10-16
+
+- **Indent and outdent bullets.** While editing text, Tab moves the bullet
+  under the caret one level deeper, beneath the one above it, and Shift+Tab
+  moves it back up; select several lines to move them together. This works on
+  lists and on bullets you type with "- ". The Typography panel has matching
+  Outdent and Indent buttons; with nothing open for editing they apply to the
+  whole text box. Tab anywhere else does what it did before. Asked for in
+  discussion #368.
+- **Save a copy keeps you on the original.** "Save a copy…" writes the copy and
+  leaves you editing the file you opened: the toast now says "Copy saved — you
+  are still editing the original" instead of "Saved", and the file name, the
+  unsaved-changes dot and live sharing stay with the original until you save it.
+- **Pasting onto another slide keeps the position.** Copy a logo, a header or
+  any element and paste it onto a different slide, and it lands exactly where
+  it was. It steps down and right only when it would cover the same element
+  (pasting onto the slide you copied from, or pasting twice), so repeated
+  pastes still fan out. Reported in #569.
+- **The top bar no longer shifts under your pointer.** Each auto-save's
+  "Saved" note, and the file name beside the deck title appearing or
+  disappearing, used to push the buttons after them sideways — so when you
+  pressed Undo a few times in a row, a click could land on Redo instead. The
+  note now shows over the end of the title, and the file name keeps its place.
+  Reported in #546.
+- **Connectors in decks written outside the editor now attach.** A deck made
+  by hand or by an AI agent can name the two elements a connector joins
+  without giving it the right endpoints. Until now only the slide on screen was
+  ever re-routed, and only after an edit, so a connector on any other slide sat
+  wherever the file put it — in the thumbnails, the slideshow and the PDF. Every
+  slide's connectors now land on their elements' borders as the deck opens, or
+  is replaced from JSON. Doing so is not an edit: the deck is not marked unsaved
+  and there is nothing to undo. (#493)
+- **A table with rounded corners no longer hides rows.** When a rounded
+  table's rows needed more height than its box, the rows past the bottom were
+  cut off with nothing to say so. They now show, as they always did for a table
+  without rounded corners, and the corners sit on the table's real bottom.
+  Checking a deck (`bento check`, `validate()`) reports a new `table-overflow`
+  warning with how many pixels the box is short. Reported in #494.
+- **The Appearance menu no longer offers a font weight.** In About, the
+  light-theme choice was translated as the font weight with the same English
+  name, so it read "Fino" in Portuguese, "Fin" in French and "Leicht" in German.
+  It now reads "Light mode" and "Dark mode", in every language.
+- **Portuguese is Brazilian throughout.** Strings added since the Portuguese
+  catalog arrived had drifted into European Portuguese ("ficheiro", "guardar",
+  "diapositivo", "ecrã", "palavra-passe"). They now match the rest of slides'
+  pt-BR ("arquivo", "salvar", "slide", "tela", "senha").
+- **You're told when a deck has no crash backup.** Opened through bento/home,
+  a deck's crash-recovery copy is kept by the app; when a deck is too large for
+  it, the editor now says "Crash recovery is off for this deck — it’s too large
+  to keep a backup copy. Save often." once, where the save status shows, and
+  the unsaved-changes dot stops saying your work is kept in this browser.
+  Encrypted decks are never backed up there, so they never show it.
+- **Save a copy no longer makes the original forget its file.** After "Save a
+  copy…", the next ⌘S could ask where to save again, or write the copy instead
+  of the file you were working in. It now saves the original, in place, with no
+  picker (#556, #696).
+- **A recovered copy that looks older says so.** When the crash-recovery copy
+  this browser kept is older than the file you just opened, the banner now
+  warns "This recovered copy looks older than the file you opened. Keep the
+  file unless you know it’s newer.", with "Keep the file" as the default and
+  "Restore anyway" beside it. Keeping the file leaves the recovered copy in
+  place rather than deleting it, because the two times can come from different
+  devices' clocks.
+- **Count-up leaves versions and addresses alone.** On a text box that counts
+  up, a run of digits that isn't a number — a version like `1.2.3`, an address
+  like `192.168.1.1` — used to be animated too and settle rewritten (`1.2.3`
+  became `12.3`). It now stays exactly as typed while the real numbers beside
+  it count up. As before, `12.500` counts as twelve point five and
+  `1.250.000` as one million two hundred and fifty thousand (#584).
+- **Typing after inline code at the end of a line is plain text again.** In a
+  text box that already ended a line with `code` — one you saved and reopened,
+  or pasted — the caret could only sit inside the code, so everything typed at
+  the end of that line became code too, and no key got you out. Reported in
+  discussion #626.
+- **The text cursor shows at the start of a line.** While editing a text
+  box, the cursor at the very beginning of a line was hidden under the blue
+  editing frame and the selection box's edge. The frame now sits a few pixels
+  outside the text, and the selection box steps aside while you type, so the
+  cursor is visible wherever it is. The text itself does not move. Reported
+  in #547.
+
 ## [1.2.7] — 2026-10-11
 
 - **One page for PowerPoint, in and out: bento.page/convert.** Drop a

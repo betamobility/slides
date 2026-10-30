@@ -72,7 +72,11 @@ export async function saveRevision<R>(
   if (result === 'cancelled') return { kind: 'cancelled' }
   const current = saved.isCurrent()
   // setDirty, not a bare assignment: it raises 'dirty', which repaints the
-  // dot, and clearing never advances the revision.
-  if (current) store.setDirty(false)
+  // dot, and clearing never advances the revision. Clear ONLY for a save of THIS
+  // file — not 'copied' ("Save a copy…" wrote a DIFFERENT file; the open deck is
+  // still unsaved, so the dot and the beforeunload prompt must stay). Allow-list,
+  // not deny, so a future result value never silently clears the dot.
+  const r = result as string
+  if (current && (r === 'saved' || r === 'saved-as' || r === 'downloaded')) store.setDirty(false)
   return { kind: 'written', result: result as R, doc: saved.doc, current }
 }

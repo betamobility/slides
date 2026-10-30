@@ -29,7 +29,7 @@ const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date
 // noteStoreConflict is synchronous in production; extraction must preserve it.
 const noteNode = cls.members.find((n: any) => n.name?.getText(ast) === 'noteStoreConflict')
 ctx.noteStoreConflict = new Function('markStoreConflict', ts.transpile('function note(err, always = false) ' + noteNode.body.getText(ast), { target: ts.ScriptTarget.ES2022 }) + '; return note')(() => marked++).bind(ctx)
-const deps = { isEncryptionActive: () => false, putRecovery: async () => { backups++; return true }, addVersion: async () => {}, hasFileHandle: () => true, saveRevision, serializeAuto: async (d: any) => JSON.stringify(d), writeUpdatedFile: async () => { writes++; throw new StoreConflictError({ writer: 'service' }) }, markFileSaved() {}, StoreConflictError, t: (s: string) => s }
+const deps = { isEncryptionActive: () => false, isBodySealed: () => false, putRecovery: async () => { backups++; return true }, addVersion: async () => {}, hasFileHandle: () => true, saveRevision, serializeAuto: async (d: any) => JSON.stringify(d), writeUpdatedFile: async () => { writes++; throw new StoreConflictError({ writer: 'service' }) }, markFileSaved() {}, StoreConflictError, t: (s: string) => s }
 const run = method('runAutosave', deps).bind(ctx)
 await run()
 assert.equal(writes, 1)
@@ -50,7 +50,7 @@ const slow = method('runAutosave', { ...deps, writeUpdatedFile: async () => { st
 await slow.call(ctx)
 assert.equal(store.dirty, true)
 let snap: any, conflicted = true, origin = true, banner = '', recovered: any
-const recover = method('checkRecovery', { getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => origin, recoveryChoice, clearStoreConflict: () => { conflicted = false } })
+const recover = method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => origin, recoveryChoice, clearStoreConflict: () => { conflicted = false } })
 ctx.showConflictRecoveryBanner = (_: any, doc: any) => { banner = 'new-deck'; recovered = doc }
 ctx.showRecoveryBanner = () => { banner = 'restore' }
 const older = structuredClone(store.doc)
@@ -76,6 +76,6 @@ for (const json of ['{broken', JSON.stringify(store.doc)]) {
 }
 assert.equal(recoveryChoice({ mismatch: true, storeOrigin: true, conflicted: true }), 'new-deck')
 snap = { json: JSON.stringify(older) }; conflicted = true; banner = ''
-await method('checkRecovery', { getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => true, recoveryChoice: () => 'restore', clearStoreConflict() {} }).call(ctx)
+await method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => true, recoveryChoice: () => 'restore', clearStoreConflict() {} }).call(ctx)
 assert.throws(() => assert.equal(banner, 'new-deck'), 'removing the conflict policy must fail the recovery oracle')
 console.log('PASSED: store recovery chooses new deck only after conflict, gates content/credentials, and rejects malformed/equal snapshots')

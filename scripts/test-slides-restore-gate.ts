@@ -116,7 +116,9 @@ console.log('\nevery restore path uses the gate\n')
 {
   const src = readFileSync(join(root, 'slides/src/editor/editor.ts'), 'utf8')
   const check = src.slice(src.indexOf('private async checkRecovery()'), src.indexOf('private async checkRecovery()') + 900)
-  const banner = src.slice(src.indexOf('private showRecoveryBanner('), src.indexOf('private showRecoveryBanner(') + 1400)
+  // to the end of the method (its closing brace at class indent), not a fixed byte count that goes stale as the banner grows
+  const bannerAt = src.indexOf('private showRecoveryBanner(')
+  const banner = src.slice(bannerAt, src.indexOf('\n  }\n', bannerAt))
   const history = src.slice(src.indexOf('private async openVersionHistory()'), src.indexOf('private async openVersionHistory()') + 2400)
   ok(/gateRestored\(snap\.json, doc\)/.test(check), 'the recovery check gates before offering')
   ok(/gateRestored\(snap\.json, this\.store\.doc\)[\s\S]*replaceDoc\(gated\.doc\)/.test(banner), 'Restore gates against the CURRENT document, then applies the gated one')

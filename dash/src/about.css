@@ -86,20 +86,10 @@
   overflow-wrap: anywhere;
 }
 
+/* The look is THE FIELD (styles.css); a context rule only sizes. */
 .dx-about-in,
-.dx-about select {
-  font: inherit;
-  font-size: var(--fs-ui);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  padding: 4px 7px;
-  background: var(--surface);
-  color: inherit;
-  width: 100%;
-}
-.dx-about-in:focus,
-.dx-about select:focus { outline: none; border-color: var(--blue); }
-.dx-about-in[disabled] { background: var(--panel); color: var(--muted); }
+.dx-about select { width: 100%; }
+.dx-about-in[disabled] { color: var(--muted); }
 
 .dx-about-actions {
   display: flex;
@@ -108,19 +98,14 @@
   margin-top: 6px;
 }
 
+/* The look is THE FIELD (styles.css); this sizes it and sets the monospace
+   face, because it holds JSON. */
 .dx-about-paste {
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   width: 100%;
   min-height: 9rem;
   margin-top: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  padding: 8px;
-  resize: vertical;
-  background: var(--surface);
-  color: inherit;
 }
-.dx-about-paste:focus { outline: none; border-color: var(--blue); }
 
 .dx-about-vers {
   display: flex;
@@ -194,10 +179,11 @@
    neither looks like a control. */
 .dx-mark[data-about], .dx-ver[data-about] { cursor: pointer; }
 .dx-mark[data-about]:hover, .dx-ver[data-about]:hover { color: var(--accent); }
-/* --blue, like every other focus ring in the app: the amber is 2.02:1 on white
-   and misses SC 1.4.11's 3:1. See .dx-btn:focus-visible in styles.css. */
+/* --accent-ink, like every other focus ring in the app (slides' ring). Not the
+   bright --accent: that amber is 2.02:1 on white and misses SC 1.4.11's 3:1;
+   the dark amber passes. See .dx-btn:focus-visible in styles.css. */
 .dx-mark[data-about]:focus-visible, .dx-ver[data-about]:focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
   border-radius: 4px;
 }

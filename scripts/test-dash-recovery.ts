@@ -252,7 +252,9 @@ console.log('\nrestoring a whole workbook is reversible, from both surfaces')
     append(...n: FakeNode[]): void
     remove(): void
     click(): void
+    focus(): void
   }
+  let focused: FakeNode | null = null
   const all: FakeNode[] = []
   const make = (tag: string): FakeNode => {
     const handlers: Record<string, Array<() => void>> = {}
@@ -267,6 +269,7 @@ console.log('\nrestoring a whole workbook is reversible, from both surfaces')
         n.parent = null
       },
       click() { for (const fn of handlers.click ?? []) fn() },
+      focus() { focused = n },
     }
     all.push(n)
     return n
@@ -323,6 +326,69 @@ console.log('\nrestoring a whole workbook is reversible, from both surfaces')
   x!.click()
   ok(bars().length === 0 && store2.doc.title === 'Restored',
     'dismissing with ✕ keeps the restored workbook — it is not a second Undo')
+
+  // THE OLDER-COPY BANNER (maintainer ruling 2026-10-15, slides' wording):
+  // when the snapshot predates the file it WARNS, puts "Keep the file" first
+  // and focused, and keeping does not delete; it never hides the offer. With
+  // no warning it says only what was found — never "newer" or "safe".
+  {
+    const { showRecoveryBanner, decide: decide2 } = await import('../dash/src/recovery.ts')
+    const cleared: string[] = []
+    const clear = (id: string) => { cleared.push(id) }
+    const buttons = () => walk(body).filter((n) => n.tag === 'button').map((n) => n.textContent)
+    const text = () => walk(body).map((n) => n.textContent).join(' ')
+
+    // decide(): the signal, and that it never suppresses the offer
+    const fileAt = '2026-10-15T12:00:00Z'
+    const loadedFile = loaded({ modified: fileAt })
+    const changed = workbook({ title: 'Edited later' })
+    const snapAt = (ms: number): Snapshot => ({ docId: 'doc-1', at: ms, title: 'x', json: JSON.stringify(changed) })
+    const early = decide2({ doc: loadedFile, encrypted: false, readOnly: false, snapshot: snapAt(Date.parse(fileAt) - 60_000) })
+    ok(early.offer && early.older, 'a snapshot from BEFORE the file was saved is offered AND flagged older — never hidden')
+    const late = decide2({ doc: loadedFile, encrypted: false, readOnly: false, snapshot: snapAt(Date.parse(fileAt) + 60_000) })
+    ok(late.offer && !late.older, 'a snapshot from after the save is offered, not flagged')
+    const unknown = decide2({ doc: loaded(), encrypted: false, readOnly: false, snapshot: snapAt(1) })
+    ok(unknown.offer && !unknown.older, 'a file with no `modified` is never called older — unknown says nothing')
+
+    // the older banner
+    const st = new Store(workbook({ title: 'On screen' }))
+    const h = { store: st, showingSheet: () => 'sheet-1', showSheet: () => {} }
+    focused = null
+    showRecoveryBanner(h, workbook({ title: 'Recovered' }), 1_700_000_000_000, true, clear)
+    ok(walk(body).some((n) => n.textContent === 'This recovered copy looks older than the file you opened. Keep the file unless you know it’s newer.'),
+      'older: the banner carries the approved warning, word for word')
+    ok(buttons().join('|') === 'Keep the file|Restore anyway', `older: "Keep the file" then "Restore anyway", and no Discard (${buttons().join(' · ')})`)
+    const keep = walk(body).find((n) => n.textContent === 'Keep the file')!
+    ok(keep.className.includes('dxr-primary') && focused === keep, 'older: Keep is the primary button and takes focus — keeping is the default')
+    ok(!walk(body).find((n) => n.textContent === 'Restore anyway')!.className.includes('dxr-primary'), 'older: Restore anyway is NOT primary')
+    keep.click()
+    ok(bars().length === 0 && cleared.length === 0, 'Keep the file dismisses WITHOUT deleting the snapshot — a false "older" must never cost the copy')
+    ok(st.doc.title === 'On screen', 'and the workbook on screen is untouched')
+
+    showRecoveryBanner(h, workbook({ title: 'Recovered' }), 1_700_000_000_000, true, clear)
+    walk(body).find((n) => n.textContent === 'Restore anyway')!.click()
+    ok(st.doc.title === 'Recovered', 'Restore anyway still restores — the warning advises, it does not forbid')
+
+    // the ordinary banner: unchanged, and claims nothing
+    for (const b of bars()) b.remove()
+    const st2 = new Store(workbook({ title: 'On screen' }))
+    showRecoveryBanner({ store: st2, showingSheet: () => 'sheet-1', showSheet: () => {} }, workbook({ title: 'Recovered' }), 1_700_000_000_000, false, clear)
+    ok(buttons().join('|') === 'Restore|Discard|✕', `not older: Restore, Discard, ✕ as before (${buttons().join(' · ')})`)
+    ok(!/newer|safe|older/i.test(text()), `not older: no claim about which copy is newer or safe — "${text()}"`)
+    walk(body).find((n) => n.textContent === 'Discard')!.click()
+    ok(cleared.length === 1, 'Discard is the one answer that deletes the snapshot')
+    for (const b of bars()) b.remove()
+
+    // CRASH RECOVERY OFF: the exact listener main.ts registers with the kernel
+    const { recoveryOffNotice } = await import('../dash/src/recovery.ts')
+    const said: string[] = []
+    const notice = recoveryOffNotice(new Store(workbook()), (m) => said.push(m))
+    notice('some-other-doc')
+    ok(said.length === 0, 'recovery-off for ANOTHER document says nothing here')
+    notice('doc-1')
+    ok(said.join() === 'Crash recovery is off for this workbook — it’s too large to keep a backup copy. Save often.',
+      `recovery-off for this workbook says the approved sentence, word for word — "${said.join()}"`)
+  }
 
   delete (globalThis as Record<string, unknown>).document
 }

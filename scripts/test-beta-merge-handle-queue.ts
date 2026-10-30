@@ -65,6 +65,11 @@ const before = calls.length
 await saveRevision(store, queue, snapshot => saveFile(snapshot, true))
 await saveRevision(store, queue, async () => { await writeUpdatedFile('negative control'); return 'saved' })
 const escaped = calls.slice(before)
-assert.equal(escaped.filter(c => c.method === 'POST').length, 2, 'control must exercise the missing restoration')
-assert.throws(() => assert.equal(escaped.at(-1).method, 'PUT'), 'destination oracle rejects the missing-hook control')
-console.log('PASSED: refused Save a copy restores the store handle before queued autosave; no duplicate POST or navigation')
+// Since upstream 1.2.10 (#713, "Save a copy keeps you on the original") the
+// kernel never adopts a copy's handle, so even WITHOUT the fork's settlement
+// hook the next autosave goes back to the deck (PUT), not to a second POST.
+// The hook is now a second line of defence; this pins that upstream's own
+// guarantee holds, so a regression there fails here.
+assert.equal(escaped.filter(c => c.method === 'POST').length, 1, 'only the copy itself POSTs, even without the hook (upstream #713)')
+assert.equal(escaped.at(-1).method, 'PUT', 'the autosave after a copy writes the open deck')
+console.log('PASSED: refused Save a copy restores the store handle before queued autosave; no duplicate POST or navigation; upstream keeps the original after a copy')
