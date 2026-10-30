@@ -20,14 +20,15 @@
 // out, a page as its own space) sits in the slot of its KIND — exports with
 // the export, Import beside Replace from JSON, the two ways a document arrives.
 
-import { setEncryptionPassword, isEncryptionActive } from '../../kernel/src/save.ts'
+import { setEncryptionPassword, isEncryptionActive, isBodySealed } from '../../kernel/src/save.ts'
+import { setTabTitle } from './tabtitle.ts'
 import { clearVersions, clearRecovery, listVersions, type Snapshot } from '../../kernel/src/autosave.ts'
 import type { Dialog } from '../../kernel/src/ui/dialog.ts'
 import { t } from './i18n'
 import { ICONS } from './icons'
 import { row, type Menu } from './menus.ts'
-import { docForExport, parseDoc, uid, type SpacesDoc } from './model'
-import { restoreInto } from './restoregate'
+import { docForExport, uid, type SpacesDoc } from './model'
+import { restoreVersion, replaceFromJson } from './restoregate'
 import {
   revisionsOf, historyIsForeign, changesAt, restoredDoc, clearHistory, historyBytes,
   tooLargeForHistory, type ChangeReport,
@@ -65,6 +66,8 @@ export function saveRows(m: Menu, h: DocHost): void {
   row(m, { icon: ICONS.markdown, label: t('Export as Markdown…'), desc: t('Every page, as one .md file'), run: () => h.exportMarkdown() })
   row(m, { icon: ICONS.page, label: t('Export page as a space…'), desc: t('One page and what is under it, as its own file'), run: () => h.exportSpace() })
   h.moreExports?.(m)
+  // isEncryptionActive, not isBodySealed: this is the PASSWORD UI. Change and
+  // remove act on a password, and an identity-sealed space has none.
   if (isEncryptionActive()) {
     row(m, { icon: ICONS.lock, label: t('Change password…'), desc: t('Takes effect on the next save'), off: ro, run: () => openPassword(h) })
     row(m, { icon: ICONS.lock, label: t('Remove password…'),
@@ -164,6 +167,7 @@ function openPassword(h: DocHost): void {
       if (!a.value) { err.textContent = t('Password'); a.focus(); return }
       if (a.value !== b.value) { err.textContent = t('Passwords do not match'); b.focus(); return }
       setEncryptionPassword(a.value)
+      setTabTitle(h.store.doc.title)
       await clearVersions(h.store.doc.docId)
       await clearRecovery(h.store.doc.docId)
       close()
@@ -180,6 +184,7 @@ function openRemovePassword(h: DocHost): void {
     body.append(el('p', 'sp-note', t('The next save writes this space as plain, readable JSON — anybody who opens the file can read every page.')))
     body.append(actions(button(t('Cancel'), close), button(t('Remove the password'), () => {
       setEncryptionPassword(null)
+      setTabTitle(h.store.doc.title)
       close()
       h.notice(t('Password removed. Save to write the space unencrypted.'))
     }, true)))
@@ -198,6 +203,7 @@ function openHistory(h: DocHost): void {
     const render = (versions: Snapshot[]): void => {
       list.textContent = ''
       if (!versions.length) {
+        // isEncryptionActive, not isBodySealed: this note names the password.
         list.append(el('p', 'sp-note', isEncryptionActive()
           ? t('This space is encrypted, so no versions are kept.')
           : t('No versions yet — they build up as you write and save.')))
@@ -213,9 +219,10 @@ function openHistory(h: DocHost): void {
           // every file:// document shares this IndexedDB. A refusal applies
           // nothing and leaves the entry where it is.
           if (h.store.readOnly) { h.notice(t('This file is open read-only')); return }
-          // replaceDoc (inside restoreInto) checkpoints undo first, so ⌘Z walks
-          // this back — the same contract the recovery banner's Restore honours.
-          if (!restoreInto(h.store, v.json)) { h.notice(t('That version could not be read')); return }
+          // replaceDoc (inside restoreVersion) checkpoints undo first, so ⌘Z
+          // walks this back — the same contract the recovery banner's Restore
+          // honours. A version goes BACK: its content, the live history.
+          if (!restoreVersion(h.store, v.json)) { h.notice(t('That version could not be read')); return }
           h.repaint()
           close()
           h.notice(t('Restored the version from {when} — ⌘Z undoes it', { when }))
@@ -224,7 +231,9 @@ function openHistory(h: DocHost): void {
       }
     }
     render([])
-    void listVersions(h.store.doc.docId).then(render).catch(() => { /* no store, no history */ })
+    // a sealed space lists nothing: any entry for it is a plaintext copy an
+    // unsealed session left, which boot deletes (main.ts offerRecovery)
+    if (!isBodySealed()) void listVersions(h.store.doc.docId).then(render).catch(() => { /* no store, no history */ })
   }))
 }
 
@@ -234,7 +243,7 @@ function openHistory(h: DocHost): void {
  *
  * A row's summary is DERIVED here, in the reader's language, from the patch;
  * the file stores no sentence. Restore goes through the same gate as the
- * browser-local timeline (restoregate.ts restoreInto): the version is the
+ * browser-local timeline (restoregate.ts restoreVersion): the version is the
  * document's own, but what is applied is still parsed, sanitized and given the
  * live identity, and replaceDoc checkpoints undo so ⌘Z walks it back.
  */
@@ -268,7 +277,7 @@ function openFileHistory(h: DocHost): void {
         b.addEventListener('click', () => {
           if (h.store.readOnly) { h.notice(t('This file is open read-only')); return }
           const next = restoredDoc(h.store.doc, i)
-          if (!next || !restoreInto(h.store, JSON.stringify(next))) { h.notice(t('That version could not be read')); return }
+          if (!next || !restoreVersion(h.store, JSON.stringify(next))) { h.notice(t('That version could not be read')); return }
           h.repaint()
           close()
           h.notice(t('Restored the version from {when} — ⌘Z undoes it', { when }))
@@ -361,17 +370,16 @@ function openReplaceJson(h: DocHost): void {
     ta.placeholder = t('Paste document JSON here…')
     body.append(ta)
     const apply = button(t('Replace'), () => {
-      const res = parseDoc(ta.value)
-      if (!res.ok) {
+      // The live session belongs to THIS document, not to the pasted text:
+      // replaceFromJson parses and applies going BACK (restoregate.ts), so the
+      // live docId, collab, file mode and history all stay — for this and
+      // bento.loadDoc alike.
+      if (!replaceFromJson(h.store, ta.value)) {
         ta.classList.add('sp-ab-bad')
         apply.textContent = t('That is not a bento/spaces document')
         setTimeout(() => { apply.textContent = t('Replace') }, 2000)
         return
       }
-      // The live session belongs to THIS document, not to the pasted text:
-      // replaceDoc keeps the live docId, collab and file mode itself
-      // (store.ts FROM_LIVE), for this and every other whole-document restore.
-      h.store.replaceDoc(res.doc)
       h.repaint()
       close()
       h.notice(t('Document replaced — ⌘Z undoes'))

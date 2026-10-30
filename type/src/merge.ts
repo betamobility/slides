@@ -23,9 +23,12 @@
 //               one field the format says never to regenerate is MINTED here,
 //               because these are new documents rather than copies of one.
 //
-//   collab      GONE. `docForExport` strips it by REMOVING the field, so a
-//               private key added to the credentials later is covered without
-//               anyone remembering this line. The template's room key and
+//   collab      GONE. The kernel's 'merge' copy tier drops the whole
+//               capability class, so a private key added to the credentials
+//               later is covered without anyone remembering this line. Keys
+//               inside EMBEDDED documents are stripped first (withoutEmbeddedCaps):
+//               projectForCopy works on top-level fields and does not walk
+//               into an embed. The template's room key and
 //               owner key are a live write capability on the author's own
 //               document; shipping them to every recipient hands each of them
 //               edit access to the master, unrevocably.
@@ -74,7 +77,9 @@
 
 import { t } from './i18n.ts';
 import { registerMenuItem, type FeatureContext } from './features.ts';
-import { docForExport, newDocId, spliceText, type TypeDoc } from './model.ts';
+import { newDocId, spliceText, withoutEmbeddedCaps, type TypeDoc } from './model.ts';
+import { projectForCopy, withoutCaps } from '../../kernel/src/docfields.ts';
+import { TYPE_FIELDS } from './docclass.ts';
 // Importing fields.ts here is also what MOUNTS it: registry.ts switches this
 // feature on with one line, and the field engine comes with the merge that
 // needs it.
@@ -282,17 +287,28 @@ export function sourceOfDoc(parsed: unknown): MergeSource | null {
  * The template, merged against one row.
  *
  * See this file's header for what is minted, what is stripped and why. The
- * clone is deep and taken from `docForExport`, so the credentials are gone
- * before anything else is decided about the output.
+ * clone is deep and built by the kernel's 'merge' copy tier, so the credentials
+ * and the history are gone * before anything else is decided about the output.
  */
 export function mergeDoc(template: TypeDoc, row: Record<string, string>,
                          columns: string[], source: string): TypeDoc {
-  const out = JSON.parse(JSON.stringify(docForExport(template))) as TypeDoc;
+  // The kernel's 'merge' tier: content kept; identity RESET; capability,
+  // history (revisions, comments, signatures), both modes and any undeclared
+  // key dropped. Embedded documents' keys go first, because the projection
+  // works on top-level fields and never walks into an embed. Deep-cloned
+  // because 'keep' carries values by reference: without it every letter's body
+  // would share objects with the LIVE template.
+  const out = JSON.parse(JSON.stringify(
+    projectForCopy(withoutEmbeddedCaps(withoutCaps(template)), TYPE_FIELDS, 'merge'))) as TypeDoc;
+  // A reset field is ABSENT, and minting it is the caller's step — the same
+  // sanctioned pattern 'duplicate' uses, not an edit of a kept field. Minted
+  // here, per letter, rather than left to parseDoc at first open, so each letter
+  // has its own stable identity from the moment it is written.
   out.docId = newDocId();
-  out.signatures = [];
+  // TypeDoc declares these as required arrays; the tier dropped what they held.
+  out.signatures = {};
   out.revisions = [];
-  delete out.comments;
-  delete out.template;
+  // The template's last-saved stamp says nothing true about a new letter.
   delete out.modified;
   out.merge = { source, columns: [...columns], row: { ...row } };
   // The TITLE is a plain string, not a block, so its `{{tokens}}` are resolved
@@ -427,6 +443,7 @@ export async function openMerge(ctx: FeatureContext): Promise<void> {
       const lab = document.createElement('span');
       lab.textContent = t('Sheet');
       const sel = document.createElement('select');
+      sel.className = 't-select';
       src.sheets.forEach((s, i) => {
         const o = document.createElement('option');
         o.value = String(i);

@@ -37,6 +37,8 @@ import CryptoKit
 final class EditorViewController: UIViewController, WKScriptMessageHandler, WKURLSchemeHandler,
                                   WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     private let document: BentoDocument
+    /// the open document's saved body is sealed (bento/enc): the app switcher must not show it
+    var isSealed: Bool { SnapshotCover.isSealed(document.html) }
     private var webView: WKWebView!
 
     /// Has the open document been handed to the web app yet? Bento only reaches
@@ -57,13 +59,22 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
     private var isPresentingFullscreen = false
     private var fullscreenObs: NSKeyValueObservation?
 
-    /// Stable per-document host: a truncated SHA-256 of the file's path. Hex
-    /// only, so it is always a valid host component.
-    private lazy var originHost: String = {
-        let path = document.fileURL.standardizedFileURL.path
-        let digest = SHA256.hash(data: Data(path.utf8))
-        return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(24).description
-    }()
+    /// This document's `bento-tray://` host, and so whose web storage it can
+    /// read. It follows the FILE, not the path: see OriginIdentity. Empty until
+    /// decided, and nothing is served or accepted for an empty host.
+    private var originHost = ""
+    /// While a possibly-legacy origin's storage is being checked, before the
+    /// document itself loads.
+    private var probing: (candidate: String, facts: OriginIdentity.Facts, timer: DispatchWorkItem)?
+    /// The attribute hint this document runs under, when it has no document
+    /// identifier. Our own saves replace the file, so its recorded resource id
+    /// is refreshed after each one, or a later move couldn't be followed.
+    private var originHint: String?
+    /// The kernel's per-document store, held natively: see HostDocStore.
+    private let docStore = HostDocStore()
+    /// Store requests run here, one at a time and in order, off the main thread:
+    /// a recovery copy can be tens of megabytes.
+    private let storeQueue = DispatchQueue(label: "page.bento.home.docstore-requests")
 
     /// Called when the user leaves the document. The browser owns teardown —
     /// closing the UIDocument and releasing the security scope — because it
@@ -258,14 +269,20 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
         cfg.preferences.isElementFullscreenEnabled = false
         cfg.setURLSchemeHandler(self, forURLScheme: "bento-tray")
         cfg.userContentController.add(self, name: "bentoFile")
+        cfg.userContentController.add(self, name: "bentoOriginProbe")
 
         // .atDocumentStart is required, not stylistic: Bento decides whether it
         // can save during boot, so a bridge injected later arrives after the
         // editor has already concluded it cannot.
         if let js = Bundle.main.url(forResource: "bridge", withExtension: "js"),
            let src = try? String(contentsOf: js, encoding: .utf8) {
+            // What THIS host implements, declared before the bridge reads it. The
+            // bridge offers the page a per-document store only when told so: a
+            // bridge that advertised one a host didn't implement would have the
+            // kernel keep member keys for the page only, and lose them on reload.
+            let caps = "window.__bentoHostCaps = ['store'];\n"
             cfg.userContentController.addUserScript(
-                WKUserScript(source: src, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+                WKUserScript(source: caps + src, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
 
         webView = WKWebView(frame: view.bounds, configuration: cfg)
@@ -284,7 +301,7 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         view.addSubview(webView)
         observeFullscreen()
-        webView.load(URLRequest(url: URL(string: "bento-tray://\(originHost)/index.html")!))
+        decideOrigin()
 
         view.addGestureRecognizer(TouchWatcher { [weak self] in self?.armIdleFade() })
 
@@ -311,6 +328,25 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
     // MARK: - serving the deck
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        // Serve THIS document's host only. Navigations away are refused
+        // elsewhere (LinkPolicy), but a frame inside the document is not a
+        // navigation, and this handler used to answer every host with the open
+        // document. So a page could frame another document's host and run
+        // itself there. Measured: it did run in that origin, but WebKit
+        // partitions a framed origin's storage by the top-level page, so it saw
+        // none of that document's storage, and the bridge already refuses
+        // frames (BridgeSender). Defence in depth, then: there is no reason to
+        // serve a document under any host but its own.
+        guard let url = task.request.url, !originHost.isEmpty, url.host == originHost else {
+            task.didFailWithError(URLError(.resourceUnavailable)); return
+        }
+        if probing != nil {
+            guard url.path == Self.probePath else { task.didFailWithError(URLError(.resourceUnavailable)); return }
+            let body = Data((Self.probeHTML ?? "").utf8)
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                            headerFields: ["Content-Type": "text/html; charset=utf-8"])!)
+            task.didReceive(body); task.didFinish(); return
+        }
         let resp = HTTPURLResponse(url: task.request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
                                    headerFields: ["Content-Type": "text/html; charset=utf-8",
                                                   "Content-Length": String(document.html.count)])!
@@ -319,6 +355,106 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
         task.didFinish()
     }
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
+
+    // MARK: - The per-document store
+
+    /// The wire is pinned in home/bridge.js, shared with Android:
+    /// get → b64 or null · set → null · list → a JSON array string · delete →
+    /// null; failures are !ok with 'refused' (an unknown name), 'too-large' or
+    /// 'unavailable'. The partition is THIS document's origin — the identity
+    /// OriginIdentity minted — and never anything the page sent.
+    private func handleStore(_ op: String, _ m: [String: Any], _ id: Int) {
+        let partition = originHost
+        let name = (m["name"] as? String).flatMap(HostDocStore.Name.init(rawValue:))
+        let b64 = m["b64"] as? String
+        storeQueue.async { [weak self] in
+            guard let self else { return }
+            let answer: (Bool, String?)
+            switch op {
+            case "store.list":
+                guard let names = self.docStore.list(in: partition)?.map(\.rawValue),
+                      let json = (try? JSONSerialization.data(withJSONObject: names)).flatMap({ String(data: $0, encoding: .utf8) })
+                else { answer = (false, "unavailable"); break }
+                answer = (true, json)
+            case "store.get":
+                guard let name else { answer = (false, "refused"); break }
+                // a read that failed is NOT "absent": see HostDocStore.Read
+                switch self.docStore.get(name, in: partition) {
+                case .found(let d): answer = (true, d.base64EncodedString())
+                case .absent: answer = (true, nil)
+                case .unavailable: answer = (false, "unavailable")
+                }
+            case "store.set":
+                guard let name else { answer = (false, "refused"); break }
+                guard let b64, let data = Data(base64Encoded: b64) else { answer = (false, "refused"); break }
+                switch self.docStore.set(name, data, in: partition) {
+                case .stored: answer = (true, nil)
+                case .tooLarge: answer = (false, "too-large")
+                case .unavailable: answer = (false, "unavailable")
+                }
+            default: // store.delete
+                guard let name else { answer = (false, "refused"); break }
+                self.docStore.delete(name, in: partition)
+                answer = (true, nil)
+            }
+            DispatchQueue.main.async { self.reply(id, ok: answer.0, value: answer.1) }
+        }
+    }
+
+    // MARK: - Which origin
+
+    private func decideOrigin() {
+        let facts = OriginStore.facts(for: document.fileURL, html: document.html)
+        let d = OriginIdentity.decide(facts, index: OriginStore.shared.index,
+                                      secret: OriginStore.shared.secret, newHint: OriginStore.newHint)
+        guard case .probeLegacy(let candidate) = d else { settleOrigin(d, facts: facts); return }
+        guard Self.probeHTML != nil else {
+            // no probe to ask with: never adopt blind
+            settleOrigin(OriginIdentity.settleLegacy(candidate, storedDocIds: [OriginIdentity.unattributable], f: facts,
+                                                     secret: OriginStore.shared.secret, newHint: OriginStore.newHint), facts: facts)
+            return
+        }
+        // A file never seen here, at a path never claimed: possibly one opened
+        // before origins followed the file. Its storage stays its own only if
+        // everything stored there is this document's — ask that origin, then load.
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self, let p = self.probing else { return }
+            // no answer: never adopt blind
+            self.settleOrigin(OriginIdentity.settleLegacy(p.candidate, storedDocIds: [OriginIdentity.unattributable], f: p.facts,
+                                                         secret: OriginStore.shared.secret, newHint: OriginStore.newHint),
+                              facts: p.facts)
+        }
+        probing = (candidate, facts, timer)
+        originHost = candidate
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timer)
+        webView.load(URLRequest(url: URL(string: "bento-tray://\(candidate)\(Self.probePath)")!))
+    }
+
+    private func settleOrigin(_ d: OriginIdentity.Decision, facts: OriginIdentity.Facts) {
+        let origin: String, hint: String?
+        switch d {
+        case .known(let o): origin = o; hint = nil
+        case .fresh(let o, let h): origin = o; hint = h
+        case .probeLegacy(let o): origin = o; hint = nil   // not reached: settleLegacy never returns it
+        }
+        if let hint { OriginStore.writeHint(hint, to: document.fileURL) }
+        OriginStore.shared.record(origin, hint: hint, facts: facts)
+        originHint = facts.documentKey == nil ? (hint ?? facts.hint) : nil
+        probing = nil
+        originHost = origin
+        webView.load(URLRequest(url: URL(string: "bento-tray://\(origin)/index.html")!))
+    }
+
+    private static let probePath = "/__bento-origin-probe"
+    /// OriginProbe.js, wrapped as a page. It says whose data a possibly-legacy
+    /// origin holds; the same file is run against real IndexedDB by
+    /// scripts/test-home-origin-probe.mjs. nil if it's missing from the bundle,
+    /// and then nothing is ever adopted.
+    private static let probeHTML: String? = {
+        guard let u = Bundle.main.url(forResource: "OriginProbe", withExtension: "js"),
+              let js = try? String(contentsOf: u, encoding: .utf8) else { return nil }
+        return "<!doctype html><meta charset=\"utf-8\"><script>\n" + js + "\n</script>"
+    }()
 
     // MARK: - downloads
     //
@@ -486,6 +622,21 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
     // MARK: - the save bridge
 
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "bentoOriginProbe" {
+            let sender = message.frameInfo.securityOrigin
+            guard let p = probing, message.frameInfo.isMainFrame, sender.protocol == "bento-tray",
+                  sender.host == p.candidate, let body = message.body as? [String: Any],
+                  let ids = body["ids"] as? [String] else { return }
+            p.timer.cancel()
+            // Anything the probe couldn't attribute to a docId refuses the origin.
+            var stored = Set(ids)
+            if body["unattributable"] as? Bool != false { stored.insert(OriginIdentity.unattributable) }
+            let d = OriginIdentity.settleLegacy(p.candidate, storedDocIds: stored, f: p.facts,
+                                                secret: OriginStore.shared.secret, newHint: OriginStore.newHint)
+            settleOrigin(d, facts: p.facts)
+            return
+        }
+        guard message.name == "bentoFile" else { return }
         // Only the open document may use the bridge. Checked before anything in
         // the message is read; see BridgeSender.
         let sender = message.frameInfo.securityOrigin
@@ -540,13 +691,23 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
             let text = (m["text"] as? String) ?? ""
             let name = (m["name"] as? String) ?? ""
             if targetsOpenDocument(name) {
-                document.html = Data(text.utf8)
-                // updateChangeCount + autosave is the sanctioned path: it
-                // coordinates with iCloud and file coordination rather than
-                // writing behind UIDocument's back.
-                document.updateChangeCount(.done)
-                document.save(to: document.fileURL, for: .forOverwriting) { [weak self] ok in
-                    self?.reply(id, ok: ok, value: ok ? nil : "write failed")
+                let bytes = Data(text.utf8)
+                let sealed = BentoIndex.isEncrypted(Array(String(decoding: bytes.prefix(BentoIndex.headBytes), as: UTF8.self).utf16))
+                // a sealed file's index entry goes BEFORE the write; the change
+                // count is set inside, so autosave can't write first
+                LibraryIndex.shared.beforeSave(document.fileURL, sealed: sealed) { [weak self] in
+                    guard let self else { return }
+                    self.document.html = bytes
+                    // updateChangeCount + autosave is the sanctioned path: it
+                    // coordinates with iCloud and file coordination rather than
+                    // writing behind UIDocument's back.
+                    self.document.updateChangeCount(.done)
+                    self.document.save(to: self.document.fileURL, for: .forOverwriting) { [weak self] ok in
+                        // the library and Spotlight see this save now, not at the next walk
+                        if ok, let url = self?.document.fileURL { LibraryIndex.shared.refresh(url) }
+                        if ok, let self, let h = self.originHint { OriginStore.shared.refreshHint(h, for: self.document.fileURL) }
+                        self?.reply(id, ok: ok, value: ok ? nil : "write failed")
+                    }
                 }
             } else {
                 switch exports.write(name: name, text: text, id: id) {
@@ -566,6 +727,9 @@ final class EditorViewController: UIViewController, WKScriptMessageHandler, WKUR
                     reply(id, ok: false, value: why)
                 }
             }
+
+        case "store.get", "store.set", "store.list", "store.delete":
+            handleStore(op, m, id)
 
         default:
             reply(id, ok: false, value: "unknown op")

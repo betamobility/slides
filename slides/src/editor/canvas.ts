@@ -10,9 +10,10 @@ import type { Store } from '../store'
 import { t } from '../i18n'
 import { defaultShape, internAsset, readableInk, uid, type ShapeElement, type SlideElement, type TableElement, type TextElement } from '../model'
 import { estimatedFrames, fencedElements, splitFences, toggleCodeOnSelection, type FencePart, type PartFrame } from './codefence'
-import { renderSlide, sanitizeHtml } from '../render'
+import { cssColor, renderSlide, sanitizeHtml } from '../render'
 import { isRuntimeSlide } from '../runtime' // BETA FORK: runtime slides (U5)
 import { autoformatAtCaret, clearAutoformat, markdownToHtml, stripMarkerEscapes, undoAutoformat } from './markdown'
+import { inList, shiftList, shiftListHtml, undoIndent } from './listindent'
 import { bulletsToLists } from './bullets'
 import { clipboardToHtml } from './paste'
 import { execFormat, hideFormatBar, syncFormatBar } from './richtext'
@@ -949,14 +950,14 @@ export class SlideCanvas {
         box.style.top = `${el.y}px`
         box.style.width = `${el.w}px`
         box.style.height = `${el.h}px`
-        box.style.borderColor = peer.color
+        box.style.borderColor = cssColor(peer.color, '#888') // a peer's colour: gated
         box.style.borderWidth = `${2 * inv}px`
         if (el.rotation) box.style.transform = `rotate(${el.rotation}deg)`
         if (peer.editing === id) box.classList.add('ed-remote-editing')
         if (!tagged) {
           const tag = document.createElement('div')
           tag.className = 'ed-remote-tag'
-          tag.style.background = peer.color
+          tag.style.background = cssColor(peer.color, '#888')
           tag.textContent = peer.editing === id ? `✏️ ${peer.name}` : peer.name
           tag.style.transform = `scale(${inv})`
           tag.style.transformOrigin = 'bottom left'
@@ -1462,6 +1463,17 @@ export class SlideCanvas {
       inner.innerText = model.content
       this.editingShowedRaw = true
     }
+    // An inline code run that ENDS a line (last thing in the box, or right
+    // before a <br>) has no text position after it, so the caret can only sit
+    // inside it and everything typed at the end of the line became code (#626).
+    // The autoformat leaves a zero-width space after the code it makes; a box
+    // opened later (saved, pasted, from a file) gets the same escape hatch
+    // here. Commit strips every U+200B, so the saved html is unchanged.
+    for (const code of inner.querySelectorAll('code')) {
+      const next = code.nextSibling
+      if (code.closest('pre') || (next && next.nodeName !== 'BR')) continue
+      code.after(document.createTextNode('\u200b'))
+    }
     this.editing = node
     this.editListeners?.abort()
     this.editListeners = new AbortController()
@@ -1484,6 +1496,17 @@ export class SlideCanvas {
         this.commitTextEdit()
         return
       }
+      // Tab / Shift+Tab in a bullet indents / outdents it (listindent.ts);
+      // anywhere else Tab does what it always did
+      if (ev.key === 'Tab' && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+        const sel = document.getSelection()
+        const range = sel?.rangeCount ? sel.getRangeAt(0) : null
+        if (range && inList(inner, range)) {
+          ev.preventDefault()
+          shiftList(inner, range, ev.shiftKey ? -1 : 1, true)
+          return
+        }
+      }
       // ` on a selection wraps each selected line as code (on code: unwraps);
       // with nothing selected it types a backtick as usual (codefence.ts).
       // Not on the select-all that entering the box makes: typing ``` there
@@ -1501,7 +1524,7 @@ export class SlideCanvas {
         // ⌘Z right after a markdown conversion restores the literal markers;
         // otherwise the browser's native contentEditable undo runs
         if (ev.key.toLowerCase() === 'z' && !ev.shiftKey) {
-          if (undoAutoformat()) ev.preventDefault()
+          if (undoAutoformat() || undoIndent(inner)) ev.preventDefault()
           return
         }
         const cmd = { b: 'bold', i: 'italic', u: 'underline' }[ev.key.toLowerCase()]
@@ -1820,6 +1843,24 @@ export class SlideCanvas {
 
   get isEditingText() {
     return !!this.editing
+  }
+
+  /** The panel's Indent / Outdent: the bullets under the caret while a text
+   *  box is open, else the whole selected text box as one undo step. */
+  indentList(dir: 1 | -1): boolean {
+    if (this.editing && !this.editingCell) {
+      const inner = this.editing.querySelector<HTMLElement>('.bento-text-inner')
+      const sel = document.getSelection()
+      if (!inner || !sel?.rangeCount) return false
+      return shiftList(inner, sel.getRangeAt(0), dir, true)
+    }
+    const el = this.store.selectedElements
+    if (el.length !== 1 || el[0].type !== 'text') return false
+    const html = shiftListHtml(el[0].html, dir)
+    if (html === null) return false
+    const id = el[0].id
+    this.store.commit(() => { const e = this.store.element(id); if (e?.type === 'text') e.html = html })
+    return true
   }
 
   /** The element node whose text is open for editing, if any. Callers that run

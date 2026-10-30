@@ -69,6 +69,16 @@ export type Landed =
   /** nothing was written */
   | 'nowhere'
 
+/**
+ * "Save a copy…" never lands in the OPEN file (maintainer ruling 2026-10-15):
+ * the copy is written and the workbook stays on the original — ⌘S, automatic
+ * write-back and the unsaved dot all keep describing the original. The kernel
+ * answers 'copied' and keeps its handle; a download is a copy too. Whatever
+ * the kernel answers, nothing but a cancel is anything other than "elsewhere",
+ * so a future result name can never quietly retarget the workbook.
+ */
+export const copyLanding = (r: string): Landed => (r === 'cancelled' ? 'nowhere' : 'elsewhere')
+
 export interface Acknowledge {
   /** the open file holds these bytes — write-back must not rewrite them */
   adopt(doc: DashDoc): void

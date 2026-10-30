@@ -16,14 +16,18 @@
 // a copy keeps only what is on the list, so an arrived-with field it does not
 // know is dropped, not carried.
 //
-// The private fields a copy must not carry are now the kernel's shared ALLOWLIST
-// (kernel/src/docfields.ts): a reader/invite copy keeps only what is on the list,
-// so a new field in `collab` — private or not — fails CLOSED instead of riding
-// along. The whole-block default drop lives in docForExport.
+// Every copy is now built FROM EMPTY by the kernel's copy table
+// (`projectForCopy`, kernel/src/docfields.ts) using type's field-class map
+// (docclass.ts). A field reaches a copy only when its class's cell for that tier
+// says so: the private halves of `collab` go through the kernel's allowlists,
+// and history — every revision (a WHOLE earlier draft), every comment, every
+// signature — stays out of a view-only copy. The copies used to be a deep clone
+// with only `collab` rewritten, so they carried all of it.
 
 import { mintInvite } from './sync/online.ts';
-import { collabForReader, collabForInvite } from '../../kernel/src/docfields.ts';
+import { projectForCopy } from '../../kernel/src/docfields.ts';
 import { withoutEmbeddedCaps, type TypeDoc } from './model.ts';
+import { TYPE_FIELDS, HISTORY_CLASS } from './docclass.ts';
 
 // Every share copy starts here, so every one is embed-safe: an embedded
 // document never carries its own sharing keys out of this file, however it got
@@ -37,10 +41,28 @@ const clone = (doc: TypeDoc): TypeDoc => withoutEmbeddedCaps(JSON.parse(JSON.str
  * role come from mintInvite, never from the source — so a legacy writer key or a
  * source invite can never ride along.
  */
-export async function inviteCopy(doc: TypeDoc, ownerPriv: string): Promise<TypeDoc> {
-  const out = clone(doc);
+export interface InviteOpts {
+  /**
+   * Keep the history class in the copy — the kernel's invite rule, and the
+   * default. `false` is the inviter's "Leave version history out": the copy is
+   * the invite tier exactly, minus every field classed 'history'. History
+   * remembers text that was deleted, and an invite is a file for someone else.
+   */
+  withHistory?: boolean;
+}
+
+export async function inviteCopy(doc: TypeDoc, ownerPriv: string, opts: InviteOpts = {}): Promise<TypeDoc> {
   const invite = await mintInvite(ownerPriv, 'writer');
-  out.collab = { ...collabForInvite(out.collab!, invite), on: true } as TypeDoc['collab'];
+  // Tier 'invite': collab through collabForInvite (room, read key, public keys,
+  // sync, the FRESH invite — never a private half), the modes dropped (a
+  // template:true copy would open as a roomless new document), history kept,
+  // and any key this build does not declare left behind.
+  const out = projectForCopy(clone(doc), TYPE_FIELDS, 'invite', { invite });
+  if (out.collab) out.collab.on = true;
+  // The inviter chose to leave history out: drop it by CLASS, never by name.
+  if (opts.withHistory === false) {
+    for (const k of HISTORY_CLASS) delete (out as unknown as Record<string, unknown>)[k];
+  }
   return out;
 }
 
@@ -51,7 +73,9 @@ export async function inviteCopy(doc: TypeDoc, ownerPriv: string): Promise<TypeD
  * tries to send.
  */
 export function readerCopy(doc: TypeDoc): TypeDoc {
-  const out = clone(doc);
-  out.collab = { ...collabForReader(out.collab!), on: true } as TypeDoc['collab'];
+  // Tier 'reader': collab through collabForReader, readonly SET true, and every
+  // history field — revisions, comments, signatures — dropped.
+  const out = projectForCopy(clone(doc), TYPE_FIELDS, 'reader');
+  if (out.collab) out.collab.on = true;
   return out;
 }

@@ -8,7 +8,7 @@
 import './styles.css';
 import { configureApp } from '../../kernel/src/app.ts';
 import {
-  capturePristine, readEmbeddedDoc, saveFile, currentFileName, canWriteInPlace,
+  capturePristine, readEmbeddedDoc, saveFile, currentFileName, canWriteInPlace, isBodySealed,
 } from '../../kernel/src/save.ts';
 import { ICONS } from './icons.ts';
 import { t } from './i18n.ts';
@@ -17,14 +17,15 @@ import './registry.ts';   // side-effect: every feature module registers itself
 import { i18nApi } from '../../kernel/src/i18n.ts';
 import { openAbout } from './about.ts';
 import { startTheme, setTheme, themeChoice, type ThemeChoice } from '../../kernel/src/theme.ts';
-import { parseDoc, emptyDoc, uid, wordCount, withoutEmbeddedCaps, type TypeDoc } from './model.ts';
+import { parseDoc, emptyDoc, uid, wordCount, withoutEmbeddedCaps, FORMAT, type TypeDoc } from './model.ts';
 import { gateRestored } from './restoregate.ts';
 import { Store } from './store.ts';
+import { keepLiveHistory } from './docclass.ts';
 import { Editor } from './editor.ts';
 import { paginate, drawPages, type Metrics } from './paginate.ts';
 import { takeSnapshot, startReview } from './redlineview.ts';
 import { printDocument, buildPrintDocument } from './print.ts';
-import { sign as signDoc, verifyChain, newKey } from './canon.ts';
+import { sign as signDoc, verifyAll, sigId, latestSignature, newKey, newHistorySalt, exportPub, historyDisplay, type HistoryLine } from './canon.ts';
 
 // Tell the kernel who this app is — must precede any kernel module use
 // (window title suffix, save-picker label, update manifest).
@@ -84,13 +85,40 @@ if (parsed.ok) {
 } else {
   // NEVER silently start a new document over a file we could not read — the
   // spaces load contract (model.ts). Say what happened and stop.
-  document.body.innerHTML =
-    `<div style="max-width:44rem;margin:12vh auto;padding:0 2rem;font:15px/1.6 system-ui;color:#e6e9ef">
-       <h1 style="font-size:20px">This file could not be opened</h1>
-       <p>${parsed.detail}</p>
-       <p style="color:#8d95a3">Nothing has been changed. Close this tab rather than saving over it.</p>
-     </div>`;
-  throw new Error(`bento/type: ${parsed.detail}`);
+  //
+  // Built with textContent, never markup: `detail` carries text FROM THE FILE
+  // (an unknown format's own name, a JSON parser's message quoting the bytes),
+  // so it is shown as text whatever it contains. Guarded by
+  // scripts/test-type-cantopen-browser.mjs.
+  const card = document.createElement('div');
+  card.style.cssText = 'max-width:44rem;margin:12vh auto;padding:0 2rem;font:15px/1.6 system-ui;color:#e6e9ef';
+  const line = (tag: string, text: string, style = '') => {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (style) el.style.cssText = style;
+    card.append(el);
+  };
+  line('h1', 'This file could not be opened', 'font-size:20px');
+  line('p', parsed.detail);
+  line('p', 'Nothing has been changed. Close this tab rather than saving over it.', 'color:#8d95a3');
+  document.body.replaceChildren(card);
+  // Neutral title while sealed, matching the saved file's title. A file this
+  // refuses may be sealed (bento/type opens no envelope itself), so the title
+  // is the app's name, whatever the shell's <title> says.
+  document.title = 'bento/type';
+  // Tell the shell loader this was a deliberate refusal, not a failed start
+  // (its contract: { doc } running, { locked } at a password gate, { refused }
+  // painted its own refusal). Without it the loader counts the throw below as
+  // a path that failed, tries the next, and paints "This file could not
+  // start" over this message. bento/type has no password gate, so an
+  // encrypted file lands here too. Guarded by
+  // scripts/test-type-cantopen-browser.mjs.
+  (window as unknown as { bento: unknown }).bento = { format: FORMAT, refused: true };
+  // The throw stays: it is how a module stops here, before the editor below
+  // is built over this message, and a throw after a published refusal still
+  // counts as started. A FIXED message: whatever reports this error may not treat it as text, and
+  // the detail (which quotes the file) is already on screen above.
+  throw new Error(`bento/type: the document could not be read (${parsed.err})`);
 }
 
 // ───────────────────────────────────────────────────────────────── chrome
@@ -232,7 +260,9 @@ const showAbout = () => openAbout({
           : t('That is not a bento/type document: {detail}', { detail: parsed.detail }));
         return;
       }
-      store.replace(parsed.doc);
+      // The paste brings content, never history: this file's revisions and
+      // comments stay as they are (docclass.ts keepLiveHistory).
+      store.replace(keepLiveHistory(store.doc, parsed.doc));
       // store.replace swaps the model; only this rebuilds the paper from it.
       // Without it the document changed and the screen did not — which is what
       // "Replace from JSON…" did on the day it was added.
@@ -245,7 +275,9 @@ const showAbout = () => openAbout({
   onRestoreDoc: json => {
     const doc = gateRestored(json, store.doc);
     if (!doc) { alert(t('That saved version could not be restored.')); return; }
-    store.replace(doc);
+    // Going BACK to an older version: its content returns, but history stays
+    // live, so restoring never discards revisions made since (restorerules.ts).
+    store.restore(doc, 'back');
     editor.render();
     schedule();
   },
@@ -813,6 +845,16 @@ async function getKey(): Promise<CryptoKeyPair> {
   deviceKey = k;
   return k;
 }
+/** This device's public key, or null if it has never signed. NEVER mints a
+ *  key: painting the Signatures panel must not create a signing key as a side
+ *  effect. (getKey only mints when nothing is saved, and this returns first.) */
+async function devicePub(): Promise<string | null> {
+  if (deviceKey) return exportPub(deviceKey);
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(KEYSTORE); } catch { /* storage blocked */ }
+  if (!saved) return null;
+  return exportPub(await getKey());
+}
 const fingerprint = (pub: string) =>
   pub.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24).match(/.{1,4}/g)!.join(' ').toUpperCase();
 
@@ -823,19 +865,43 @@ document.getElementById('sign')!.addEventListener('click', async () => {
   if (!name) return;
   try { localStorage.setItem('bento-type-name', name); } catch { /* ignore */ }
   const key = await getKey();
-  const prev = store.doc.signatures[store.doc.signatures.length - 1] ?? null;
+  // The history commitment is salted by the document's own historySalt. The
+  // first signature mints it, in the document, and it is never replaced: every
+  // later signature commits to history under the same salt (canon.ts).
+  if (!store.doc.historySalt) {
+    const salt = newHistorySalt();
+    store.commit(d => { d.historySalt = salt; }, { undoable: false });
+  }
+  // follows the latest signature in display order — ORDERING only (ruling 7)
+  const prev = latestSignature(store.doc.signatures);
   const entry = await signDoc(store.doc, key, { name, prev });
+  const id = sigId(store.doc.docId, entry);
   entry.at = new Date().toISOString();
-  store.commit(d => { d.signatures.push(entry); });
+  // NOT undoable (ruling 7): a signature leaves only by its signer's or the
+  // owner's removal, never by ⌘Z — and a 'back' restore keeps signatures live
+  // (restorerules.ts), so an undo step here would only be a step that does nothing.
+  // its OWN key, so a concurrent signer's lands beside it rather than over it
+  store.commit(d => { d.signatures[id] = entry; }, { undoable: false });
   markDirty(); showTab('sigs'); await paintSigs();
   toast('Signed');
 });
+
+/** Each history line as a LITERAL t() call, so the i18n sweep finds them. */
+function historyLabel(line: HistoryLine): string {
+  switch (line) {
+    case 'matches': return t('History matches what was signed');
+    case 'not-included': return t('This copy doesn’t include the history');
+    case 'elsewhere': return t('History kept on the signer’s copy');
+    case 'changed': return t('The history has changed since you signed — a Snapshot or a trim does this');
+    case 'missing': return t('The history you signed is missing from this document');
+  }
+}
 
 async function paintSigs() {
   const box = document.getElementById('sigsPanel')!;
   const sigs = store.doc.signatures;
   box.replaceChildren();
-  if (!sigs.length) {
+  if (!Object.keys(sigs).length) {
     const h = el('div', 't-hint');
     h.innerHTML = `Nothing signed yet.<br><br>A signature covers the document's <b>content</b> —
       not its timestamp, not which theme you are using — so re-saving never breaks one, but
@@ -844,25 +910,37 @@ async function paintSigs() {
     box.appendChild(h);
     return;
   }
-  const res = await verifyChain(store.doc, sigs);
-  sigs.forEach((s, i) => {
-    const r = res.entries[i];
+  const res = await verifyAll(store.doc, sigs);
+  const mine = await devicePub();
+  res.entries.forEach(r => {
+    const s = r.sig;
     const card = el('div', 't-card');
-    const state = r.ok && r.linked ? `<span class="t-ok">✓ valid</span>`
-      : (!r.ok && r.why === 'content-changed'
-        ? `<span class="t-bad">✕ the document has changed since this was signed</span>`
-        : !r.linked ? `<span class="t-warn">⚠ not linked to the previous signature</span>`
-        : `<span class="t-bad">✕ invalid signature</span>`);
+    // ATTESTATION — checked for every signature: is it valid, and is the
+    // content what was signed?
+    // Each signature stands on its own (ruling 7): which one it follows is
+    // ordering, shown below, and never makes it invalid.
+    const state = r.ok ? `<span class="t-ok">${esc(t('✓ valid'))}</span>`
+      : (r.why === 'content-changed'
+        ? `<span class="t-bad">${esc(t('✕ the content has changed since this was signed'))}</span>`
+        : `<span class="t-bad">${esc(t('✕ invalid signature'))}</span>`);
+    // HISTORY — shown as a state only where this replica can know it (ruling
+    // (8), canon.ts historyDisplay); someone else's reads neutral.
+    const h = historyDisplay(r.history, mine !== null && s.pub === mine);
+    const label = historyLabel(h.line);
+    const hist = h.tone === 'neutral'
+      ? `<div class="t-note">${esc(label)}</div>`
+      : `<div class="t-note"><span class="${h.tone === 'ok' ? 't-ok' : 't-warn'}">${esc(label)}</span></div>`;
     card.innerHTML =
       `<div class="what" style="font-weight:600">${esc(s.name || 'unnamed')}</div>` +
       `<div class="t-fp">${fingerprint(s.pub)}</div>` +
       `<div class="who" style="margin:5px 0 0">${state}` +
-      `${i > 0 ? ` · after ${esc(sigs[i - 1].name || 'previous')}` : ''}</div>`;
+      `${r.after ? ` · ${esc(t('after {name}', { name: sigs[r.after].name || 'previous' }))}` : ''}</div>` +
+      hist;
     box.appendChild(card);
   });
   // two names on one key is exactly what a signature cannot prove
   const byKey = new Map<string, Set<string>>();
-  for (const s of sigs) {
+  for (const s of Object.values(sigs)) {
     if (!byKey.has(s.pub)) byKey.set(s.pub, new Set());
     byKey.get(s.pub)!.add(s.name || 'unnamed');
   }
@@ -912,7 +990,8 @@ const markDirty = () => { dirty = true; paintTitle(); };
 function paintTitle() {
   const name = currentFileName();
   const docTitle = store.doc.title || t('Untitled');
-  document.title = `${dirty ? '• ' : ''}${docTitle} — bento/type`;
+  // Neutral title while sealed, matching the saved file's title.
+  document.title = isBodySealed() ? 'bento/type' : `${dirty ? '• ' : ''}${docTitle} — bento/type`;
   const btn = document.getElementById('save')!;
   // Update the LABEL only. Setting textContent here wiped the icon that
   // label() had just installed, so the button silently lost its glyph the
@@ -938,7 +1017,10 @@ async function save(forcePicker = false) {
   // document's OWN collab is kept — it is this file's.
   const result = await saveFile(withoutEmbeddedCaps(store.doc), forcePicker);
   if (result === 'cancelled') return;
-  dirty = false;
+  // Clear the dot only for a save of THIS file. 'copied' ("Save a copy…") wrote a
+  // DIFFERENT file, so the open document is still unsaved — keep dirty set (and
+  // paintTitle then shows the unsaved state, not a false "Saved to …").
+  if (result === 'saved' || result === 'saved-as' || result === 'downloaded') dirty = false;
   paintTitle();
 }
 
@@ -1023,8 +1105,16 @@ dirty = false; paintTitle();
   serialize: () => JSON.stringify(store.doc),
   loadDoc: (json: string) => {
     const parsed = parseDoc(json);
-    if (!parsed.ok) throw new Error(`bento/type: ${parsed.err === 'empty' ? 'empty document' : parsed.detail}`);
-    store.replace(parsed.doc);
+    if (!parsed.ok) {
+      // The MESSAGE is a fixed sentence: whoever catches this may render it,
+      // and `detail` can quote the file (an unknown format's own name, a JSON
+      // parser's message about the bytes). The detail rides on its own
+      // property for a scripting caller that wants it, as data.
+      const err = new Error(`bento/type: the document could not be read (${parsed.err})`);
+      if (parsed.err !== 'empty') Object.assign(err, { detail: parsed.detail });
+      throw err;
+    }
+    store.replace(keepLiveHistory(store.doc, parsed.doc));      // the same rule as Replace from JSON
     editor.render();
     schedule();
     return true;

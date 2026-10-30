@@ -77,7 +77,7 @@ class FakeFSHandle {
 ;(globalThis as Record<string, unknown>).self = { origin: 'https://bento.page' }
 const ON_SCREEN = 'Q3-board.bento.html'
 
-const { reconnectHandle, consumeLaunchQueue, hasFileHandle, currentFileName, writeUpdatedFile, encodeDocBody, setEncryptionPassword, parseEnvelope, decryptEnvelope, adoptFileHandle, embeddedDocBlock } = await import('../kernel/src/save.ts')
+const { reconnectHandle, persistHandle, consumeLaunchQueue, hasFileHandle, currentFileName, writeUpdatedFile, encodeDocBody, setEncryptionPassword, parseEnvelope, decryptEnvelope, adoptFileHandle, embeddedDocBlock } = await import('../kernel/src/save.ts')
 const DOC = { docId: 'd1', title: 'Q3' }
 const reset = () => store.clear()
 const has = () => store.has('d1')
@@ -139,6 +139,62 @@ const settle = () => new Promise((r) => setTimeout(r, 10))
   ok((await reconnectHandle(DOC as never)) === null, 'no stored handle → null (first-ever save picks)')
 }
 
+// 7b. #556 — "Save a copy…" must not evict the original's remembered handle.
+// A copy shares the original's docId, so a docId-only key let the copy's save
+// overwrite the original's entry; reopening the original then fell to the picker.
+// Drive the REAL persist→reconnect cycle (per-file keying), both reopen orders.
+// At an original web origin, each file lives at its own URL, so openedFileName()
+// (location basename here) is how "which file is on screen" is set.
+{
+  const atFile = (name: string) => {
+    ;(globalThis as Record<string, unknown>).location = { href: `https://bento.page/${name}`, protocol: 'https:', origin: 'https://bento.page' }
+  }
+  reset()
+  const original = new FakeFSHandle('Q3-board.bento.html', { q: 'granted' })
+  const copy = new FakeFSHandle('Q3-copy.bento.html', { q: 'granted' })
+  // save the original, then Save a copy… (same docId d1, different file)
+  atFile('Q3-board.bento.html'); await persistHandle(DOC as never, original as never)
+  atFile('Q3-copy.bento.html'); await persistHandle(DOC as never, copy as never)
+  ok(store.size === 2, 'the copy gets its OWN entry — it does not evict the original (two files, two handles)')
+  // reopen the ORIGINAL
+  atFile('Q3-board.bento.html')
+  ok((await reconnectHandle(DOC as never)) === (original as never),
+    'reopening the original reconnects the original\'s handle (no picker) — the #556 fix')
+  // reopen the COPY
+  atFile('Q3-copy.bento.html')
+  ok((await reconnectHandle(DOC as never)) === (copy as never),
+    'reopening the copy reconnects the copy\'s handle')
+  ;(globalThis as Record<string, unknown>).location = { href: 'https://bento.page/Q3-board.bento.html', protocol: 'https:', origin: 'https://bento.page' }
+}
+// 7c. a legacy docId-only entry (written before #556) still reconnects, via the
+// fallback, and is still name-checked.
+{
+  reset()
+  const legacy = new FakeFSHandle(ON_SCREEN, { q: 'granted' })
+  store.set('d1', legacy) // the pre-#556 key: docId alone
+  ok((await reconnectHandle(DOC as never)) === (legacy as never),
+    'a legacy docId-only entry reconnects through the fallback')
+  reset()
+  const legacyWrong = new FakeFSHandle('Other.bento.html', { q: 'granted' })
+  store.set('d1', legacyWrong)
+  ok((await reconnectHandle(DOC as never)) === null,
+    'and a legacy entry whose name is not the file on screen is still rejected (name guard holds on the fallback)')
+}
+
+// 7d. #556 edge (security): with NO file name on screen (the hosted app, nothing
+// open — openedFileName() is null), a docId-only entry must NOT reconnect: there
+// is no name to verify it against, and a real reopen always has one.
+{
+  reset()
+  ;(globalThis as Record<string, unknown>).location = { href: 'https://bento.page/', protocol: 'https:', origin: 'https://bento.page' } // no .bento.html basename → openedFileName() === null
+  const h = new FakeFSHandle('anything.bento.html', { q: 'granted' })
+  store.set('d1', h) // a legacy docId-only entry
+  ok((await reconnectHandle(DOC as never)) === null, 'with no file name on screen, a docId-only entry is not reconnected (no name to check → picker)')
+  ok(h.queryCalls === 0 && h.requestCalls === 0, 'and its permission is never touched')
+  ok(store.has('d1'), 'the entry is kept (not proven stale)')
+  ;(globalThis as Record<string, unknown>).location = { href: 'https://bento.page/Q3-board.bento.html', protocol: 'https:', origin: 'https://bento.page' }
+}
+
 // 8. SHARED file:// ORIGIN: persistence off, and a planted entry is never used.
 // Chrome gives every file:// deck one IndexedDB, so a malicious local file can
 // plant a handle keyed to this docId and NAMED to match the file on screen —
@@ -181,6 +237,18 @@ const settle = () => new Promise((r) => setTimeout(r, 10))
   ok(/void persistHandle\(doc, handle\)/.test(body) && /void persistHandle\(doc, fileHandle\)/.test(body),
     'saveFile persists the handle on both the picked and the reconnected/adopted save')
   ok(/instanceof FileSystemFileHandle/.test(src), 'only a real FileSystemFileHandle is stored (host polyfill skipped)')
+  // "Save a copy…" keeps the open deck on the ORIGINAL (maintainer ruling
+  // 2026-10-15): the copy path writes the file but must NOT retarget fileHandle
+  // or persist the copy as the doc's handle — only a first in-place save does.
+  // Asserted at source like the ordering above (the write path needs a DOM).
+  {
+    const copyRet = body.indexOf("if (isCopy) return 'copied'")
+    const setHandle = body.indexOf('fileHandle = handle')
+    const persistPicked = body.indexOf('void persistHandle(doc, handle)')
+    ok(copyRet > 0, 'the copy path returns early with \'copied\'')
+    ok(setHandle > copyRet && persistPicked > copyRet,
+      'fileHandle = handle and persistHandle(doc, handle) run ONLY after the isCopy early-return — never for a copy')
+  }
 }
 
 // --- embeddedDocBlock: the string-level #bento-doc extractor ------------------
@@ -202,6 +270,8 @@ console.log('\nembeddedDocBlock reads the #bento-doc body from file bytes')
   const lookalike = `<script data-id="bento-doc">\nDECOY\n${close}` + file(body)
   ok(embeddedDocBlock(lookalike) === body, 'a data-id="bento-doc" lookalike is skipped; the real id block is read')
   ok(embeddedDocBlock('<html>no block here</html>') === null, 'no block → null')
+  ok(embeddedDocBlock(file('')) === '', 'a present-but-EMPTY block → "" (a pristine New shell, distinct from a non-Bento file that has no block)')
+  ok(embeddedDocBlock(file('   \n  ')) === '', 'a whitespace-only block is empty too → ""')
 }
 
 // --- launchQueue: a launched document holds a writable handle at boot ---------
@@ -320,6 +390,50 @@ console.log('\nlaunchQueue adopts the open document — and only it')
       'a Save As during the pending check wins — the launch does not snap back and overwrite it')
   }
 
+  delete (globalThis as Record<string, unknown>).document
+}
+
+// --- B6: a pristine New document adopts its handle ----------------------------
+// A document made with New in bento/home is a pristine shell: #bento-doc is
+// PRESENT but empty. readEmbeddedDoc collapses that to null (like a missing
+// block), so consumeLaunchQueue used to discard the host's hand-over and the
+// first Cmd-S opened a Save-As picker that wrote a SECOND file, leaving the
+// created one empty — the 1.2.9 B6 regression, on every New document in bento/home
+// (Android and iOS via the shared bridge). The adopter now reads the element
+// directly: '' (pristine) adopts; null (no block at all) does not.
+console.log('\nlaunchQueue: a pristine New document adopts its handle (B6)')
+{
+  const pristineFile =
+    `<!doctype html><html><head><script type="application/json" id="bento-doc">\n\n` +
+    `</scr` + `ipt></head><body></body></html>`
+  const handle = (fileText: string | null) => ({
+    kind: 'file', name: 'New-1.bento.html',
+    getFile: async () => { if (fileText === null) throw new Error('unreadable'); return { text: async () => fileText } },
+    async createWritable() { return { async write() {}, async close() {} } },
+  })
+  let pending: unknown
+  const vend = async (files: unknown[], liveBlock: { textContent: string } | null) => {
+    adoptFileHandle(null as never) // reset so this adoption is observable
+    ;(globalThis as Record<string, unknown>).document = {
+      getElementById: (id: string) => (id === 'bento-doc' ? liveBlock : null),
+    }
+    ;(globalThis as Record<string, unknown>).launchQueue =
+      { setConsumer(fn: (p: unknown) => void) { pending = fn({ files }) } }
+    pending = undefined
+    consumeLaunchQueue()
+    await pending
+  }
+
+  // pristine live page (empty block) + a pristine host file (empty block) → adopt
+  await vend([handle(pristineFile)], { textContent: '\n\n' })
+  ok(hasFileHandle(), 'a pristine New shell adopts the host handle — first Cmd-S saves in place, no picker')
+  ok(currentFileName() === 'New-1.bento.html', `and it is the launched New document (${currentFileName()})`)
+
+  // a live page with NO #bento-doc at all (not a Bento document) → booted null → never adopt
+  await vend([handle(pristineFile)], null)
+  ok(!hasFileHandle(), 'a page with no document block adopts nothing (booted is null, not "")')
+
+  adoptFileHandle(null as never)
   delete (globalThis as Record<string, unknown>).document
 }
 
