@@ -12,9 +12,18 @@
 name: CI
 
 on:
+  # BETA FORK: GitHub paused Actions on this fork for usage (2026-10-30), so
+  # changes that only touch docs or Markdown run nothing. The run on main stays:
+  # it is the safety net for PRs merged close together.
   pull_request:
+    paths-ignore: # BETA FORK
+      - 'docs/**'
+      - '**/*.md'
   push:
     branches: [main]
+    paths-ignore: # BETA FORK
+      - 'docs/**'
+      - '**/*.md'
 
 concurrency:
   # PR branches share one group per ref, so a new push collapses onto the tip —
