@@ -3,7 +3,7 @@
   "$id": "https://slides.betamobility.ai/schema/slides.json",
   "title": "bento/slides document",
   "description": "The #bento-doc JSON of a Bento Slides file, generated from the app's validation tables. Guide: https://slides.betamobility.ai/agents.md",
-  "x-bento-version": "2026.10.11",
+  "x-bento-version": "2026.10.12",
   "$ref": "#/$defs/doc",
   "$defs": {
     "prop-fx": {

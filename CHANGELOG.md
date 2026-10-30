@@ -11,10 +11,14 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [2026.10.12] — 2026-10-30
+
 - **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.
-- **Speaker notes where you look for them.** Notes now sit right under the slide's own settings, above the deck-wide Slideshow and Theme sections, so you no longer scroll past every theme colour to write one.
+- **Four new scenes.** The Scenes shelf adds a KPI row, a timeline, a before-and-after comparison and an annotated bar chart, each with presets and settings in the panel.
 - **Know before you export to PowerPoint.** Export PPTX now lists what PowerPoint cannot hold (artwork as pictures, fonts the recipient needs, motion) before the file is written, with Cancel or Export anyway.
 - **Gradients keep their colours in PowerPoint.** A rectangle or ellipse with a gradient exports as a picture of itself instead of flattening to one colour, and the file's theme fonts are the deck's own, so text added in PowerPoint matches instead of turning into Calibri.
+- **Speaker notes where you look for them.** Notes now sit right under the slide's own settings, above the deck-wide Slideshow and Theme sections, so you no longer scroll past every theme colour to write one.
+- **Faster saves, and offline edits that stay.** Current with upstream bento/slides 1.2.10: saving a large deck is quicker, a deck edited offline before its first save keeps those edits when it rejoins, Tab and Shift+Tab indent bullets, and clicking a slide no longer makes the slide list jump.
 - **Native bullets in PowerPoint.** Lists export as PowerPoint bullets (nested and numbered too), not as "•" characters, and an empty list item exports nothing.
 
 ## [2026.10.11] — 2026-10-14
