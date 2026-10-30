@@ -328,6 +328,13 @@ The deck's id is the part after `/d/` in its link. Run these from `server/deck-s
 
 **Verified** in `test/worker.test.mjs` (Miniflare, 2026-10-30). An agent overwrite of a person's deck is restored by following steps 1 to 4, with the bucket handle standing in for the dashboard and `wrangler r2 object get`. The result is byte-identical to the original, keeps its owner and title, and the replaced version is kept. A deleted deck comes back as a new deck with the same bytes. The first live drill on `beta-decks` is the maintainer's, after the deploy below. Record its date here.
 
+**Live drill, 2026-10-30** (worker version `63c384b1`, with the harness service token). A throwaway deck was created as version A and overwritten by an agent as version B. A's history copy was then fetched with step 2's command and put back with steps 3 and 4. Results:
+- **Step 4:** the `PUT` answered `200`.
+- **Served deck:** byte-identical to A (SHA-256 checked).
+- **Step 1 without the dashboard:** the key was found by trying each second around the overwrite, since the name is the version's `updated` time plus the first 8 characters of its ETag.
+
+The deck was then removed with `wrangler r2 object delete`. Its history copies expire under the 30-day rule.
+
 ### Maintainer setup (once)
 
 ```sh
