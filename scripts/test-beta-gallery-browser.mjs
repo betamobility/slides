@@ -70,7 +70,7 @@ console.log('\non the store origin')
   ok(await waitState(p, 'shelf'), 'the dialog opens on the shelf')
   ok(libraryHits.length === 1, 'the manifest is read once, from the login route')
   const cards = await p.locator('.ed-gallery-card').evaluateAll((els) => els.map((e) => [e.dataset.sceneId, e.querySelector('b')?.textContent, !!e.querySelector('img.ed-gallery-still')?.getAttribute('src')?.startsWith('data:image/svg+xml')]))
-  ok(JSON.stringify(cards) === JSON.stringify([['counter', 'Counter', true], ['map', 'Map', true]]), `a card per scene with its still and name (${JSON.stringify(cards)})`)
+  ok(JSON.stringify(cards) === JSON.stringify(JSON.parse(MANIFEST).scenes.map((s) => [s.id, s.name, true])), `a card per scene with its still and name (${JSON.stringify(cards)})`)
   if (shots) await p.locator('.ed-gallery').screenshot({ path: `${shots}/u11-shelf.png` })
 
   await p.locator('.ed-gallery-card[data-scene-id="map"]').click()
@@ -102,6 +102,49 @@ console.log('\non the store origin')
   await waitState(p, 'shelf')
   await p.keyboard.press('Escape')
   ok(await p.locator('.ed-gallery-overlay').count() === 0, 'Escape closes the dialog')
+  await ctx.close()
+}
+
+console.log('\nevery R8 scene: inserted from the shelf, a setting changed in the panel, presented (2026-10-30 roadmap, R8)')
+for (const id of ['kpi-row', 'timeline', 'before-after', 'annotated-bars']) {
+  const want = JSON.parse(MANIFEST).scenes.find((s) => s.id === id)
+  const preset = want.presets[want.presets.length - 1]
+  const { ctx, p } = await storePage()
+  await p.locator('.ed-btn-gallery').click()
+  await waitState(p, 'shelf')
+  await p.locator(`.ed-gallery-card[data-scene-id="${id}"]`).click()
+  await p.locator('.ed-gallery select[data-gallery-preset]').selectOption(preset.name)
+  if (shots) await p.locator('.ed-gallery').screenshot({ path: `${shots}/r8-${id}-detail.png` })
+  await p.locator('.ed-gallery [data-gallery-insert]').click()
+  const at = await p.evaluate((sid) => window.bento.doc.slides.findIndex((s) => s.runtime?.library?.id === sid), id)
+  const values = () => p.evaluate((i) => window.bento.doc.slides[i]?.runtime?.values ?? {}, at)
+  const v = await values()
+  ok(at >= 0 && Object.entries(preset.values).every(([k, x]) => v[k] === x), `${id}: inserted from the shelf with preset "${preset.name}" (slide ${at + 1})`)
+  // the settings panel draws the scene's own form; change the title there
+  const field = p.locator('.ed-props [data-scene-setting="title"]')
+  ok(await field.count() === 1 && await p.locator('.ed-props [data-scene-setting]').count() === want.props.length, `${id}: the panel shows a control for each of its ${want.props.length} settings`)
+  const title = `Set in the panel: ${id}`
+  await field.fill(title)
+  await field.press('Tab')
+  await p.waitForTimeout(150)
+  ok((await values()).title === title, `${id}: the title typed in the panel is in the deck`)
+  if (shots) await p.screenshot({ path: `${shots}/r8-${id}-editor.png` })
+  // present from this slide: the frame runs the scene with the panel's value
+  await p.keyboard.press('Shift+F5')
+  await p.waitForFunction(() => document.querySelector('.bento-present-overlay .reveal .slides > section.present iframe'), null, { timeout: 10_000 }).catch(() => {})
+  let drawn = ''
+  for (let i = 0; i < 40 && !drawn.includes(title); i++) {
+    for (const f of p.frames()) drawn = (await f.evaluate(() => document.getElementById('scene')?.getAttribute('aria-label') ?? '').catch(() => '')) || drawn
+    if (!drawn.includes(title)) await p.waitForTimeout(100)
+  }
+  ok(drawn.includes(title), `${id}: presented, the live scene draws the panel's title (${drawn.slice(0, 80)})`)
+  await p.waitForTimeout(2200) // the entrance lands
+  if (want.steps > 1) {
+    for (let s = 1; s < want.steps; s++) await p.keyboard.press('ArrowRight')
+    await p.waitForTimeout(900)
+  }
+  if (shots) await p.screenshot({ path: `${shots}/r8-${id}-present.png` })
+  await p.keyboard.press('Escape')
   await ctx.close()
 }
 

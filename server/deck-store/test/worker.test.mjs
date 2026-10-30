@@ -2182,7 +2182,7 @@ export async function run(Miniflare) {
         eq(r.status, 304, 'and a revalidation costs a 304')
       }
       const parsed = JSON.parse(lib)
-      eq(parsed.scenes.map((s) => `${s.id}@${s.version}`).join(','), 'counter@1,map@1', 'the manifest lists both seed scenes with ids and versions')
+      eq(parsed.scenes.map((s) => `${s.id}@${s.version}`).join(','), 'annotated-bars@1,before-after@1,counter@1,kpi-row@1,map@1,timeline@1', 'the manifest lists every library scene with ids and versions')
       ok(parsed.scenes.every((s) => s.props.every((p) => 'default' in p) && s.presets.length > 0), 'each with defaults and at least one preset')
 
       // each reader's path answers only its own credential

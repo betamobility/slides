@@ -64,8 +64,34 @@ The store serves the uploaded manifest at `/library/library.json` to a
 signed-in person, at `/api/harness/library.json` to the service token and at
 `/api/publish/library.json` to an agent's grant.
 
-## The two scenes here
+## The scenes here
 
 - `counter`: one number that counts up, with a label.
 - `map`: one place on a coordinate grid, a wide view and a step closer. It
   draws meridians, parallels and a marker. It has no basemap.
+- `kpi-row`: two to four key figures in a row, each with a label and an
+  optional change, green or red by which way is good.
+- `timeline`: up to six dated milestones, placed in proportion to time
+  (`2026`, `2026-04`, `2026-04-15`, `Q2 2026`), with an optional marker for
+  today. Any other date (a phase name) spaces them evenly.
+- `before-after`: two panels and the change between them; the after panel
+  comes in on the second step. Two amounts draw bars on one scale.
+- `annotated-bars`: up to twelve bars and up to two callouts; the callouts
+  come in on the second step. Lists are separated by `;`, so `12,5` reads.
+
+## Captured stills
+
+A scene whose page draws into `<svg id="scene">` draws its defaults before it
+is told anything, and that drawing is its still. Every scene here but
+`counter` and `map` does, laying itself out by arithmetic on character counts,
+never measured text, so the capture is the same on every machine:
+
+```sh
+node scripts/build-beta-library-stills.mjs [<id> ...]   # write still.svg
+node scripts/build-beta-library-stills.mjs --check      # fail when one is stale
+```
+
+`scripts/test-beta-library-browser.mjs` captures again and fails on a stale
+still. Their colours and fonts come from one `TOKENS` table of
+`beta/v131/tokens.json` values; `scripts/test-beta-library.ts` checks every
+value against the token file and that nothing else is written.
