@@ -133,7 +133,10 @@ const hexOr = (value: string | undefined, fallback: string): string => parseColo
 /** "'Playfair Display', Georgia, serif" -> "Playfair Display": PowerPoint wants one family name. */
 export function fontFace(stack: string | undefined, fallback: string): string {
   const first = (stack ?? '').split(',')[0]?.trim().replace(/^['"]|['"]$/g, '')
-  return first || fallback
+  // pptxgenjs writes the face into XML attributes (`typeface="…"`) unescaped,
+  // in every text run and in the theme, and the stack comes from the deck. So
+  // only plain font-name characters pass; anything else takes the fallback.
+  return first && /^[\p{L}\p{N} ._-]{1,64}$/u.test(first) ? first : fallback
 }
 
 // ---- rich text ---------------------------------------------------------------

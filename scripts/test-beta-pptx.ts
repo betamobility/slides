@@ -199,6 +199,17 @@ ok(/linearGradient/.test(rasterised), 'with a rasteriser, the gradient shape is 
 ok(withRaster.report.some((r) => r.elementId === 'grad' && /picture/.test(r.detail)), 'the report says the gradient became a picture')
 const noRaster = await mapDeck(gradDoc)
 ok(noRaster.report.some((r) => r.elementId === 'grad' && /first stop/.test(r.detail)), 'without a rasteriser (CLI) it still flattens to the first stop, and says so')
+const { fontFace } = await import('../slides/src/export/pptx.ts')
+ok(fontFace("'Geist', Arial, sans-serif", 'X') === 'Geist' && fontFace('Times New Roman', 'X') === 'Times New Roman', 'ordinary font stacks give their first face')
+ok(fontFace('Evil"/><a:latin typeface="x', 'Geist') === 'Geist' && fontFace('a&b', 'Geist') === 'Geist', 'a face with XML-significant characters falls back (pptxgenjs writes it unescaped)')
+const evilDoc = JSON.parse(JSON.stringify(gradDoc)) as BentoDoc
+evilDoc.theme = { ...(evilDoc.theme ?? {}), fontFamily: 'Evil"/><x a="', headingFamily: '<b>' } as any
+evilDoc.slides[0].elements.push({ id: 't', type: 'text', x: 0, y: 0, w: 100, h: 40, rotation: 0, opacity: 1, html: 'Hi', fontSize: 20, fontFamily: 'Bad"Face', fontWeight: 400, color: '#000', align: 'left', valign: 'top', lineHeight: 1.2 } as any)
+const evil = await mapDeck(evilDoc)
+writeFileSync(join(work, 'evil.pptx'), Buffer.from(await evil.pptx.write({ outputType: 'nodebuffer' }) as Uint8Array))
+execFileSync('unzip', ['-q', '-o', join(work, 'evil.pptx'), '-d', join(work, 'e')])
+const evilXml = read(join(work, 'e/ppt/theme/theme1.xml')) + read(join(work, 'e/ppt/slides/slide1.xml'))
+ok(!/Evil|Bad"Face|<x a=|typeface="<b>/.test(evilXml), 'a hostile font name reaches neither the theme nor a text run')
 const themeXml = read(join(work, 't/ppt/theme/theme1.xml'))
 ok(/<a:majorFont><a:latin typeface="[^"]+"/.test(themeXml) && !/typeface="Calibri/.test(themeXml), `theme fonts follow the deck, not Calibri (${themeXml.match(/<a:minorFont><a:latin typeface="([^"]+)"/)?.[1]})`)
 
