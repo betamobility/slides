@@ -488,6 +488,7 @@ jobs:
           node scripts/test-css-balance.ts
           node scripts/test-enc-title.ts
           node scripts/test-field-class.ts
+          git fetch --no-tags --depth=1 origin main # BETA FORK: test-gate-parity reads origin/main, which a CI checkout lacks (upstream fetches it the same way)
           node scripts/test-gate-parity.ts
           node scripts/test-maths-coverage.ts
           node scripts/test-maths-lite.ts

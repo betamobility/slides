@@ -119,7 +119,9 @@ try {
     await p.waitForFunction(() => window.bento?.doc)
     await p.evaluate(async ([d, when]) => {
       // the app's own store (kernel autosave: `${appId}-autosave`), NOT the legacy shared `bento-autosave` it migrates from
-      const db = await new Promise((res, rej) => { const r = indexedDB.open('bento-slides-autosave'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
+      // BETA FORK: the store is named after the app id (beta-slides-autosave in the fork), so find it rather than spell upstream's
+      const name = (await indexedDB.databases()).map((x) => x.name).find((n) => /-autosave$/.test(n ?? '') && n !== 'bento-autosave') ?? 'bento-slides-autosave'
+      const db = await new Promise((res, rej) => { const r = indexedDB.open(name); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
       const snap = JSON.parse(JSON.stringify(d)); snap.title = 'Recovered edits'
       await new Promise((res, rej) => { const tx = db.transaction('recovery', 'readwrite'); tx.objectStore('recovery').put({ docId: d.docId, at: when, title: snap.title, json: JSON.stringify(snap) }); tx.oncomplete = res; tx.onerror = () => rej(tx.error) })
       db.close()
@@ -144,7 +146,9 @@ try {
     await p.waitForTimeout(1000) // long enough for an async IndexedDB delete to land, were one issued
     const kept = await p.evaluate(async () => {
       const gone = !document.querySelector('.ed-recover')
-      const db = await new Promise((res) => { const r = indexedDB.open('bento-slides-autosave'); r.onsuccess = () => res(r.result) })
+      // BETA FORK: same app-named store as above
+      const name = (await indexedDB.databases()).map((x) => x.name).find((n) => /-autosave$/.test(n ?? '') && n !== 'bento-autosave') ?? 'bento-slides-autosave'
+      const db = await new Promise((res) => { const r = indexedDB.open(name); r.onsuccess = () => res(r.result) })
       const snap = await new Promise((res) => { const r = db.transaction('recovery').objectStore('recovery').get('rig-recovery-deck'); r.onsuccess = () => res(r.result) })
       return { gone, snap: snap ? { at: snap.at, title: snap.title } : null, title: window.bento.doc.title }
     })
