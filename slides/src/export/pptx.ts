@@ -217,6 +217,37 @@ export function htmlToRuns(html: string): Run[] {
 }
 
 /**
+ * A rect or ellipse with a linear gradient, as standalone SVG for the
+ * rasteriser (pptxgenjs has no gradient fill for shapes). Colours go through
+ * parseColour, so only `#RRGGBB` and a numeric opacity reach the markup.
+ * Returns null for any other shape kind or a gradient with no usable stop.
+ */
+export function gradientShapeSvg(sh: Pick<ShapeElement, 'shape' | 'w' | 'h' | 'radius' | 'fillGradient' | 'stroke' | 'strokeWidth'>): string | null {
+  const g = sh.fillGradient
+  if (!g || (sh.shape !== 'rect' && sh.shape !== 'ellipse')) return null
+  const stops = g.stops
+    .map((st) => ({ at: Math.min(1, Math.max(0, Number(st.at) || 0)), c: parseColour(st.color) }))
+    .filter((st): st is { at: number; c: NonNullable<ReturnType<typeof parseColour>> } => !!st.c)
+  if (!stops.length) return null
+  // CSS convention: 0deg points up, 90deg points right; the line runs
+  // through the centre of the box in object-bounding-box units.
+  const rad = ((Number(g.angle) || 0) * Math.PI) / 180
+  const dx = Math.sin(rad) / 2, dy = -Math.cos(rad) / 2
+  const f = (n: number) => n.toFixed(4)
+  // numbers only: these are interpolated into markup
+  const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+  const w = Math.max(1, num(sh.w)), h = Math.max(1, num(sh.h))
+  const stroke = parseColour(sh.stroke)
+  const sw = stroke && num(sh.strokeWidth) > 0 ? num(sh.strokeWidth) : 0
+  const inset = sw / 2
+  const strokeAttr = sw ? ` stroke="#${stroke!.hex}" stroke-opacity="${f(1 - stroke!.transparency / 100)}" stroke-width="${sw}"` : ''
+  const body = sh.shape === 'ellipse'
+    ? `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${Math.max(0, w / 2 - inset)}" ry="${Math.max(0, h / 2 - inset)}" fill="url(#g)"${strokeAttr}/>`
+    : `<rect x="${inset}" y="${inset}" width="${Math.max(0, w - sw)}" height="${Math.max(0, h - sw)}" rx="${Math.max(0, Math.min(num(sh.radius), w / 2, h / 2))}" fill="url(#g)"${strokeAttr}/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><defs><linearGradient id="g" x1="${f(0.5 - dx)}" y1="${f(0.5 - dy)}" x2="${f(0.5 + dx)}" y2="${f(0.5 + dy)}">${stops.map((st) => `<stop offset="${f(st.at)}" stop-color="#${st.c.hex}" stop-opacity="${f(1 - st.c.transparency / 100)}"/>`).join('')}</linearGradient></defs>${body}</svg>`
+}
+
+/**
  * Dynamic field tokens, resolved the way render.ts resolves them on screen:
  * {{page}}/{{pages}} with an optional zero-pad width ({{page:2}} -> "06"),
  * {{title}}, {{date}}, {{time}} and the document properties. A token this
@@ -300,6 +331,9 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
 
   const bodyFace = fontFace(doc.theme?.fontFamily, 'Geist') // BETA FORK: design system v1.5.0's working face
   const headingFace = fontFace(doc.theme?.headingFamily, bodyFace)
+  // The file's theme fonts follow the deck, so text typed in PowerPoint
+  // matches what was exported instead of falling back to Calibri.
+  pptx.theme = { headFontFace: headingFace, bodyFontFace: bodyFace }
   const themeColour = hexOr(doc.theme?.color, '1A1A1A')
   const themeBg = hexOr(doc.theme?.background, 'FFFFFF')
   const chartColours = (doc.theme?.chartPalette ?? [doc.theme?.accent ?? '#0F2A4A']).map((c) => hexOr(c, '0F2A4A')) // BETA FORK: v1.5.0 --chart-1
@@ -433,6 +467,15 @@ export async function mapDeck(input: BentoDoc, opts: MapOptions = {}): Promise<M
         }
         case 'shape': {
           const sh = el as ShapeElement
+          // A gradient rect or ellipse keeps its colours as a picture when a
+          // rasteriser is available (the editor); otherwise it flattens.
+          const gradSvg = sh.fillGradient && opts.rasterize ? gradientShapeSvg(sh) : null
+          const gradPng = gradSvg ? await opts.rasterize!(gradSvg, el.w, el.h) : null
+          if (gradPng) {
+            picture(s, gradPng, el)
+            degrade(slide.id, el.id, 'gradient', 'Gradient fill exported as a picture so it keeps its colours; the shape itself is not editable.')
+            break
+          }
           const fill = parseColour(sh.fillGradient ? sh.fillGradient.stops[0]?.color : sh.fill)
           if (sh.fillGradient) degrade(slide.id, el.id, 'gradient', `Gradient fill flattened to its first stop (${sh.fillGradient.stops[0]?.color ?? '?'}).`)
           const stroke = parseColour(sh.stroke)
