@@ -36,6 +36,8 @@
     '--color-negative': '#B42318',
     '--font-sans': "'Geist', 'Helvetica Neue', Helvetica, Arial, sans-serif",
     '--font-mono': "'DM Mono', 'Courier New', monospace",
+    '--weight-medium': '500',
+    '--tracking-sans-display': '-0.01em',
   }
   const SANS = TOKENS['--font-sans'], MONO = TOKENS['--font-mono']
   const INK = TOKENS['--beta-charcoal'], MUTED = TOKENS['--beta-muted']
@@ -106,14 +108,14 @@
     const gap = 200, pw = (W - 2 * M - gap) / 2
     const values = [text(p.beforeValue, 24), text(p.afterValue, 24)]
     const longest = Math.max(1, ...values.map((v) => v.length))
-    const vs = Math.max(20, Math.min(150, Math.floor((pw - 96) / (longest * 0.6))))
+    const vs = Math.max(20, Math.min(150, Math.floor((pw - 96) / (longest * 0.62))))
     const a = [amount(p.beforeAmount), amount(p.afterAmount)]
     const bars = a[0] > 0 && a[1] > 0
     const most = Math.max(a[0], a[1])
     const wordChars = Math.floor((pw - 96) / (28 * 0.56))
     const wordLines = Math.max(1, ...[p.beforeText, p.afterText].map((w) => wrap(text(w, 300), wordChars, 3).length))
     // as tall as what it holds, and centred in the room under the title
-    const ph = r1(72 + 40 + vs * 0.78 + 44 + (bars ? 52 : 0) + wordLines * 38 + 40)
+    const ph = r1(72 + 40 + vs * 0.78 + Math.round(vs * 0.24) + 28 + (bars ? 52 : 0) + wordLines * 38 + 40)
     const py = r1(top + Math.max(0, (H - top - 60 - ph) / 2))
     const panels = [
       { x: M, label: text(p.beforeLabel, 60), value: values[0], words: text(p.beforeText, 300), bar: colour(p.beforeColour, TOKENS['--chart-4']), fill: TOKENS['--beta-neutral'], n: a[0] },
@@ -127,8 +129,9 @@
       // the after panel's content comes in on the second step
       const body = el('g', i === 1 && shown < 1 ? { opacity: shown.toFixed(3), transform: `translate(0 ${(24 * (1 - shown)).toFixed(1)})` } : {})
       const valueY = r1(py + 72 + 40 + vs * 0.78)
-      body.appendChild(el('text', { x: x + 48, y: valueY, 'font-family': MONO, 'font-size': vs, 'letter-spacing': r1(-vs * 0.02), fill: INK }, q.value))
-      let y = valueY + 44
+      // a display figure in Geist with tabular numerals; its descenders clear the bar or the words under it
+      body.appendChild(el('text', { x: x + 48, y: valueY, 'font-family': SANS, 'font-size': vs, 'font-weight': TOKENS['--weight-medium'], 'font-variant': 'tabular-nums', 'letter-spacing': TOKENS['--tracking-sans-display'], fill: INK }, q.value))
+      let y = valueY + Math.round(vs * 0.24) + 28
       if (bars) {
         body.appendChild(el('rect', { x: x + 48, y: r1(y), width: r1(Math.max(6, (pw - 96) * q.n / most)), height: 28, fill: q.bar }))
         y += 28 + 24

@@ -31,6 +31,8 @@
     '--color-negative': '#B42318',
     '--font-sans': "'Geist', 'Helvetica Neue', Helvetica, Arial, sans-serif",
     '--font-mono': "'DM Mono', 'Courier New', monospace",
+    '--weight-medium': '500',
+    '--tracking-sans-display': '-0.01em',
   }
   const SANS = TOKENS['--font-sans'], MONO = TOKENS['--font-mono']
   const INK = TOKENS['--beta-charcoal'], MUTED = TOKENS['--beta-muted']
@@ -106,25 +108,29 @@
     const kpis = []
     for (let i = 1; i <= n; i++) kpis.push({ value: text(p[`k${i}Value`], 24), label: text(p[`k${i}Label`], 200), delta: text(p[`k${i}Delta`], 16), trend: text(p[`k${i}Trend`], 40) })
     const gap = 64, colW = (W - 2 * M - (n - 1) * gap) / n
-    // one size for every figure in the row: DM Mono advances 0.6 em a character
+    // one size for every figure in the row. A figure is set in Geist with tabular
+    // numerals; at most 0.62 em a character (digits are 0.6, a wide letter more)
     const longest = Math.max(1, ...kpis.map((k) => k.value.length))
-    const vs = Math.max(20, Math.min(n === 4 ? 128 : 150, Math.floor(colW / (longest * 0.6))))
+    const vs = Math.max(20, Math.min(n === 4 ? 128 : 150, Math.floor(colW / (longest * 0.62))))
     const labelChars = Math.floor(colW / (30 * 0.56))
     const labelLines = kpis.map((k) => wrap(k.label, labelChars, 3))
     const most = Math.max(1, ...labelLines.map((l) => l.length))
     const hasDelta = kpis.some((k) => k.delta)
     const note = text(p.note, 60)
-    const blockH = 40 + vs * 0.78 + 58 + (most - 1) * 40 + (hasDelta ? 70 + (note ? 38 : 0) : 0)
+    // the label starts below the figure's descenders (about 0.22 em: the tail of
+    // an f, g, j, p or y) and a clear gap, so the two never touch
+    const below = Math.round(vs * 0.24) + 48
+    const blockH = 40 + vs * 0.78 + below + (most - 1) * 40 + (hasDelta ? 70 + (note ? 38 : 0) : 0)
     const ruleY = r1(top + Math.max(40, (H - top - blockH) / 2))
     const valueY = r1(ruleY + 40 + vs * 0.78)
-    const labelY = r1(valueY + 58)
+    const labelY = r1(valueY + below)
     const deltaY = r1(labelY + (most - 1) * 40 + 70)
 
     kpis.forEach((k, i) => {
       const x = r1(M + i * (colW + gap))
       const g = el('g', {})
       g.appendChild(el('line', { x1: x, y1: ruleY, x2: r1(x + colW), y2: ruleY, stroke: accent, 'stroke-width': 4 }))
-      g.appendChild(el('text', { x, y: valueY, 'font-family': MONO, 'font-size': vs, 'letter-spacing': r1(-vs * 0.02), fill: INK }, k.value))
+      g.appendChild(el('text', { x, y: valueY, 'font-family': SANS, 'font-size': vs, 'font-weight': TOKENS['--weight-medium'], 'font-variant': 'tabular-nums', 'letter-spacing': TOKENS['--tracking-sans-display'], fill: INK }, k.value))
       if (labelLines[i].length) g.appendChild(lines(labelLines[i], x, labelY, 40, { 'font-family': SANS, 'font-size': 30, fill: MUTED }))
       if (k.delta) {
         const dir = direction(k.delta)

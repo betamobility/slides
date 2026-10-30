@@ -283,6 +283,20 @@ for (const id of captured) {
   const tones = [await tone('+5 %', 'up is good'), await tone('+5 %', 'down is good'), await tone('−5 %', 'down is good'), await tone('-5 %', 'up is good'), await tone('+5 %', 'neutral'), await tone('5 %', 'up is good')]
   ok(tones.join() === '#1F7A1F,#B42318,#1F7A1F,#B42318,#666666,#666666',
     `kpi-row: a change is --color-positive the good way, --color-negative the other, --beta-muted when neutral or unsigned (${tones})`)
+  // a figure is Geist (DM Mono is for small data), and its descenders never touch the label under it
+  for (const [values, what] of [
+    [{ count: 2, k1Value: '−23 %', k2Value: '4 of 5', k2Label: 'residents want the scheme kept' }, '"−23 %" and "4 of 5"'],
+    [{ count: 4, k4Value: '1 200', k4Label: 'bikes in service', k4Delta: '+15 %' }, 'four figures with "1 200"'],
+    [{ count: 3, k1Value: 'gjpqy 99', k2Value: '1,24 mill.', k3Value: '100 000 000' }, 'descender letters and long figures'],
+  ]) {
+    await init(values)
+    const fit = await p.evaluate(() => [...document.querySelectorAll('#scene > g')].map((g) => {
+      const [fig, label] = [...g.children].filter((n) => n.tagName === 'text')
+      const a = fig.getBoundingClientRect(), b = label.getBoundingClientRect(), rule = g.querySelector('line').getBoundingClientRect()
+      return { gap: Math.round(b.top - a.bottom), wide: a.right <= rule.right + 1, sans: /Geist/.test(fig.getAttribute('font-family')) && !/DM Mono/.test(fig.getAttribute('font-family')), tabular: fig.getAttribute('font-variant') === 'tabular-nums' }
+    }))
+    ok(fit.length >= 2 && fit.every((f) => f.gap >= 8 && f.wide && f.sans && f.tabular), `kpi-row: ${what}: figures in Geist with tabular numerals, inside their column, a clear gap above the label (${fit.map((f) => f.gap).join(', ')} px)`)
+  }
   await init({ k1Delta: '', k2Delta: '', k3Delta: '' })
   ok(await p.evaluate(() => document.querySelectorAll('#scene path').length) === 0 && !(await reading(p)).words.includes('vs. the year before'), 'kpi-row: with no change there is no arrow and no note')
   await p.close()
