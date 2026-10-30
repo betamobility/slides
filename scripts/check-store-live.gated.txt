@@ -35,3 +35,8 @@
 # Deploy furniture for the Pages project, of no use to any caller.
 /CNAME
 /.nojekyll
+
+# The site repo's own housekeeping files (betamobility/slides-site), mirrored
+# into the published tree. Nothing fetches them; behind the login is right.
+/.gitignore
+/README.md
