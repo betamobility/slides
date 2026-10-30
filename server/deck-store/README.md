@@ -67,9 +67,9 @@ Analytics: the worker posts events to Plausible's events API for the `betamobili
 |---|---|---|
 | `deck_open` | `GET /d/:id` | `ok`, `missing` |
 | `deck_new` | `/new/blank`, `POST /api/decks?new=1` | `ok`, `rejected` |
-| `deck_save` | person and harness create and replace | `ok`, `rejected` (`400`), `conflict` (`412`), `precondition` (`428`, harness) |
+| `deck_save` | person and harness create and replace | `ok`, `rejected` (`400`), `conflict` (`412`), `precondition` (`428`, harness), `error` (`503`, the history copy failed) |
 | `publish_create` | `POST /api/publish/decks` (a grant) | `ok`, `rejected` |
-| `publish_save` | `PUT /api/publish/decks/:id` (a grant) | `ok`, `rejected`, `conflict` (`412`), `precondition` (`428`) |
+| `publish_save` | `PUT /api/publish/decks/:id` (a grant) | `ok`, `rejected`, `conflict` (`412`), `precondition` (`428`), `error` (`503`) |
 | `pairing_start` | `POST /api/link/start` | `ok`, `rejected` (`400`), `limited` (`429`), `unavailable` (`503`) |
 | `pairing_poll` | `GET /api/link/:handle` | `ok` (the grant delivered), `collected` (asked again after delivery), `limited`, `unavailable`. A `pending` or `gone` poll is not counted: the first is every few seconds of every pairing, and the second cannot tell a lapsed pairing from the uptime probe |
 | `pairing_page` | `GET /link/:code` | `ok`, `gone` (the person opened a lapsed or used link) |
@@ -298,7 +298,7 @@ in the same bucket. A [lifecycle rule](https://developers.cloudflare.com/r2/buck
 
 What is *not* kept is a version one person overwrites within ten minutes of writing it. Every save from a store tab is an autosave, so copying each one would mean a 1 MB object every few seconds of editing. Those intermediate versions still live in that tab's own version history. The same bytes written in the same second share a key, and nothing is lost by that.
 
-**It fails closed.** If the copy cannot be written, the save or delete is refused with `503` and nothing changes. A save that skipped its copy without saying so would be the gap this exists to close.
+**It fails closed.** If the copy cannot be written, the save or delete is refused with `503` and nothing changes. A save that skipped its copy without saying so would be the gap this exists to close. In a store tab that `503` shows as "The store refused the deck (503: …)" (`slides/src/beta/store.ts`). It is not a conflict, so the tab does not latch, and its unsaved edits stay in the tab for the next save. The splice tool reports it as a failed write.
 
 **Not covered:** scene assets (`assets/`) and the scene library (`library/`). The splice tool re-uploads assets, and the library is rebuilt from `beta/library/` in the repo. Grants in KV are not backed up either: a lost grant is a new pairing.
 

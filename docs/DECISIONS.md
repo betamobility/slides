@@ -10863,7 +10863,9 @@ write, before a write by someone other than its writer, and once it has stood
 ten minutes. One person's own autosaves within ten minutes are not kept;
 their tab's version history has them.
 
-**Fail closed.** A save or delete whose copy fails is refused with `503`.
+**Fail closed.** A save or delete whose copy fails is refused with `503`,
+filed as `deck_save` or `publish_save` outcome `error` (a word the R4 entry
+above does not list). A store tab shows the refusal and does not latch.
 
 **Restore goes through the store,** with the service token's conditional
 harness `PUT`, never a raw `wrangler r2 object put`, which would drop the
