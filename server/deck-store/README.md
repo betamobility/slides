@@ -35,7 +35,7 @@ Anything not on that list is gated, so a path nobody thought about costs a login
 | `GET /api/decks` | person | `{decks:[{id,url,title,kind,owner,writer,created,updated,size,docId?}]}` |
 | `POST /api/decks` | person | body = the `.bento.html`; `201 {id,url}`. `?new=1` only changes the analytics event |
 | `PUT /api/decks/:id` | person | replace in place; keeps `owner` and `created`, records `writer`. `200` carries the new `ETag`. `If-Match` is honoured when sent (`412` if the deck changed) and never required, because shells already on disk save without it. A `412` from either PUT route carries the current `ETag` and a JSON body whose `writer` is `person` or `service`, naming who wrote the current version; the editor retries against it only for a person's save while live in the deck's sync room, and only when the `412`'s `x-bento-service-gen` equals the one it last received |
-| `DELETE /api/decks/:id` | owner | `204`, and the deck's assets go with it; `403` for anyone else |
+| `DELETE /api/decks/:id` | owner | `204`, and the deck's assets go with it; `403` for anyone else. The deck itself is kept under `history/` first (see "Deck history and restore"); `503` and nothing deleted if that copy fails |
 | `GET /d/:id` | person | the stored bytes, `text/html; charset=utf-8`, `private, no-store`, `nosniff`, report-only CSP, `ETag` |
 | `HEAD /d/:id` | person | the same headers with no body; how the editor learns the version it is showing. Not tracked |
 | `GET /d/:id/assets/:name` | person | a scene asset with its stored content type, `private, no-cache` with the object's `ETag` (`If-None-Match` with the current one answers `304`, so a re-uploaded asset is seen on the next load), `nosniff`, `content-security-policy: sandbox` |
@@ -278,6 +278,69 @@ Source layout: `worker.js` is the router and the deck handlers; `access.js` veri
 `scripts/test-beta-store.ts` runs `test/worker.test.mjs` under Miniflare (a devDependency of `slides/`, the `@gfx/zopfli` precedent): a local R2 bucket, RSA keys minted at run time, a stub JWKS the worker's outbound fetch is routed to, a stub Pages origin that records every subrequest, and a stub Plausible endpoint that records events. It pins the route contract, the Access refusals (missing, expired, wrong audience, wrong issuer, wrong email domain, unknown key id after one refresh, bad signature, service token off its routes), the public pass-through (anonymous, byte-identical, from `PAGES_ORIGIN`, carrying none of our credentials), the write validation, the harness read and the `If-Match` preconditions (`412`, `428`, `ETag` on every read and write, `HEAD /d/:id`, the service generation), the asset route (types, names, size, the SVG strip, the sandbox headers, revalidation with `304`, the delete cascade), byte-identical serving with the KTD9 headers, both `/new` branches, the old-host redirect and its two exemptions, and the analytics payload.
 
 The rig also pins the pairing flow (start, the approval page's copy and refusals, approve, poll, single use, expiry, the body caps and the `429`), the grant store (mint, verify, list, revoke, expiry, and that no stored value is ever a usable token), what a grant reaches and does not, the `collab` strip and restore, the shell pin, and the index's Agent access section.
+
+## Deck history and restore
+
+**R2 has no object versioning.** Cloudflare's S3-compatibility table lists `PutBucketVersioning`/`GetBucketVersioning` and object lock as unimplemented ([R2 S3 API](https://developers.cloudflare.com/r2/api/s3/api/)), and the Workers binding has no copy. So the worker keeps its own history. Before a version of a deck is overwritten or deleted, it puts that version's bytes and `customMetadata` (title, owner, writer, timestamps) under
+
+```
+history/<id>/<when that version was written, UTC, YYYYMMDDTHHMMSSZ>-<first 8 of its etag>[-deleted].bento.html
+```
+
+in the same bucket. A [lifecycle rule](https://developers.cloudflare.com/r2/buckets/object-lifecycles/) on the `history/` prefix expires them. Nothing serves, lists or routes `history/`: the deck list reads `decks/`, and every route matches an id shape.
+
+**When a version is kept** (`keepBeforeWrite` in `src/worker.js`):
+
+- always, before a **delete** (that copy is marked `-deleted`);
+- always, before an **agent's** write (service token or grant), which also covers a restore;
+- before a write by **someone other** than the version's writer;
+- before a write over a version that has **stood ten minutes or more**.
+
+What is *not* kept is a version one person overwrites within ten minutes of writing it. Every save from a store tab is an autosave, so copying each one would mean a 1 MB object every few seconds of editing. Those intermediate versions still live in that tab's own version history. The same bytes written in the same second share a key, and nothing is lost by that.
+
+**It fails closed.** If the copy cannot be written, the save or delete is refused with `503` and nothing changes. A save that skipped its copy without saying so would be the gap this exists to close.
+
+**Not covered:** scene assets (`assets/`) and the scene library (`library/`). The splice tool re-uploads assets, and the library is rebuilt from `beta/library/` in the repo. Grants in KV are not backed up either: a lost grant is a new pairing.
+
+### Restoring a deck
+
+The deck's id is the part after `/d/` in its link. Run these from `server/deck-store/`, signed in with `wrangler login` (`env -u CLOUDFLARE_API_TOKEN`, as for a deploy). `$ID`/`$SECRET` are the service token's `CF-Access-Client-Id`/`CF-Access-Client-Secret`.
+
+1. **Find the version.** Wrangler has no object listing (`wrangler r2 object` is `get`, `put`, `delete`). Use the dashboard: R2, `beta-decks`, Objects, search the prefix `history/<id>/`. The key's timestamp is when that version was written. Its custom metadata (`title`, `writer`, `updated`, percent-encoded) says what it is and who wrote it. A deleted deck's last version ends in `-deleted`. An S3 client with an R2 API token works as well (`aws s3api list-objects-v2 --bucket beta-decks --prefix history/<id>/ --endpoint-url https://<account id>.r2.cloudflarestorage.com`).
+2. **Download it.**
+   ```sh
+   env -u CLOUDFLARE_API_TOKEN npx wrangler r2 object get "beta-decks/history/<id>/<name>" --remote --file restore.bento.html
+   ```
+3. **Read the deck's current ETag**, so the restore is conditional like every agent write:
+   ```sh
+   ETAG=$(curl -s -o /dev/null -D - -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" \
+     https://slides.betamobility.ai/api/harness/decks/<id> | awk -F': ' 'tolower($1)=="x-bento-etag"{print $2}' | tr -d '\r')
+   ```
+4. **Put it back through the store**, never with `wrangler r2 object put`. A raw put has no metadata flag, so it would drop the owner (nobody could delete the deck) and the title. Through the harness route the worker recomputes the metadata and keeps `owner` and `created`:
+   ```sh
+   curl -si -X PUT -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" -H "if-match: $ETAG" \
+     --data-binary @restore.bento.html https://slides.betamobility.ai/api/harness/decks/<id>      # 200
+   ```
+   A `412` means someone saved in the meantime. Repeat from step 3. The restore is an agent write, so the version it replaced is kept too (the restore can be undone the same way), and open tabs learn of it the way they learn of any service write: an idle tab reloads onto it, and a tab with unsaved edits latches.
+5. **Check it.** Open `https://slides.betamobility.ai/d/<id>` signed in. The index shows the restored title, and the owner is unchanged.
+
+**A deleted deck** has no link left to `PUT` to. Download its `-deleted` copy (steps 1–2) and send the file to the owner named in its metadata. They open it from disk and save it to the store, so it comes back under their name with a **new** link. The old link stays dead.
+
+**Verified** in `test/worker.test.mjs` (Miniflare, 2026-10-30). An agent overwrite of a person's deck is restored by following steps 1 to 4, with the bucket handle standing in for the dashboard and `wrangler r2 object get`. The result is byte-identical to the original, keeps its owner and title, and the replaced version is kept. A deleted deck comes back as a new deck with the same bytes. The first live drill on `beta-decks` is the maintainer's, after the deploy below. Record its date here.
+
+### Maintainer setup (once)
+
+```sh
+cd server/deck-store
+# keep 30 days of history; R2 removes expired objects within about 24 h of the date
+env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket lifecycle add beta-decks deck-history history/ --expire-days 30
+env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket lifecycle list beta-decks     # the rule is there
+env -u CLOUDFLARE_API_TOKEN npx wrangler deploy
+# optional: a bucket lock, so not even a bug in this worker can delete a copy younger than 7 days
+env -u CLOUDFLARE_API_TOKEN npx wrangler r2 bucket lock add beta-decks history-lock history/ --retention-days 7
+```
+
+The lifecycle rule needs no new binding, bucket or `wrangler.toml` change. Without it, history is kept forever, which is safe but grows. The worker never deletes from `history/` itself.
 
 ## Uptime
 

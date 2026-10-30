@@ -2551,6 +2551,102 @@ export async function run(Miniflare) {
       ok(secrets, 'no event carries a code, handle, grant, hash, deck id, label or email minted in this run')
     }
 
+    // ------------------------------------------------ deck history and restore (R5)
+    //
+    // R2 has no object versioning, so the worker copies a version under
+    // history/<id>/ before it is overwritten (by an agent, by someone else, or
+    // after it stood ten minutes) or deleted. Then the README's restore
+    // procedure, step by step: the bucket handle stands in for the dashboard's
+    // object browser (step 1) and `wrangler r2 object get` (step 2), and the
+    // service token's harness read and conditional PUT are steps 3 and 4.
+    console.log('\ndeck history: an overwritten deck is kept, and the README restores it (R5)')
+    {
+      const bucket = await mf.getR2Bucket('DECKS')
+      const historyOf = async (deckId) => (await bucket.list({ prefix: `history/${deckId}/`, include: ['customMetadata'] })).objects
+      const v1 = deck(slidesDoc('Styremøte, versjon 1'))
+      r = await call('POST', '/api/decks', { as: 'alice', body: v1 })
+      const hid = (await r.json()).id
+      eq((await historyOf(hid)).length, 0, 'a new deck has no history')
+
+      // An agent overwrites alice's deck: her version is kept first.
+      r = await call('GET', `/api/harness/decks/${hid}`, { as: 'service' })
+      const bad = deck(slidesDoc('Overwritten by a bad agent run'))
+      r = await call('PUT', `/api/harness/decks/${hid}`, { as: 'service', body: bad, headers: { 'if-match': r.headers.get('x-bento-etag') } })
+      eq(r.status, 200, 'the agent overwrite lands')
+      let hist = await historyOf(hid)
+      eq(hist.length, 1, 'and the version it replaced is kept under history/<id>/')
+      ok(/^history\/[0-9A-Za-z]{10}\/\d{8}T\d{6}Z-[0-9a-f]{8}\.bento\.html$/.test(hist[0].key), `named by when it was written and its etag (${hist[0].key})`)
+      eq(decodeURIComponent(hist[0].customMetadata.owner), 'alice@betamobility.io', 'with its metadata: the owner')
+      eq(decodeURIComponent(hist[0].customMetadata.writer), 'alice@betamobility.io', 'and the writer of that version')
+
+      // Alice saves twice in quick succession: the agent's version is kept
+      // (another writer), her own first save is not (an intermediate autosave).
+      const v2 = deck(slidesDoc('Alice again, save one'))
+      const v3 = deck(slidesDoc('Alice again, save two'))
+      r = await call('PUT', `/api/decks/${hid}`, { as: 'alice', body: v2 })
+      eq(r.status, 200, "alice's save over the agent's version lands")
+      eq((await historyOf(hid)).length, 2, "and the agent's version is kept: another writer wrote it")
+      r = await call('PUT', `/api/decks/${hid}`, { as: 'alice', body: v3 })
+      eq((await historyOf(hid)).length, 2, 'her own save seconds later keeps nothing: an intermediate autosave')
+      // The same writer after ten minutes: that version settled, so it is kept.
+      {
+        const cur = await bucket.get(`decks/${hid}.bento.html`)
+        const m = { ...cur.customMetadata, updated: new Date(Date.now() - 11 * 60 * 1000).toISOString() }
+        await bucket.put(`decks/${hid}.bento.html`, await cur.arrayBuffer(), { httpMetadata: cur.httpMetadata, customMetadata: m })
+        r = await call('PUT', `/api/decks/${hid}`, { as: 'alice', body: v3 })
+        eq((await historyOf(hid)).length, 3, 'her save over her own version from eleven minutes ago keeps it: it had settled')
+      }
+      // A stale If-Match keeps nothing either: that write is a 412.
+      r = await call('PUT', `/api/decks/${hid}`, { as: 'bob', body: v2, headers: { 'if-match': '"stale"' } })
+      eq(r.status, 412, 'a stale write is 412')
+      eq((await historyOf(hid)).length, 3, 'and keeps no copy')
+
+      // Nothing serves or lists the prefix.
+      r = await call('GET', '/api/decks', { as: 'alice' })
+      ok(!(await r.text()).includes('history/'), 'the deck list never shows a history object')
+      r = await call('GET', `/d/history/${hid}`, { as: 'alice' })
+      eq(r.status, 404, 'and no route serves one')
+
+      // README "Restoring a deck", steps 1 to 4, to get version 1 back.
+      // 1. list history/<id>/ and pick the version by its title, writer and time
+      const picks = (await historyOf(hid)).filter((o) => decodeURIComponent(o.customMetadata.title) === 'Styremøte, versjon 1'
+        && decodeURIComponent(o.customMetadata.writer) === 'alice@betamobility.io')
+      eq(picks.length, 1, 'step 1: listing the prefix finds exactly one version with that title by alice')
+      const pick = picks[0]
+      // 2. download it
+      const restoreBytes = Buffer.from(await (await bucket.get(pick.key)).arrayBuffer())
+      ok(restoreBytes.equals(Buffer.from(v1)), 'step 2: the kept bytes are version 1, byte for byte')
+      // 3. read the current ETag as the service token
+      r = await call('GET', `/api/harness/decks/${hid}`, { as: 'service' })
+      const curEtag = r.headers.get('x-bento-etag')
+      // 4. put it back, conditionally
+      r = await call('PUT', `/api/harness/decks/${hid}`, { as: 'service', body: restoreBytes, headers: { 'if-match': curEtag } })
+      eq(r.status, 200, 'step 4: the restore PUT lands')
+      r = await call('GET', `/d/${hid}`, { as: 'alice' })
+      ok(Buffer.from(await r.arrayBuffer()).equals(Buffer.from(v1)), 'the deck at its own link is version 1 again')
+      r = await call('GET', '/api/decks', { as: 'alice' })
+      const restoredRow = (await r.json()).decks.find((d) => d.id === hid)
+      eq(restoredRow.owner, 'alice@betamobility.io', 'still owned by alice: the restore went through the store, so metadata was kept')
+      eq(restoredRow.title, 'Styremøte, versjon 1', 'and the index shows the restored title')
+      eq((await historyOf(hid)).length, 4, 'and the version the restore replaced is kept too: a restore is undoable')
+
+      // A deleted deck: kept first, then restored as a new deck.
+      r = await call('DELETE', `/api/decks/${hid}`, { as: 'alice' })
+      eq(r.status, 204, 'alice deletes the deck')
+      r = await call('GET', `/d/${hid}`, { as: 'alice' })
+      eq(r.status, 404, 'its link is gone')
+      hist = (await historyOf(hid)).filter((o) => o.key.endsWith('-deleted.bento.html'))
+      eq(hist.length, 1, 'but the deleted version is kept under history/ first, marked -deleted')
+      eq(decodeURIComponent(hist[0].customMetadata.owner), 'alice@betamobility.io', 'with its owner')
+      const deletedBytes = Buffer.from(await (await bucket.get(hist[0].key)).arrayBuffer())
+      ok(deletedBytes.equals(Buffer.from(v1)), 'and its bytes are what was deleted')
+      r = await call('POST', '/api/decks', { as: 'alice', body: deletedBytes })
+      eq(r.status, 201, 'restored as a new deck by its owner (README: a deleted deck comes back with a new link)')
+      const reborn = await r.json()
+      r = await call('GET', `/d/${reborn.id}`, { as: 'alice' })
+      ok(Buffer.from(await r.arrayBuffer()).equals(Buffer.from(v1)), 'with the same bytes')
+    }
+
     console.log('\nunmatched')
     r = await call('GET', '/nowhere', { as: 'alice' })
     eq(r.status, 404, 'an unknown path with a valid assertion is 404')
