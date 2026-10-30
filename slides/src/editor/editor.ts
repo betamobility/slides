@@ -2211,9 +2211,18 @@ export class Editor {
     let blob: Blob
     try {
       ;({ pptx, report } = await mapDeck(clone, { rasterize: rasterizeSvg }))
-      blob = (await pptx.write({ outputType: 'blob' })) as Blob
     } catch (e) {
       // A mapper throw used to mean no file and no message. Say so.
+      console.error('PPTX export failed', e)
+      this.toast(t('PPTX export failed: {msg}', { msg: (e as Error)?.message ?? String(e) }), 6000)
+      return
+    }
+    // Say what PowerPoint cannot hold BEFORE the file exists (roadmap R7):
+    // after the fact, the author has already sent it.
+    if (report.length && !(await this.confirmPptxSimplifications(report))) return
+    try {
+      blob = (await pptx.write({ outputType: 'blob' })) as Blob
+    } catch (e) {
       console.error('PPTX export failed', e)
       this.toast(t('PPTX export failed: {msg}', { msg: (e as Error)?.message ?? String(e) }), 6000)
       return
@@ -2239,6 +2248,47 @@ export class Editor {
       list = [...counts].sort((a, b) => b[1] - a[1]).map(([reason, n]) => `${n} × ${reason}`).join(', ')
     }
     this.toast(t('PPTX exported. Degraded: {list}', { list }), 6000)
+  }
+
+  /** BETA FORK (roadmap R7): one line per kind of simplification, with a
+   *  count, before the PowerPoint file is written. Resolves true to export. */
+  private confirmPptxSimplifications(report: Awaited<ReturnType<typeof mapDeck>>['report']): Promise<boolean> {
+    const byReason = new Map<string, { n: number; detail: string }>()
+    for (const r of report) {
+      const row = byReason.get(r.reason)
+      if (row) row.n++
+      else byReason.set(r.reason, { n: 1, detail: r.detail })
+    }
+    return new Promise((resolve) => {
+      let answer = false
+      const content = document.createElement('div')
+      const intro = document.createElement('p')
+      intro.textContent = t('PowerPoint cannot hold everything in this deck. This is what changes in the exported file:')
+      const list = document.createElement('ul')
+      for (const { n, detail } of byReason.values()) {
+        const li = document.createElement('li')
+        li.textContent = n > 1 ? `${detail} (×${n})` : detail
+        list.appendChild(li)
+      }
+      content.append(intro, list)
+      const cancel = document.createElement('button')
+      cancel.className = 'ed-btn'
+      cancel.textContent = t('Cancel')
+      const go = document.createElement('button')
+      go.className = 'ed-btn ed-btn-primary'
+      go.textContent = t('Export anyway')
+      const dialog = createDialog({
+        title: t('Before you export to PowerPoint'),
+        content,
+        actions: [cancel, go],
+        dismissOnBackdrop: false,
+        onClose: () => resolve(answer),
+      })
+      cancel.addEventListener('click', () => dialog.close())
+      go.addEventListener('click', () => { answer = true; dialog.close() })
+      dialog.open()
+      go.focus()
+    })
   }
   /** Slides as PNG/JPEG files (discussions #243, #261) — editor/exportimages.ts. */
   exportImages() {

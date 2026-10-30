@@ -13,6 +13,8 @@ pre-1.0.
 
 - **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.
 - **Speaker notes where you look for them.** Notes now sit right under the slide's own settings, above the deck-wide Slideshow and Theme sections, so you no longer scroll past every theme colour to write one.
+- **Know before you export to PowerPoint.** Export PPTX now lists what PowerPoint cannot hold (artwork as pictures, fonts the recipient needs, motion) before the file is written, with Cancel or Export anyway.
+- **Gradients keep their colours in PowerPoint.** A rectangle or ellipse with a gradient exports as a picture of itself instead of flattening to one colour, and the file's theme fonts are the deck's own, so text added in PowerPoint matches instead of turning into Calibri.
 - **Native bullets in PowerPoint.** Lists export as PowerPoint bullets (nested and numbered too), not as "•" characters, and an empty list item exports nothing.
 
 ## [2026.10.11] — 2026-10-14

@@ -181,6 +181,38 @@ ok(bulletParas(bxml(2)) === 3, `Bullets / title and explanation exports three na
 ok(!/<a:t>•/.test(bxml(1) + bxml(2)), 'no bullet is exported as a literal "•" character')
 ok(bulletParas(bxml(3)) === 0, 'an untouched Bullets layout exports no bullet at all (no stray dot)')
 
+// ---- 2c3. gradients keep their colours; theme fonts follow the deck (R7) -----
+console.log('\nGradients and theme fonts')
+const { gradientShapeSvg } = await import('../slides/src/export/pptx.ts')
+const g90 = gradientShapeSvg({ shape: 'rect', w: 200, h: 100, radius: 12, stroke: 'none', strokeWidth: 0, fillGradient: { angle: 90, stops: [{ at: 0, color: '#112233' }, { at: 1, color: 'rgba(255,0,0,0.5)' }] } })
+ok(!!g90 && /x1="0\.0000" y1="0\.5000" x2="1\.0000" y2="0\.5000"/.test(g90), '90deg runs left to right, as in CSS')
+ok(!!g90 && /stop-color="#112233"/.test(g90) && /stop-color="#FF0000" stop-opacity="0\.5000"/.test(g90) && /rx="12"/.test(g90), 'stops keep colour and opacity; the radius survives')
+ok(gradientShapeSvg({ shape: 'triangle', w: 10, h: 10, radius: 0, stroke: 'none', strokeWidth: 0, fillGradient: { angle: 0, stops: [{ at: 0, color: '#000' }] } }) === null, 'shapes other than rect and ellipse are not drawn')
+const hostile = gradientShapeSvg({ shape: 'rect', w: '10" onload="x' as unknown as number, h: 10, radius: 0, stroke: '"><script>', strokeWidth: 3, fillGradient: { angle: 0, stops: [{ at: 0, color: 'red" onload="alert(1)' }, { at: 1, color: '#00ff00' }] } })
+ok(!!hostile && !/onload|script/i.test(hostile) && /width="1"/.test(hostile), 'colour and size strings cannot inject markup (bad stop dropped, bad width coerced)')
+const gradDoc = JSON.parse(JSON.stringify(fixture)) as BentoDoc
+gradDoc.slides = [{ id: 'g', elements: [{ id: 'grad', type: 'shape', shape: 'rect', x: 0, y: 0, w: 400, h: 200, rotation: 0, opacity: 1, fill: '#000000', stroke: 'none', strokeWidth: 0, radius: 0, fillGradient: { angle: 90, stops: [{ at: 0, color: '#112233' }, { at: 1, color: '#445566' }] } } as any] } as any]
+let rasterised = ''
+const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const withRaster = await mapDeck(gradDoc, { rasterize: async (svg: string) => { rasterised = svg; return PNG_1x1 } })
+ok(/linearGradient/.test(rasterised), 'with a rasteriser, the gradient shape is drawn as SVG for it')
+ok(withRaster.report.some((r) => r.elementId === 'grad' && /picture/.test(r.detail)), 'the report says the gradient became a picture')
+const noRaster = await mapDeck(gradDoc)
+ok(noRaster.report.some((r) => r.elementId === 'grad' && /first stop/.test(r.detail)), 'without a rasteriser (CLI) it still flattens to the first stop, and says so')
+const { fontFace } = await import('../slides/src/export/pptx.ts')
+ok(fontFace("'Geist', Arial, sans-serif", 'X') === 'Geist' && fontFace('Times New Roman', 'X') === 'Times New Roman', 'ordinary font stacks give their first face')
+ok(fontFace('Evil"/><a:latin typeface="x', 'Geist') === 'Geist' && fontFace('a&b', 'Geist') === 'Geist', 'a face with XML-significant characters falls back (pptxgenjs writes it unescaped)')
+const evilDoc = JSON.parse(JSON.stringify(gradDoc)) as BentoDoc
+evilDoc.theme = { ...(evilDoc.theme ?? {}), fontFamily: 'Evil"/><x a="', headingFamily: '<b>' } as any
+evilDoc.slides[0].elements.push({ id: 't', type: 'text', x: 0, y: 0, w: 100, h: 40, rotation: 0, opacity: 1, html: 'Hi', fontSize: 20, fontFamily: 'Bad"Face', fontWeight: 400, color: '#000', align: 'left', valign: 'top', lineHeight: 1.2 } as any)
+const evil = await mapDeck(evilDoc)
+writeFileSync(join(work, 'evil.pptx'), Buffer.from(await evil.pptx.write({ outputType: 'nodebuffer' }) as Uint8Array))
+execFileSync('unzip', ['-q', '-o', join(work, 'evil.pptx'), '-d', join(work, 'e')])
+const evilXml = read(join(work, 'e/ppt/theme/theme1.xml')) + read(join(work, 'e/ppt/slides/slide1.xml'))
+ok(!/Evil|Bad"Face|<x a=|typeface="<b>/.test(evilXml), 'a hostile font name reaches neither the theme nor a text run')
+const themeXml = read(join(work, 't/ppt/theme/theme1.xml'))
+ok(/<a:majorFont><a:latin typeface="[^"]+"/.test(themeXml) && !/typeface="Calibri/.test(themeXml), `theme fonts follow the deck, not Calibri (${themeXml.match(/<a:minorFont><a:latin typeface="([^"]+)"/)?.[1]})`)
+
 // ---- 2d. the headless CLI the skill points at -------------------------------
 console.log('\nCLI')
 const cliOut = join(work, 'cli.pptx')

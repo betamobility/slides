@@ -42,10 +42,20 @@ function handler(fail: boolean) {
   const js = ts.transpile(strip + '\nasync function run() ' + body, { target: ts.ScriptTarget.ES2022 })
   return new Function(...Object.keys(deps), js + ';return run')(...Object.values(deps))
 }
-const ctx = { store: { doc }, canvas: { commitTextEdit() { committed = true } }, toast: (s: string) => toasts.push(s) }
+// R7: the editor asks before writing; the rig answers through this stand-in
+// and records what it was shown.
+let asked: any[] | null = null, answer = true
+const ctx = { store: { doc }, canvas: { commitTextEdit() { committed = true } }, toast: (s: string) => toasts.push(s), confirmPptxSimplifications: async (report: any[]) => { asked = report; return answer } }
 // Failure first: no phantom download or success message when mapper rejects.
 await handler(true).call(ctx)
 assert.equal(clicked, 0); assert.equal(blob, undefined); assert.match(toasts.at(-1)!, /PPTX export failed: round5 mapper refusal/)
+assert.equal(asked, null, 'a mapper failure never reaches the question')
+// Cancel at the question: nothing is written.
+answer = false
+await handler(false).call(ctx)
+assert(asked && asked.some((r: any) => r.reason === 'runtime' || r.reason === 'svg'), 'the question lists what PowerPoint simplifies, before writing')
+assert.equal(clicked, 0); assert.equal(blob, undefined)
+answer = true
 await handler(false).call(ctx)
 assert(blob); assert.equal(clicked, 1); assert.equal(removed, 1)
 assert.equal(JSON.stringify(doc), pristine, 'export must leave live identity/content intact')
