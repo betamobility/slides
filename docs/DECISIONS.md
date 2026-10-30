@@ -12414,3 +12414,42 @@ own rig run against the extension's copy.
   clearing. Measured: libsecret's clear silently skips items in a locked
   keyring, so the re-count is what keeps a wipe from reporting success while
   keys remain.
+
+## 2026-10-30 — BETA FORK: four library scenes, captured stills, and the embed `url` carve-out
+
+Roadmap R8 (`docs/plans/2026-10-30-001-improvement-roadmap-plan.md`).
+
+**Four runtime scenes join the library:** `kpi-row`, `timeline`,
+`before-after`, `annotated-bars`. All runtime, none web: a runtime scene is
+inlined into the deck and runs offline, and the splice tool can insert it.
+Lists a person types into one text setting (bar labels and values) are
+separated by `;`, so a decimal comma reads.
+
+**Their stills are captured, not drawn.** A scene that draws into
+`<svg id="scene">` lays itself out by arithmetic on character counts, never
+measured text, and its drawing of its defaults is saved as `still.svg` by
+`scripts/build-beta-library-stills.mjs`; the browser rig captures again and
+fails on a stale still. The still is the scene's defaults, as for `counter`
+and `map`: a person's settings show in the live scene, not in thumbnails or
+the PowerPoint export.
+
+**Colours and fonts come from one `TOKENS` table** in each page, holding
+`beta/v131/tokens.json` values under their token names. Colours drawn into a
+standalone SVG cannot be CSS variables (a still has no stylesheet, and the
+library's still check refuses `style`), so the table is the token reference
+and `scripts/test-beta-library.ts` checks every entry against the token file
+and every hex in page and still against the table.
+
+**The splice tool may change a web embed's `url`** (the carve-out deferred in
+the 2026-10-13 plan). It is the embed's content because a web scene's settings
+live in its query string (KTD10). Held to what the settings panel can do:
+only `app: "web"`; an address `isWebUrl` keeps (restated, the plugin cannot
+import the app); no login; the same origin as before, because which site an
+embed shows is the person's choice. On a library web scene (its `doc` carries
+`library` and `props`) the path and fragment stay and only declared settings
+in the query may change. `checkOwnership` applies the rule, so a bug in the
+derivation is caught too. A `{ values }` edit on a web embed, which would
+write the query for Claude, needs the panel's query writer (`writeQueryAll`,
+`webSceneOf` in `slides/src/beta/scenesettings.ts`) exported through
+`slides/src/beta/libraryread.ts` into the plugin bundle: an app change, left
+for later.
