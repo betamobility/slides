@@ -14,6 +14,7 @@ export * from '../../../kernel/src/sync/crdt.ts'
 import { SyncEngine, shape } from '../../../kernel/src/sync/crdt.ts'
 import type { DocShape } from '../../../kernel/src/sync/crdt.ts'
 import { DOC_MAPS } from '../docmaps.ts'
+import { SPACES_FIELDS } from '../docclass.ts'
 
 /**
  * bento/spaces: the document holds `pages`, a page holds `blocks`.
@@ -41,7 +42,11 @@ import { DOC_MAPS } from '../docmaps.ts'
  * keys back using the same names, and two copies of that list is exactly how
  * the hazard and its mitigation drift apart.
  */
-export const SPACES_SHAPE: DocShape = shape('pages', 'blocks', 'html', DOC_MAPS)
+// The field map is bound (kernel #683): doc-level keys sync by ALLOWLIST, so a
+// replica emits only what docclass.ts classes 'content' and never echoes a key a
+// newer build added. Every non-content field spaces has is also on the kernel's
+// skipDoc floor; the map adds the unknown-key half.
+export const SPACES_SHAPE: DocShape = shape('pages', 'blocks', 'html', DOC_MAPS, SPACES_FIELDS)
 
 /** The engine bound to bento/spaces. */
 export class SyncState extends SyncEngine {

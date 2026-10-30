@@ -245,6 +245,66 @@ export function initCollab(store: Store, editor: Editor): void {
     wireOnlineStatus();
   }
 
+  /**
+   * The one step before an invite of a document that has version history: say
+   * the copy carries it, and offer to leave it out (default: include). Resolves
+   * true = include, false = leave out, null = cancelled. Built the way about.ts
+   * builds a dialog; the Save button is the user gesture the file picker needs.
+   * Same wording as bento/spaces' invite, so the suite says one thing.
+   */
+  function confirmInviteHistory(): Promise<boolean | null> {
+    return new Promise(resolve => {
+      let answered = false;
+      const back = document.createElement('div');
+      back.className = 't-overlay';
+      const card = document.createElement('div');
+      card.className = 't-dlg';
+      card.setAttribute('role', 'dialog');
+      const title = t('Invite to edit…').replace(/…$/, '');
+      card.setAttribute('aria-label', title);
+      const h = document.createElement('h2');
+      h.className = 't-dlg-h';
+      h.textContent = title;
+      const note = document.createElement('p');
+      note.textContent = t('This copy includes the document’s version history.');
+      const label = document.createElement('label');
+      label.className = 't-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 't-invite-leaveout';
+      label.append(cb, document.createTextNode(' ' + t('Leave version history out')));
+      label.title = t('Versions include text that was deleted. This file keeps them either way.');
+      const foot = document.createElement('div');
+      foot.className = 't-dlg-foot';
+      const close = (v: boolean | null) => {
+        if (answered) return;
+        answered = true;
+        back.remove();
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      };
+      const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(null); };
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 't-btn';
+      cancel.textContent = t('Cancel');
+      cancel.addEventListener('click', () => close(null));
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 't-btn t-primary';
+      go.textContent = t('Save invite…');
+      go.addEventListener('click', () => close(!cb.checked));
+      foot.append(cancel, go);
+      card.append(h, note, label, foot);
+      back.append(card);
+      // The scrim and Escape both close without an answer: that is a cancel.
+      back.addEventListener('click', e => { if (e.target === back) close(null); });
+      document.addEventListener('keydown', onKey);
+      document.body.append(back);
+      queueMicrotask(() => go.focus());
+    });
+  }
+
   async function inviteToEdit() {
     await goLive();
     const c = store.doc.collab;
@@ -252,10 +312,22 @@ export function initCollab(store: Store, editor: Editor): void {
       toast(t('Only the document owner can mint editor invites'));
       return;
     }
+    // An invite carries the version history by default (the kernel's invite
+    // tier), and every revision is a WHOLE earlier draft — text that was
+    // deleted. So when there is any, say so and offer to leave it out, before
+    // the file exists. Comments and signatures are in the same class and go with
+    // it, but they also reach an invitee over the live session, so the choice
+    // that matters here is the revisions, and that is what the note names.
+    let withHistory = true;
+    if (store.doc.revisions.length > 0) {
+      const keep = await confirmInviteHistory();
+      if (keep === null) return;
+      withHistory = keep;
+    }
     session.stampInto(store.doc);
     // Built in share.ts, the one place share copies are minted (and the place
     // test-export-secrets and test-type-share inspect).
-    const clone = await inviteCopy(store.doc, c.ownerPriv);
+    const clone = await inviteCopy(store.doc, c.ownerPriv, { withHistory });
     try {
       const ok = await writeUpdatedFileAs(await serializeAuto(clone), clone, { suffix: 'invite' });
       if (ok) toast(t('Editor copy saved — recipients join live with edit access'));

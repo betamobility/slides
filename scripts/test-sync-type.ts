@@ -29,7 +29,8 @@
 // The engine is the kernel's, bound to ('body', null, 'text'). Nothing here is
 // type app code beyond the binding and the model's own helpers.
 
-import { SyncEngine } from '../kernel/src/sync/crdt.ts';
+import { SyncEngine, shape, DOC_NODE } from '../kernel/src/sync/crdt.ts';
+import { emptyDoc } from '../type/src/model.ts';
 import { mulberry32, baseDoc, randomMutation, type Doc } from './lib/sync-fixtures-type.ts';
 import { parseDoc, spliceText, type Block } from '../type/src/model.ts';
 
@@ -273,7 +274,7 @@ console.log('\n=== what that looks like on one paragraph ===');
     page: { width: 816, height: 1056, marginX: 104, marginTop: 104, marginBottom: 104 },
     body: [{ id: 'p1', kind: 'para', text: TEXT,
              marks: [{ t: 'b', from: TEXT.indexOf(TERM), to: TEXT.indexOf(TERM) + TERM.length }] } as Block],
-    footnotes: {}, revisions: [], signatures: [],
+    footnotes: {}, revisions: [], signatures: {},
   } as unknown as Doc);
 
   const A = new Replica('alice', mk());
@@ -301,6 +302,131 @@ console.log('\n=== what that looks like on one paragraph ===');
      'both insertions survive — the TEXT merged correctly, token by token');
   console.log(`      The text merged; the offsets describing it did not. Neither replica ever`);
   console.log(`      held the correct offset, so no register winner could have been right.`);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOC-LEVEL KEYS SYNC BY ALLOWLIST (TYPE_SHAPE is bound to TYPE_FIELDS).
+//
+// Before binding, every doc key outside skipDoc synced. Now only content keys,
+// `maps`, and the history keys named in syncHistory are emitted. comments syncs
+// to everyone (maintainer ruling 2026-10-15); signatures keeps syncing because
+// it always has. The 1.2.7 peer below is the SAME shape() call minus the class
+// map and syncHistory — what 1.2.7 shipped — so the mixed-version rows are the
+// real wire question, not a stand-in for it.
+{
+  const OLD_SHAPE = shape('body', null, 'text', ['footnotes']);
+  class OldSync extends SyncEngine { constructor(a: string) { super(a, OLD_SHAPE); } }
+  const H = (t: string) => console.log(`\n  ${t}`);
+  const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
+  const mk = (): Record<string, unknown> => {
+    const d = emptyDoc() as unknown as Record<string, unknown>;
+    d.body = [{ id: 'p1', kind: 'para', text: 'Payment within 60 days.' }];
+    return d;
+  };
+  // doc-level keys a diff EMITS: set ops with no element and no slide
+  const docKeys = (ops: unknown[]): string[] => (ops as Array<{ op: string; el?: string; sl?: string; k: string }>)
+    .filter(o => o.op === 'set' && !o.el && !o.sl).map(o => o.k);
+  const COMMENT = { c1: { id: 'c1', text: 'check clause 4', author: 'Bob', at: 'x', replies: [],
+                          anchor: { block: 'p1', from: 0, to: 7 } } };
+  const SIG = { k1: { alg: 'ES256', pub: 'P', name: 'Alice', content: 'C', prev: '', sig: 'S' } };
+
+  H('with the map bound, what a type replica emits');
+  {
+    const A = new TypeSync('a'); const B = new TypeSync('b');
+    const dA = mk(); const dB = mk(); A.adopt(dA as never); B.adopt(dB as never);
+    const before = clone(dA);
+    dA.comments = COMMENT; dA.signatures = SIG;
+    dA.revisions = [{ id: 'r1', at: 'x', label: 'Revision 1', body: [] }];
+    dA.mystery = 'UNDECLARED';
+    const ops = A.diff(before as never, dA as never, { text: true });
+    const keys = docKeys(ops);
+    ok(keys.includes('comments'), 'comments IS emitted — synced to the room (ruling 2026-10-15)');
+    ok(keys.some(k => k.startsWith('signatures.')), 'signatures IS emitted — each one as its own key (ruling 7)');
+    ok(!keys.includes('revisions'), 'revisions is NOT emitted — each replica keeps its own timeline');
+    ok(!keys.some(k => k === 'mystery' || k.startsWith('mystery.')),
+      'an UNDECLARED key is NOT emitted — the allowlist, not the denylist');
+    const hist = ['revisions', 'comments', 'signatures'];
+    ok(keys.filter(k => hist.includes(k.split('.')[0])).every(k => k === 'comments' || k.startsWith('signatures.')),
+      'no history key other than comments and signatures leaves this replica');
+    B.apply(dB as never, ops);
+    ok(JSON.stringify(dB.comments) === JSON.stringify(COMMENT), 'a bound peer receives the comment');
+    ok(JSON.stringify(dB.signatures) === JSON.stringify(SIG), 'and the signature');
+    ok(dB.revisions === undefined || (dB.revisions as unknown[]).length === 0, 'and not the revisions');
+  }
+
+  H('MIXED VERSION: a bound replica and a 1.2.7-shaped replica');
+  {
+    // new → old
+    const N = new TypeSync('new'); const O = new OldSync('old');
+    const dN = mk(); const dO = mk(); N.adopt(dN as never); O.adopt(dO as never);
+    let before = clone(dN);
+    dN.comments = COMMENT;
+    const nops = N.diff(before as never, dN as never, { text: true });
+    ok(docKeys(nops).includes('comments') && !docKeys(nops).some(k => k.startsWith('comments.')),
+      'comments goes on the wire as ONE `comments` register — 1.2.7\'s shape, not per-key');
+    O.apply(dO as never, nops);
+    ok(JSON.stringify(dO.comments) === JSON.stringify(COMMENT), 'a 1.2.7 peer receives a comment from a bound peer');
+    ok(!Object.keys(dO).some(k => k.startsWith('comments.')), 'and writes no dotted junk key into its document');
+
+    // old → new
+    const N2 = new TypeSync('new2'); const O2 = new OldSync('old2');
+    const dN2 = mk(); const dO2 = mk(); N2.adopt(dN2 as never); O2.adopt(dO2 as never);
+    before = clone(dO2);
+    dO2.comments = COMMENT; dO2.mystery = 'from old';
+    N2.apply(dN2 as never, O2.diff(before as never, dO2 as never, { text: true }));
+    ok(JSON.stringify(dN2.comments) === JSON.stringify(COMMENT), 'a bound peer receives a comment from a 1.2.7 peer');
+    ok(dN2.mystery === 'from old', 'an undeclared key from the old peer is applied');
+    // The bound peer holds `mystery` but never emits it; merging its state back
+    // into the old peer must not DELETE the old peer's copy.
+    O2.mergeSnapshot(dO2 as never, N2.outboundDoc(clone(dN2)) as never, N2.toJSON() as never);
+    ok(dO2.mystery === 'from old', 'the bound peer\'s silence on an undeclared key is not a delete');
+    ok(JSON.stringify(dO2.comments) === JSON.stringify(COMMENT), 'and the comment survives the round trip');
+  }
+  H('RULING 7: concurrent signers both survive, on both replicas (row 1)');
+  {
+    // Two real engines, one document, each signing at the same moment. With
+    // the old whole-list register one signature was silently lost (measured:
+    // both replicas held only Bob's). Keyed by SigId, each is its own key.
+    const A = new TypeSync('a'); const B = new TypeSync('b');
+    const dA = mk(); const dB = clone(dA); A.adopt(dA as never); B.adopt(dB as never);
+    const bA = clone(dA), bB = clone(dB);
+    const sa = { alg: 'ES256', pub: 'PA', name: 'Alice', content: 'C', history: 'H', prev: '', sig: 'SA' };
+    const sb = { alg: 'ES256', pub: 'PB', name: 'Bob', content: 'C', history: 'H', prev: '', sig: 'SB' };
+    (dA.signatures as Record<string, unknown>).idAlice = sa;
+    (dB.signatures as Record<string, unknown>).idBob = sb;
+    const oA = A.diff(bA as never, dA as never, { text: true }), oB = B.diff(bB as never, dB as never, { text: true });
+    A.apply(dA as never, oB); B.apply(dB as never, oA);
+    const names = (d: Record<string, unknown>) => Object.values(d.signatures as object).map((x: any) => x.name).sort().join('+');
+    ok(names(dA) === 'Alice+Bob' && names(dB) === 'Alice+Bob',
+      `both signatures survive on BOTH replicas (alice holds ${names(dA)}, bob holds ${names(dB)})`);
+    ok(['idAlice', 'idBob'].every(k => JSON.stringify((dA.signatures as any)[k]) === JSON.stringify(k === 'idAlice' ? sa : sb)
+                                   && JSON.stringify((dB.signatures as any)[k]) === JSON.stringify(k === 'idAlice' ? sa : sb)),
+      'each under its own key, byte for byte, on both');
+  }
+
+  H('RULING 7: a SigId arriving as a remote map sub-key is inert when it is a prototype or dotted name (row 9)');
+  {
+    const A = new TypeSync('a'); const B = new TypeSync('b');
+    const dA = mk(); const dB = clone(dA); A.adopt(dA as never); B.adopt(dB as never);
+    const bA = clone(dA);
+    const sigs = dA.signatures as Record<string, unknown>;
+    const entry = { alg: 'ES256', pub: 'P', name: 'X', content: 'C', history: 'H', prev: '', sig: 'S' };
+    Object.defineProperty(sigs, '__proto__', { value: entry, enumerable: true, configurable: true, writable: true });
+    sigs['constructor'] = entry;
+    sigs['a.b'] = entry;
+    sigs['ok-id'] = entry;
+    const ops = A.diff(bA as never, dA as never, { text: true });
+    B.apply(dB as never, ops);
+    const got = dB.signatures as Record<string, unknown>;
+    ok(Object.getPrototypeOf(got) === Object.prototype || Object.getPrototypeOf(got) === null,
+      "a '__proto__' SigId never swaps the receiving map's prototype");
+    ok(!Object.hasOwn(got, '__proto__') && !Object.hasOwn(got, 'constructor'), 'prototype names are not installed as signatures');
+    ok(!Object.hasOwn(got, 'a') && !(got as any).a?.b, "a dotted SigId is never split into a nested path");
+    ok(Object.hasOwn(got, 'ok-id'), 'while an ordinary SigId arrives as one key');
+  }
+
+  void DOC_NODE;
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

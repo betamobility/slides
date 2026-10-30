@@ -1337,6 +1337,74 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
   saves the invite with no versions, so the deleted text in them stays behind;
   the file you are editing keeps all of them either way. The default is to
   include it. A space with no history goes straight to saving, as before.
+- **A live session shares only the space's content.** Spaces now tells the
+  sync engine which document fields are content, so a collaborator's copy only
+  ever sends those. A field written by a newer version of Bento is kept in your
+  file when it arrives, but never passed on to the rest of the room.
+- **Dark chrome's borders and fields match Bento Slides.** In dark mode the
+  interface's dividers and outlines are a shade lighter (`#333a45`, was
+  `#2e353f`) and text fields, selects and inputs are a shade lighter
+  (`#12151a`, was `#10141a`) — the values slides uses. A page's design keeps
+  its own colours.
+- **Every field looks like slides' fields.** Text fields, selects and text
+  boxes in the panels, dialogs and popovers now share the look slides uses: a
+  thin border, rounded corners, the theme's field colour, 26px tall, and an
+  amber ring when focused. Before this, the page inspector's **Also known as**
+  field and the **Save as template** name field showed the browser's grey,
+  square, sunken box. In dark theme, the **Replace from JSON** box was white,
+  and the link card, view filter and Add property fields sat on a different
+  shade from the rest.
+- **Restoring after a crash keeps the progress record from both copies.**
+  When the "Unsaved changes from a previous session" banner restores, every
+  day recorded in either the file or the recovered copy is kept. If both have
+  the same day, the newer copy's reading wins. A day is never counted twice
+  when one copy has thinned older days into weekly or monthly rows. Version
+  history comes back with the recovered copy. If you cleared the version
+  history before the crash, it stays cleared. Undo, restoring a version and
+  pasting document JSON still leave both records exactly as they are.
+- **The recovery banner warns when the recovered copy looks older than the
+  file.** It now says "This recovered copy looks older than the file you
+  opened. Keep the file unless you know it’s newer." **Keep the file** is the
+  default and has focus. It closes the banner and deletes nothing, because two
+  devices' clocks can disagree. **Restore anyway** still brings the copy back.
+  When the copy is not older, the banner keeps its usual wording, and
+  **Restore** is now its default button. The words and behaviour match
+  bento/slides.
+- **Spaces says when crash recovery is off.** When bento/home declines to keep
+  a recovery copy because the space is too large, the save status says "Crash
+  recovery is off for this space — it’s too large to keep a backup copy. Save
+  often." It says so once per space, and never for an encrypted space, which
+  never keeps a recovery copy.
+- **A slimmer top bar, closer to bento/slides'.** Reading view is now a
+  floating button at the page's bottom-right corner (bottom-left in
+  right-to-left languages), where slides keeps its Slideshow button. It stays
+  there in reading view, so it is also the way back; Esc still works. Graph
+  moved to the page list's header, beside ＋. Properties left the bar: open it
+  with `]`, with the panel's own arrow at the window's edge, or, on a phone,
+  from ⋯. Search stays in the bar.
+- **A sealed space keeps no readable copy in this browser.** A space sealed
+  by a password or by the identity seal writes no crash-recovery copy and no
+  version, and shows no recovery-off notice. Opening a sealed space never
+  offers a readable copy an earlier unsealed session left in this browser, and
+  deletes that space's copies. Neutral title while sealed,
+  matching the saved file's title: the tab reads "bento/spaces", from the
+  password prompt on.
+- **Using spaces at phone width no longer shuts the panels on the desktop.**
+  Widening the window past the phone breakpoint used to save the phone
+  drawers' state as your desktop choice, so the page list and the properties
+  panel stayed shut on every later wide load. A phone drawer opening or
+  closing now never changes the desktop layout, and widening the window
+  brings back the layout you last chose there. `[`, `]` and the panel
+  chevrons at desktop width are remembered as before.
+- **The calendar's second shape is called Agenda, and calendars go by Due.**
+  The calendar's Month button now switches to **Agenda**. It used to say
+  "Timeline", the same name as the timeline layout, which is a different
+  picture. Files are unchanged: an agenda is still saved as
+  `span: "timeline"`, so existing views open exactly as before. A page with
+  both a Start and a Due date now sits on its Due day. A page with only a
+  Start still sits on its Start day, and a journal entry still sits on its own
+  date. The line above the grid states the order, for example "Dated by the
+  journal date, then Due, Start."
 
 ## [0.1.0] — 2026-08-03
 

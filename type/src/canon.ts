@@ -26,9 +26,29 @@
 // same idea made exact enough to sign.
 
 import type { Signature } from './model.ts';
+import { sha256 } from './sha256.ts';
+import { TYPE_FIELDS } from './docclass.ts';
 
-export interface ChainEntry { ok: boolean; why: string | null; linked: boolean; name: string }
-export interface ChainResult { ok: boolean; entries: ChainEntry[] }
+/**
+ * What a signature's HISTORY commitment says about the history this copy holds.
+ *   matches       the copy's revisions are exactly the ones that were signed
+ *   changed       the copy holds revisions, and they are not the signed ones
+ *   missing       an EDITABLE document has lost the history the signature
+ *                 committed to (revisions or the salt deleted) — a WARNING:
+ *                 otherwise deleting `revisions` would turn "changed" into a
+ *                 neutral grey
+ *   not-included  a READER-TIER copy (readonly) never carries history; neutral
+ */
+export type HistoryState = 'matches' | 'changed' | 'missing' | 'not-included';
+/** One signature, verified ON ITS OWN (ruling 7): no other signature can make
+ *  it invalid. `after` is the SigId of the signature it says it follows, when
+ *  this copy holds that one — ordering information, never validity. */
+export interface SigEntry {
+  id: string; sig: Signature;
+  ok: boolean; why: string | null; history: HistoryState;
+  after: string | null;
+}
+export interface SigResult { ok: boolean; entries: SigEntry[] }
 
 /**
  * Fields that never enter a signature. Everything else is signed — including
@@ -48,6 +68,38 @@ export const VOLATILE = new Set([
   'preview',       // cached first-page render
   'signatures',    // the chain itself — a signature cannot cover itself
   'autosave',
+]);
+
+/**
+ * Every top-level field the CONTENT digest leaves out — v2.
+ *
+ * The digest attests the document's CONTENT: every field the class map
+ * (docclass.ts) calls content or identity, plus any field it does not declare
+ * at all (fail-safe: a field a later build adds is signed by default). It
+ * excludes:
+ *   - VOLATILE above (bookkeeping, credentials, and `signatures` itself);
+ *   - every field classed history, capability or mode — DERIVED from the map,
+ *     never hand-listed, so a field classified later moves with its class.
+ * History is not dropped from what a signature covers: it is covered by the
+ * separate COMMITMENT (historyCommitment), which is what lets a view-only copy,
+ * which carries no history and is read-only, still verify. Mode is excluded
+ * because a reader-tier copy SETS readonly:true; were it signed, every
+ * view-only copy would read "changed".
+ *
+ * Today that leaves, at the top level: format version docId title subtitle
+ * meta page body footnotes layout styles type optical track merge fonts
+ * assets — and anything undeclared. scripts/test-type-canon.ts derives the
+ * same list from the map and checks each one moves the digest.
+ *
+ * Like VOLATILE, it applies at EVERY level of the document: a nested key with
+ * one of these names (an embedded document's own `revisions`, say) is left out
+ * too. Embedded documents are carried, not attested.
+ */
+export const SIGNED_EXCLUDE: ReadonlySet<string> = new Set([
+  ...VOLATILE,
+  ...Object.entries(TYPE_FIELDS)
+    .filter(([, c]) => c === 'history' || c === 'capability' || c === 'mode')
+    .map(([k]) => k),
 ]);
 
 /** RFC 8785 number serialization: ECMAScript Number::toString, with -0 → 0. */
@@ -149,9 +201,51 @@ const unb64u = (s: string): Uint8Array => {
   return out;
 };
 
+/** The CONTENT digest a v2 signature attests (see SIGNED_EXCLUDE). */
 export async function digest(doc: unknown): Promise<string> {
-  const bytes = enc.encode(canonicalize(doc));
+  const bytes = enc.encode(canonicalize(doc, { volatile: SIGNED_EXCLUDE }));
   return b64u(await crypto.subtle.digest('SHA-256', bytes));
+}
+
+// ---------------------------------------------------------------- history commitment
+
+/** Domain tag: a commitment made here can never be replayed as another
+ *  protocol's hash of the same bytes. */
+const HISTORY_TAG = 'bento-type-history.v1';
+
+/**
+ * A fresh 128-bit history salt, base64url.
+ *
+ * WHY A SALT AT ALL. The commitment travels in every signature — into the room
+ * and into view-only copies that carry no history. Without a secret, someone
+ * holding a copy who knows the current text and suspects a small edit ("30
+ * days" against "60 days") could brute-force the earlier draft. Revision ids do
+ * NOT supply that secret: uid() keeps 8 hex chars of a UUID, 32 bits, and the
+ * timestamps are guessable. So a per-document salt, kept only with the full
+ * history (class 'history': dropped from every copy for someone else, never
+ * synced), makes the commitment reveal nothing.
+ *
+ * NEVER ROTATED: every signature commits to history UNDER this salt, so a new
+ * salt would orphan all of them. Salts are per-replica by design — history
+ * does not sync — so two replicas' commitments to similar histories differ.
+ */
+export function newHistorySalt(): string {
+  return b64u(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+/**
+ * sha256("bento-type-history.v1" || salt || canonical(revisions)), base64url.
+ * The salt is fixed-length (16 bytes), so the concatenation is unambiguous; the
+ * tag in front separates the domain. Absent revisions commit as an empty list.
+ */
+export async function historyCommitment(revisions: unknown, salt: string): Promise<string> {
+  const tag = enc.encode(HISTORY_TAG);
+  const s = unb64u(salt);
+  if (s.length !== 16) throw new TypeError('historySalt must be 16 bytes');
+  const body = enc.encode(canonicalize(revisions ?? []));
+  const all = new Uint8Array(tag.length + s.length + body.length);
+  all.set(tag, 0); all.set(s, tag.length); all.set(body, tag.length + s.length);
+  return b64u(await crypto.subtle.digest('SHA-256', all));
 }
 
 // ---------------------------------------------------------------- signatures
@@ -164,9 +258,16 @@ export const exportPub = async (k: CryptoKeyPair): Promise<string> =>
   b64u(await crypto.subtle.exportKey('raw', k.publicKey));
 
 /**
- * The bytes a signature is taken over.
+ * The bytes a signature is taken over (v2).
  *
- *     bento-type-sig.v1|<docId>|<content digest>|<prev sig or "">|<name>
+ *     bento-type-sig.v2|<docId>|<content digest>|<history commitment>|<prev sig or "">|<name>
+ *
+ * v2 REPLACES v1 (bento/type was unreleased, so no v1 signature exists to
+ * honour). v1 signed one digest of content AND history together, so a
+ * view-only copy — which must not carry the history, because every revision
+ * is a whole earlier draft — could never verify. v2 signs the content digest
+ * and a salted COMMITMENT to the history separately: the copy carries the
+ * commitment (inside each signature) and no drafts, and still verifies.
  *
  * THE NAME IS IN HERE, and it was not always. `name` is self-asserted — the
  * signer chooses it and no crypto makes it true — but "self-asserted" has to
@@ -190,8 +291,48 @@ export const exportPub = async (k: CryptoKeyPair): Promise<string> =>
  * between them are fixed-alphabet base64url and cannot. Normalizing also means
  * a name typed on a Mac verifies on Windows, which is rule 1 again.
  */
-const sigText = (docId: string, content: string, prev: string, name: string) =>
-  `bento-type-sig.v1|${str(docId)}|${content}|${prev}|${str(name)}`;
+const sigText = (docId: string, content: string, history: string, prev: string, name: string) =>
+  `bento-type-sig.v2|${str(docId)}|${content}|${history}|${prev}|${str(name)}`;
+
+/**
+ * A signature's id (ruling 7): derived from WHAT WAS SIGNED, never from the
+ * signature bytes.
+ *
+ *     SigId = base64url(sha256("bento-type-sigid.v1|" + pub + "|" + signed text))
+ *
+ * ECDSA is malleable — (r, n−s) is a second valid signature over the same text
+ * (measured: WebCrypto accepts it) — so an id taken from the bytes would let
+ * anyone mint a fresh key for a signature already on the document. This one is
+ * the same for every copy of the same act of signing, including a malleated
+ * one, on every replica. An entry stored under any other key is INVALID:
+ * verify recomputes it. Synchronous (sha256.ts) because parseDoc derives it
+ * while converting an old file. `pub` is base64url, so it cannot contain the
+ * separator.
+ */
+export function sigId(docId: string, s: Pick<Signature, 'pub' | 'content' | 'history' | 'prev' | 'name'>): string {
+  const text = sigText(docId, s.content, s.history, s.prev ?? '', s.name ?? '');
+  return b64u(sha256(enc.encode(`bento-type-sigid.v1|${s.pub}|${text}`)));
+}
+
+/**
+ * LOW-S (ruling 7). P-256's group order n; a signature's s is canonical when
+ * s ≤ n/2. WebCrypto emits either half at random, so sign() folds a high s to
+ * n − s (an equally valid signature over the same text), and verify() REJECTS
+ * a high s — one canonical encoding per signature.
+ */
+const N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+const HALF_N = N >> 1n;
+const toBig = (b: Uint8Array) => b.reduce((acc, x) => (acc << 8n) | BigInt(x), 0n);
+const fromBig = (v: bigint) => { const o = new Uint8Array(32); for (let i = 31; i >= 0; i--) { o[i] = Number(v & 0xffn); v >>= 8n; } return o; };
+/** Exported for the rig: is this raw r||s signature in canonical low-S form? */
+export const isLowS = (raw: Uint8Array): boolean => raw.length === 64 && toBig(raw.slice(32)) <= HALF_N;
+function lowS(raw: Uint8Array): Uint8Array {
+  const s = toBig(raw.slice(32));
+  if (s <= HALF_N) return raw;
+  const out = new Uint8Array(64);
+  out.set(raw.slice(0, 32)); out.set(fromBig(N - s), 32);
+  return out;
+}
 
 /**
  * Sign a revision, chaining to the previous signature.
@@ -203,36 +344,160 @@ const sigText = (docId: string, content: string, prev: string, name: string) =>
  * are not. The UI should say "signed after B's revision", never "signed at
  * 14:32" — see type-design.md §3.3.
  */
+type Signable = { docId: string; revisions?: unknown; historySalt?: string; readonly?: boolean };
+
+/**
+ * Sign, committing to the content AND the history, chaining to `prev`.
+ *
+ * The document MUST already carry its historySalt: the salt is part of the
+ * document (it has to be, to recompute the commitment later), so minting it is
+ * the caller's store edit, not something a signature may do behind the
+ * document's back. See newHistorySalt.
+ */
 export async function sign(
-  doc: { docId: string },
+  doc: Signable,
   key: CryptoKeyPair,
-  { name = '', prev = null }: { name?: string; prev?: { sig: string } | null } = {},
+  { name = '', prev = null }: { name?: string; prev?: string | null } = {},
 ): Promise<Signature> {
+  if (!doc.historySalt) throw new Error('sign: the document has no historySalt — mint one first');
   const content = await digest(doc);
-  const prevSig = prev ? prev.sig : '';
-  const text = sigText(doc.docId, content, prevSig, name);
-  const sig = b64u(await crypto.subtle.sign(SIG, key.privateKey, enc.encode(text)));
-  return { alg: 'ES256', pub: await exportPub(key), name, content, prev: prevSig, sig };
+  const history = await historyCommitment(doc.revisions, doc.historySalt);
+  // `prev` is the SigId of the signature this one follows (ordering only, ruling
+  // 7). It is signed, so it cannot be re-pointed after the fact.
+  const prevId = prev ?? '';
+  const text = sigText(doc.docId, content, history, prevId, name);
+  const raw = lowS(new Uint8Array(await crypto.subtle.sign(SIG, key.privateKey, enc.encode(text))));
+  return { alg: 'ES256', pub: await exportPub(key), name, content, history, prev: prevId, sig: b64u(raw) };
 }
 
-export async function verify(doc: { docId: string }, entry: Signature): Promise<{ ok: boolean; why: string | null }> {
+/**
+ * Two separate answers, never folded into one.
+ *
+ * ATTESTATION (`ok`, `why`) — the signature is valid over its own fields, and
+ * the copy's CONTENT is what was signed. This works anywhere, including a
+ * view-only copy, because neither half needs the history.
+ *
+ * HISTORY (`history`) — what the commitment says about the history THIS copy
+ * holds. Reported, not folded into `ok`: a valid attestation over a copy whose
+ * history changed is a different fact from a forgery, and the panel must be
+ * able to say which. A forged or edited `history` field is not a history
+ * state: it is in the signed text, so it breaks `ok`.
+ */
+export async function verify(doc: Signable, entry: Signature):
+  Promise<{ ok: boolean; why: string | null; history: HistoryState }> {
+  const history = await historyState(doc, entry);
   const content = await digest(doc);
-  if (content !== entry.content) return { ok: false, why: 'content-changed' };
-  const pub = await crypto.subtle.importKey('raw', unb64u(entry.pub), EC, false, ['verify']);
-  const text = sigText(doc.docId, entry.content, entry.prev, entry.name ?? '');
-  const ok = await crypto.subtle.verify(SIG, pub, unb64u(entry.sig), enc.encode(text));
-  return { ok, why: ok ? null : 'bad-signature' };
+  if (content !== entry.content) return { ok: false, why: 'content-changed', history };
+  if (typeof entry.history !== 'string') return { ok: false, why: 'bad-signature', history };
+  let raw: Uint8Array;
+  try { raw = unb64u(entry.sig); } catch { return { ok: false, why: 'bad-signature', history }; }
+  // one canonical encoding: a high-S copy is a second spelling of a signature,
+  // and is not accepted as one (ruling 7)
+  if (!isLowS(raw)) return { ok: false, why: 'bad-signature', history };
+  let pub: CryptoKey;
+  try { pub = await crypto.subtle.importKey('raw', unb64u(entry.pub), EC, false, ['verify']); }
+  catch { return { ok: false, why: 'bad-signature', history }; }
+  const text = sigText(doc.docId, entry.content, entry.history, entry.prev, entry.name ?? '');
+  const ok = await crypto.subtle.verify(SIG, pub, raw as BufferSource, enc.encode(text));
+  return { ok, why: ok ? null : 'bad-signature', history };
 }
 
-/** Verify a whole chain: every signature valid, and correctly linked. */
-export async function verifyChain(doc: { docId: string }, chain: Signature[]): Promise<ChainResult> {
-  const out: ChainEntry[] = [];
-  let expectedPrev = '';
-  for (const entry of chain) {
-    const r = await verify(doc, entry);
-    const linked = entry.prev === expectedPrev;
-    out.push({ ...r, linked, name: entry.name });
-    expectedPrev = entry.sig;
+async function historyState(doc: Signable, entry: Signature): Promise<HistoryState> {
+  const holds = Array.isArray(doc.revisions) && typeof doc.historySalt === 'string' && doc.historySalt !== '';
+  if (!holds) return doc.readonly === true ? 'not-included' : 'missing';
+  let mine: string;
+  try { mine = await historyCommitment(doc.revisions, doc.historySalt!); }
+  catch { return 'missing'; }                     // a malformed salt is a lost one
+  return mine === entry.history ? 'matches' : 'changed';
+}
+
+/**
+ * The display order (ruling 7): by `prev`, which is ordering information only.
+ * A signature comes after the one it follows when this copy holds that one;
+ * otherwise it starts a run of its own. Signatures that follow the same one (a
+ * fork, which concurrent signing produces routinely) and runs that start
+ * together are ordered by `at`, then by key, then by id, so every replica
+ * shows the same order. `prev` resolves by SigId, or for a signature made
+ * before ids existed, by the earlier signature's bytes.
+ */
+export function signatureOrder(sigs: Readonly<Record<string, Signature>>): Array<{ id: string; after: string | null }> {
+  const ids = Object.keys(sigs);
+  const bySigBytes = new Map(ids.map(id => [sigs[id].sig, id] as const));
+  const afterOf = (id: string): string | null => {
+    const p = sigs[id].prev;
+    if (!p) return null;
+    if (p !== id && Object.hasOwn(sigs, p)) return p;
+    const legacy = bySigBytes.get(p);
+    return legacy !== undefined && legacy !== id ? legacy : null;
+  };
+  const cmp = (x: string, y: string) => {
+    const a = sigs[x], b = sigs[y];
+    return (a.at ?? '').localeCompare(b.at ?? '') || a.pub.localeCompare(b.pub) || x.localeCompare(y);
+  };
+  const kids = new Map<string | null, string[]>();
+  for (const id of ids) { const k = afterOf(id); if (!kids.has(k)) kids.set(k, []); kids.get(k)!.push(id); }
+  const out: Array<{ id: string; after: string | null }> = [];
+  const seen = new Set<string>();
+  const walk = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id); out.push({ id, after: afterOf(id) });
+    for (const k of (kids.get(id) ?? []).sort(cmp)) walk(k);
+  };
+  for (const root of (kids.get(null) ?? []).sort(cmp)) walk(root);
+  // a malformed file can make a cycle with no root; show those too, never drop one
+  for (const id of ids.sort(cmp)) if (!seen.has(id)) walk(id);
+  return out;
+}
+
+/** The signature a new one follows: the last in display order, or none. */
+export function latestSignature(sigs: Readonly<Record<string, Signature>>): string | null {
+  const order = signatureOrder(sigs);
+  return order.length ? order[order.length - 1].id : null;
+}
+
+/**
+ * Verify every signature, each ON ITS OWN (ruling 7). An entry is valid when
+ * its key is its own derived SigId, its s is low, the signature verifies over
+ * its own fields, and the copy's content is what was signed. A fork, or a
+ * `prev` this copy does not hold, never makes one invalid.
+ */
+export async function verifyAll(doc: Signable, sigs: Readonly<Record<string, Signature>>): Promise<SigResult> {
+  const entries: SigEntry[] = [];
+  for (const { id, after } of signatureOrder(sigs)) {
+    const s = sigs[id];
+    const r = await verify(doc, s);
+    let derived = '';
+    try { derived = sigId(doc.docId, s); } catch { /* malformed: not its own id */ }
+    const ok = r.ok && derived === id;
+    entries.push({ id, sig: s, ok, why: r.ok && !ok ? 'bad-id' : r.why, history: r.history, after });
   }
-  return { ok: out.every(r => r.ok && r.linked), entries: out };
+  return { ok: entries.every(e => e.ok), entries };
+}
+
+/**
+ * How the Signatures panel presents a history state — maintainer ruling (8),
+ * 2026-10-15.
+ *
+ * History is compared and SHOWN only where this replica can actually know it:
+ * for a signature made with THIS device's key, or where the replica demonstrably
+ * holds the signed history (`matches`). Every other signature was made on
+ * another replica, whose revisions this one never receives (history does not
+ * sync), so "changed" or "missing" there is the EXPECTED condition — and a check
+ * that routinely warns on an expected condition trains people to ignore it, then
+ * miss a real alteration. Those read as the ruling's neutral line instead.
+ * Attestation (the signature, the content) is checked for every signature
+ * regardless; this governs only the history line.
+ *
+ * Returns a CODE and a tone, never display text: the panel maps each code to a
+ * literal t('…') call, which is what the i18n sweep can find. Never "verified":
+ * neutral lines state a fact about this copy, never that something is safe.
+ *   elsewhere  someone else's signature whose history this replica cannot see
+ */
+export type HistoryTone = 'ok' | 'warn' | 'neutral';
+export type HistoryLine = 'matches' | 'not-included' | 'elsewhere' | 'changed' | 'missing';
+export function historyDisplay(state: HistoryState, mine: boolean): { tone: HistoryTone; line: HistoryLine } {
+  if (state === 'matches') return { tone: 'ok', line: 'matches' };
+  if (state === 'not-included') return { tone: 'neutral', line: 'not-included' };
+  if (!mine) return { tone: 'neutral', line: 'elsewhere' };
+  return { tone: 'warn', line: state };            // 'changed' | 'missing', on THIS device's own signature
 }

@@ -186,14 +186,34 @@ function rewriteRefs(els: SlideElement[], remap: Map<string, string>) {
   }
 }
 
-/** Insert pasted elements onto a slide with fresh ids, nudged so they're visible. */
+/**
+ * How far to nudge a pasted group so it never lands exactly on top of an
+ * element it duplicates (#569). Pasting onto ANOTHER slide keeps the copied
+ * position — the point of copying a header or a logo across is that it lands
+ * where it was. Only where an element of the same type and size already sits
+ * at a pasted element's spot (the source slide, or a slide that got this
+ * paste before) does the whole group step +20/+20, as many times as it takes,
+ * so repeated pastes still cascade. Payload-independent, so a clip written by
+ * an older build behaves the same.
+ */
+function pasteOffset(els: SlideElement[], slide: Slide): number {
+  const sits = (e: SlideElement, d: number) => slide.elements.some((o) =>
+    o.type === e.type && o.w === e.w && o.h === e.h && o.x === (e.x ?? 0) + d && o.y === (e.y ?? 0) + d)
+  let d = 0
+  while (d < 20 * 50 && els.some((e) => sits(e, d))) d += 20
+  return d
+}
+
+/** Insert pasted elements onto a slide with fresh ids — at their copied
+ *  position, nudged only where they would cover what they duplicate. */
 export function insertElements(payload: ClipPayload, doc: BentoDoc, slide: Slide): SlideElement[] {
   const remap = mergeAssets(payload, doc)
   mergeFonts(payload, doc, remap)
+  const d = pasteOffset(payload.elements ?? [], slide)
   const els: SlideElement[] = (payload.elements ?? []).map((e) => ({
     ...(JSON.parse(JSON.stringify(e)) as SlideElement),
     id: uid(e.type[0]),
-    x: (e.x ?? 0) + 20, y: (e.y ?? 0) + 20,
+    x: (e.x ?? 0) + d, y: (e.y ?? 0) + d,
   }))
   rewriteRefs(els, remap)
   slide.elements.push(...els)

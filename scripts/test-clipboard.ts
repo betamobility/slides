@@ -72,6 +72,28 @@ console.log('\nelement clipboard')
   ok(font != null && target.assets![font.asset] === source.assets!['font-acme'], 'pasted element font points at its source bytes')
 }
 
+console.log('\npaste position (#569)')
+{
+  const doc = newDoc()
+  doc.slides.push({ id: 's2', background: '#fff', elements: [] } as never)
+  const a = defaultShape('rect', { id: 'a', x: 100, y: 80 }), b = defaultText({ id: 'b', html: 'B', x: 300, y: 80 })
+  doc.slides[0].elements = [a, b]
+  const clip = parseClip(serializeElements([a, b], doc))!
+  const at = (els: SlideElement[]) => els.map((e) => `${e.x},${e.y}`).join(' ')
+  const other = insertElements(clip, doc, doc.slides[1])
+  ok(at(other) === '100,80 300,80', `onto another slide it keeps the copied position (${at(other)})`)
+  const same1 = insertElements(clip, doc, doc.slides[0])
+  ok(at(same1) === '120,100 320,100', `onto the source slide it steps +20, as one group (${at(same1)})`)
+  const same2 = insertElements(clip, doc, doc.slides[0])
+  ok(at(same2) === '140,120 340,120', `pasting again cascades another +20 (${at(same2)})`)
+  const again = insertElements(clip, doc, doc.slides[1])
+  ok(at(again) === '120,100 320,100', `a second paste on the other slide steps off the first (${at(again)})`)
+  // an element at the spot that is NOT the same thing (other type/size) does not count
+  doc.slides.push({ id: 's3', background: '#fff', elements: [defaultShape('ellipse', { id: 'c', x: 100, y: 80, w: 37, h: 37 })] } as never)
+  const unlike = insertElements(clip, doc, doc.slides[2])
+  ok(at(unlike) === '100,80 300,80', `something different at the spot does not push the paste (${at(unlike)})`)
+}
+
 console.log('\nslide clipboard')
 {
   const source = sourceDoc()

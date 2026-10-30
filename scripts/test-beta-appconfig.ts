@@ -90,8 +90,10 @@ console.log('\nproduct name (v1.1)')
   ok(!/openLanguages\(/.test(editor), 'slides/src/editor/editor.ts has no openLanguages() (no Manage languages dialog)')
   ok(!/\blangD\b/.test(editor), "slides/src/editor/editor.ts has no langD entry in actions.append or the phone-chrome demote list")
   const pkg = slidesDir ? readFileSync(join(slidesDir, 'package.json'), 'utf8') : ''
-  ok(/--title beta\/slides/.test(pkg) && /--fail-name 'beta\/slides presentation'/.test(pkg) && /--agents-url https:\/\/slides\.betamobility\.ai\/agents\.md/.test(pkg),
-    "build:single passes --title, --fail-name and --agents-url to postbuild-compress.mjs (loader and tooling note name beta/slides)")
+  // Upstream 1.2.10 derives the old-browser wording from --title and the
+  // generator ("beta/slides presentation"), so --fail-name is gone.
+  ok(/--title beta\/slides/.test(pkg) && /--agents-url https:\/\/slides\.betamobility\.ai\/agents\.md/.test(pkg),
+    "build:single passes --title and --agents-url to postbuild-compress.mjs (loader and tooling note name beta/slides)")
   const shellPath = slidesDir ? join(slidesDir, 'dist-single/Bento_Slides.bento.html') : ''
   if (shellPath && existsSync(shellPath)) {
     const shell = readFileSync(shellPath, 'utf8')
