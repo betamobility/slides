@@ -101,6 +101,10 @@ if (import.meta.url.endsWith('.ts')) {
   ok(follow.indexOf('await clearRecovery(') > 0 && follow.indexOf('await clearRecovery(') < follow.indexOf('location.reload()'), '…and clearing the recovery snapshot before it reloads')
   const idle = /private idleForStoreReload\([\s\S]*?\n  }\n/.exec(editor)?.[0] ?? ''
   ok(/this\.store\.dirty/.test(idle) && /this\.presenting/.test(idle) && /isEditingText/.test(idle) && /isEncryptionActive\(\)/.test(idle), 'idle means: nothing unsaved, no show running, no open caret, not an encrypted deck')
+  // Presence names (BETA FORK): a store tab names its person from Access, and
+  // avatars carry two letters. Without these a signed-in team reads as "G".
+  ok(/isStoreOrigin\(\)\) void adoptAccessName\(\)\.then\(\(changed\) => \{ if \(changed\) session\.hello\(\) \}\)/.test(editor), 'editor.ts adopts the Access name on the store and re-announces presence')
+  ok(/chip\.textContent = initialsOf\(peer\.name\)/.test(editor), 'editor.ts draws avatar initials through initialsOf()')
   const main = readFileSync(join(root, 'slides/src/main.ts'), 'utf8')
   ok(/installStoreHost\(\)/.test(main), 'main.ts installs the store host at boot')
   const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8')
@@ -764,6 +768,39 @@ console.log('\n§7 conflict marker and the recovery choice')
   ok(choice({ mismatch: true, storeOrigin: false, conflicted: true }) === 'restore', 'a marker off the store origin means nothing (no store to overwrite)')
   store.clearStoreConflict(id)
   ok(!store.hasStoreConflict(id), 'clearStoreConflict removes it')
+}
+
+// ---- presence names: Access identity and initials ---------------------------------
+console.log('\n§8 presence names')
+{
+  const { initialsOf } = await import('../slides/src/beta/initials.ts')
+  ok(initialsOf('Johan Høgåsen-Hallesby') === 'JH', 'first and last word: "Johan Høgåsen-Hallesby" → JH')
+  ok(initialsOf('  ola  nordmann ') === 'ON', 'trimmed and upper-cased')
+  ok(initialsOf('Øyvind Ås Svendsen') === 'ØS', 'middle names skipped, Norwegian letters kept')
+  ok(initialsOf('Guest') === 'G' && initialsOf('') === '?' && initialsOf(undefined) === '?', 'one word → one letter; no name → ?')
+
+  const identity = (body: unknown, init: ResponseInit = {}) => respond(async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' }, ...init }))
+  ls.delete(store.AUTHOR_KEY)
+  identity({ name: 'Johan Høgåsen-Hallesby', email: 'johan@betamobility.io' })
+  ok(await store.adoptAccessName() === true, 'a store tab adopts the Access name')
+  ok(ls.get('bento-author') === 'Johan Høgåsen-Hallesby', '…into bento-author, which presence reads')
+  ok(last().url === `${STORE}/cdn-cgi/access/get-identity` && last().init.redirect === 'manual' && last().init.credentials === 'same-origin', '…from same-origin get-identity, never following a login redirect')
+  ok(await store.adoptAccessName() === false, 'the same name again is no change (no needless re-announce)')
+  ls.set('bento-author', 'J')
+  ok(await store.adoptAccessName() === true && ls.get('bento-author') === 'Johan Høgåsen-Hallesby', 'on the store, Access wins over a name typed earlier')
+  identity({ email: 'ola.nordmann@betamobility.io' })
+  ok(await store.accessName() === 'Ola Nordmann', 'no name in the identity → one made from the email')
+  respond(async () => Response.redirect('https://beta.cloudflareaccess.com/login', 302))
+  ok(await store.accessName() === null, 'signed out (a redirect) → null')
+  identity('<html>login</html>', { headers: { 'content-type': 'text/html' } })
+  ok(await store.accessName() === null, 'a login page instead of JSON → null')
+  respond(async () => { throw new TypeError('network') })
+  ok(await store.accessName() === null, 'a failed fetch → null, no throw')
+  const before = calls.length
+  const saved = g.location
+  g.location = { ...saved, origin: 'null', href: 'file:///x.bento.html', pathname: '/x.bento.html', protocol: 'file:' }
+  ok(await store.accessName() === null && calls.length === before, 'off the store origin: no request at all')
+  g.location = saved
 }
 
 console.log(`\n§2–6: ${checks - failures}/${checks} checks passed`)
