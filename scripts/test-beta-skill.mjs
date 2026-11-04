@@ -206,11 +206,11 @@ function sectionOf(text, heading) {
   ok(/splice\.mjs --link/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')) && /splice\.mjs --read <deckId>/.test(sectionOf(skill, '### Creating and updating a deck with splice.mjs')), 'the command synopsis lists --link and --read')
 }
 // The fallback is still documented, and is no longer the first answer: the
-// pairing command must come BEFORE Save to Beta in the publishing section.
+// pairing command must come BEFORE Save to the cloud in the publishing section.
 {
   const section = sectionOf(skill, '### Publishing: one click in a browser')
   const linkAt = section.indexOf('--link')
-  const saveAt = section.indexOf('Save to Beta')
+  const saveAt = section.indexOf('Save to the cloud')
   ok(linkAt >= 0 && saveAt >= 0 && linkAt < saveAt, 'the skill offers pairing before the hand-the-file-back fallback')
   ok(/cannot run `node`|cannot run node/.test(section), 'and keeps that fallback for a sandbox that cannot run the tool')
 }
