@@ -11,6 +11,8 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Collaborators show their own initials.** In a deck opened from slides.betamobility.ai, the people in the top bar are named by their Beta sign-in, so the avatars read JH or RM instead of G for Guest, and each shows first and last initial.
+
 ## [2026.11.1] — 2026-11-04
 
 - **Live slides can show Beta's signed-in web apps.** A live scene that points at one of Beta's own apps (the Sonder viewer, for its street view) now runs with that app's own origin, so it starts inside the slide instead of stalling on its first screen. It still cannot reach the deck. Every other page, and inline scenes, keep the stricter sandbox.

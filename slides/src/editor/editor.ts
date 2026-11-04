@@ -22,6 +22,8 @@ import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, ap
 import { LightTable, thumbBase } from '../beta/lighttable' // BETA FORK: the slide list as a grid
 import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { fetchLibrary, storeHost } from '../beta/store' // BETA FORK (U11): the scene library
+import { adoptAccessName } from '../beta/store' // BETA FORK: presence names from Access
+import { initialsOf } from '../beta/initials' // BETA FORK: two-letter avatars
 import { insertScene, openGallery } from '../beta/gallery' // BETA FORK (U11)
 import { OfflineError } from '../../../kernel/src/net.ts' // BETA FORK (U11)
 import { rasterizeSvg } from '../export/raster'
@@ -230,6 +232,10 @@ export class Editor {
     // BETA FORK (runtime slides U10): a store save that meets a person's newer
     // version may retry only while this tab is live in the room that carried it.
     setLiveCheck(() => onlineTransport()?.status === 'open')
+    // BETA FORK: on the store, presence names this person by their Access
+    // identity instead of "Guest" (beta/store.ts adoptAccessName), and peers
+    // hear the new name at once
+    if (isStoreOrigin()) void adoptAccessName().then((changed) => { if (changed) session.hello() })
     // presence arrivals/departures get a quiet heads-up — said once per REAL
     // arrival and departure (presencetoasts.ts: a departure must last, a
     // return within minutes is a flap of a throttled tab, not a join), and
@@ -304,7 +310,7 @@ export class Editor {
       const chip = document.createElement('button')
       chip.className = 'ed-avatar'
       chip.style.background = cssColor(peer.color, '#888') // a peer's colour: gated
-      chip.textContent = (peer.name || '?').trim().charAt(0).toUpperCase() || '?'
+      chip.textContent = initialsOf(peer.name) // BETA FORK: two letters (JH), not the first one
       const idx = this.store.doc.slides.findIndex((s) => s.id === peer.slide)
       chip.title =
         idx >= 0

@@ -175,6 +175,56 @@ export function storeIdFromLocation(): string | null {
   }
 }
 
+// --- who is signed in ---------------------------------------------------------
+//
+// Presence names a person by the `bento-author` value in this browser, which
+// only the Share panel's name field ever wrote, so a team signed in through
+// Access still saw each other as "Guest". On the store origin Access already
+// knows who this is: `/cdn-cgi/access/get-identity` answers same-origin with
+// the identity provider's display name (Google's full name for Beta). The
+// store tab adopts it, and Access wins over a typed name there, because a
+// signed-in person is identified and the field cannot stand in for that.
+// Off the store origin nothing changes.
+
+/** The localStorage key presence and comments read the display name from. */
+export const AUTHOR_KEY = 'bento-author'
+
+/** "johan.hal@x" → "Johan Hal": only when the identity carries no name. */
+function nameFromEmail(email: string): string {
+  const local = email.split('@')[0] ?? ''
+  return local.split(/[._-]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
+/** The display name Access holds for this tab, or null (not the store, signed
+ *  out, offline, or an answer that is not an identity). Never throws. */
+export async function accessName(): Promise<string | null> {
+  if (!isStoreOrigin()) return null
+  let res: Response
+  try {
+    res = await netFetch(`${storeHost()}/cdn-cgi/access/get-identity`, { credentials: 'same-origin', redirect: 'manual', cache: 'no-store' })
+  } catch {
+    return null
+  }
+  if (res.type === 'opaqueredirect' || !res.ok) return null
+  try {
+    const id = await res.json()
+    const name = typeof id?.name === 'string' ? id.name.trim() : ''
+    const email = typeof id?.email === 'string' ? id.email.trim() : ''
+    const out = name || (email.includes('@') ? nameFromEmail(email) : '')
+    return out ? out.slice(0, 80) : null
+  } catch {
+    return null // Access's login page, or anything else that is not JSON
+  }
+}
+
+/** Write the Access name into `bento-author`. True when it changed, so the
+ *  caller re-announces presence. */
+export async function adoptAccessName(): Promise<boolean> {
+  const name = await accessName()
+  if (!name || lsGet(AUTHOR_KEY) === name) return false
+  return lsSet(AUTHOR_KEY, name)
+}
+
 // --- requests -----------------------------------------------------------------
 
 const headers = { 'content-type': 'text/html; charset=utf-8' }
