@@ -72,11 +72,14 @@
 // the person, so a deck an agent made is theirs to delete.
 //
 // The worker never reads into a document beyond the shape check on write:
-// one #bento-doc block whose JSON parses and is a bento/slides document or a
-// bento/enc envelope. Serving is a stream of the stored object.
+// one #bento-doc block that is a well-formed JSON object and a bento/slides
+// document or a bento/enc envelope. Serving is a stream of the stored object.
+// Nothing here parses a whole document: block.js `topFields` reads the few
+// top-level fields the store needs, because a full parse of a multi-megabyte
+// deck ran the worker past Cloudflare's resource limits (1102, 2026-11-04).
 
 import { verifyAccess } from './access.js'
-import { rewriteBlock, shellOf, splitShell } from './block.js'
+import { fieldText, fieldValue, rewriteBlock, setField, shellOf, splitShell, topFields } from './block.js'
 import {
   approvePairing, listGrants, readPairing, revokeGrant, verifyGrant,
 } from './grant.js'
@@ -252,8 +255,6 @@ const NO_FRAMING = {
 
 // --- write validation (shape only) ------------------------------------------
 
-const DOC_BLOCK = /<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/script>/gi
-
 /**
  * Inspect an upload. Returns `{ reason }` (one word) on refusal, else the
  * metadata the shape yields. The bytes themselves are never modified.
@@ -261,23 +262,21 @@ const DOC_BLOCK = /<script\b[^>]*\bid=["']?bento-doc["']?[^>]*>([\s\S]*?)<\/scri
 function inspect(bytes) {
   if (bytes.byteLength > MAX_BYTES) return { reason: 'size' }
   const src = new TextDecoder().decode(bytes)
-  const blocks = [...src.matchAll(DOC_BLOCK)]
-  if (blocks.length !== 1) return { reason: 'block' }
-  let doc
-  try {
-    doc = JSON.parse(blocks[0][1])
-  } catch {
-    return { reason: 'json' }
-  }
-  if (!doc || typeof doc !== 'object') return { reason: 'json' }
-  if (doc.format === 'bento/enc') {
-    if (doc.v === 1 && doc.data && doc.salt && doc.iv) return { title: 'Encrypted deck', docId: '', kind: 'encrypted' }
+  const parts = splitShell(src)
+  if (!parts) return { reason: 'block' }
+  const top = topFields(parts.body)
+  if (!top) return { reason: 'json' }
+  const get = (k) => fieldValue(parts.body, top, k)
+  const format = get('format')
+  if (format === 'bento/enc') {
+    if (get('v') === 1 && get('data') && get('salt') && get('iv')) return { title: 'Encrypted deck', docId: '', kind: 'encrypted' }
     return { reason: 'format' }
   }
-  if (doc.format === 'bento/slides') {
-    const title = typeof doc.title === 'string' ? doc.title : ''
-    const kind = doc.readonly ? 'player' : doc.template ? 'template' : 'deck'
-    return { title, docId: typeof doc.docId === 'string' ? doc.docId : '', kind }
+  if (format === 'bento/slides') {
+    const title = get('title')
+    const docId = get('docId')
+    const kind = get('readonly') ? 'player' : get('template') ? 'template' : 'deck'
+    return { title: typeof title === 'string' ? title : '', docId: typeof docId === 'string' ? docId : '', kind }
   }
   return { reason: 'format' }
 }
@@ -614,22 +613,27 @@ async function restoreIntoUpload(existing, bytes) {
   const b = splitShell(incomingSrc)
   if (!a || !b) return { reason: 'block' }
   if (shellOf(a) !== shellOf(b)) return { reason: 'shell' }
-  let stored, incoming
-  try {
-    stored = JSON.parse(a.body)
-    incoming = JSON.parse(b.body)
-  } catch {
-    return { reason: 'json' }
-  }
-  const encStored = stored?.format === 'bento/enc'
-  const encIncoming = incoming?.format === 'bento/enc'
+  const ta = topFields(a.body)
+  const tb = topFields(b.body)
+  if (!ta || !tb) return { reason: 'json' }
+  const encStored = fieldValue(a.body, ta, 'format') === 'bento/enc'
+  const encIncoming = fieldValue(b.body, tb, 'format') === 'bento/enc'
   if (encStored !== encIncoming) return { reason: 'format' }
   // Encrypted both ways: nothing to restore, and nothing here can read it.
   if (encStored) return { bytes }
+  // The stored `collab` text goes in as it was stored, every incoming copy
+  // out. A raw `<` in the incoming block takes the old full rewrite, which
+  // escapes it: the cut keeps the incoming text as it came.
+  const collab = fieldText(a.body, ta, 'collab')
+  if (b.body.indexOf('<') === -1 && (collab === undefined || collab.indexOf('<') === -1)) {
+    const body = setField(b.body, tb, 'collab', collab)
+    return { bytes: new TextEncoder().encode(`${b.prefix}${b.open}${body}${b.close}${b.suffix}`) }
+  }
   try {
+    const stored = collab === undefined ? undefined : JSON.parse(collab)
     const out = rewriteBlock(incomingSrc, (doc) => {
-      if (stored.collab === undefined) delete doc.collab
-      else doc.collab = stored.collab
+      if (stored === undefined) delete doc.collab
+      else doc.collab = stored
       return doc
     })
     return { bytes: new TextEncoder().encode(out) }
@@ -983,6 +987,17 @@ async function harnessRead(env, id, { stripCollab = false } = {}) {
   if (!obj) return empty(404)
   if (!stripCollab) return new Response(obj.body, { status: 200, headers: deckHeaders(obj) })
   const src = await obj.text()
+  // The usual case without a parse: cut every top-level `collab` out of the
+  // block's text. An encrypted deck is served as it is.
+  const parts = splitShell(src)
+  const top = parts && topFields(parts.body)
+  if (top && parts.body.indexOf('<') === -1) {
+    const out = fieldValue(parts.body, top, 'format') === 'bento/enc'
+      ? src
+      : `${parts.prefix}${parts.open}${setField(parts.body, top, 'collab')}${parts.close}${parts.suffix}`
+    const bytes = new TextEncoder().encode(out)
+    return new Response(bytes, { status: 200, headers: deckHeaders(obj, bytes.byteLength) })
+  }
   let out
   try {
     out = rewriteBlock(src, (doc) => {
