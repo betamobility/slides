@@ -10,6 +10,14 @@
 //
 // THE FRAME. `sandbox="allow-scripts allow-forms"` with no same-origin: every
 // deck is untrusted input, so a scene gets a screen and never this document.
+// One exception (`sceneSandbox`): a URL override on ANOTHER origin also gets
+// `allow-same-origin`, which gives the page its own origin, not this one. It
+// is still cross-origin to the deck, so it reaches this document no more than
+// before, but its own storage, cookies and same-origin requests work, and a
+// hosted web app (a Next.js viewer behind the Beta sign-in) can start at all.
+// An inline scene, or a URL on this origin, keeps the opaque sandbox: with
+// allow-same-origin it would share this document's origin and could lift its
+// own sandbox.
 //
 // THE LIVE WINDOW (2026-10-13-2236 plan, U13). This file owns EVERY live frame
 // in a show: a runtime slide's scene and a web embed's page. render.ts is told
@@ -194,6 +202,21 @@ export function assetUrl(storeId: string | null, name: string): string | null {
 /** R7: a URL override loads only over https and online (the offline switch is frameAllowed's). */
 export const urlFrameAllowed = (url: string, env: { online: boolean }): boolean =>
   HTTPS.test(url) && env.online
+
+const SANDBOX = 'allow-scripts allow-forms'
+
+/**
+ * The sandbox for a scene's frame. A hosted page on another origin keeps its
+ * own origin (see THE FRAME above); everything else runs opaque. `shellOrigin`
+ * is this document's origin; a URL that does not parse counts as this origin.
+ */
+export function sceneSandbox(source: { html?: string; url?: string }, shellOrigin: string): string {
+  if (source.html != null || typeof source.url !== 'string') return SANDBOX
+  let origin: string
+  try { origin = new URL(source.url).origin } catch { return SANDBOX }
+  if (!HTTPS.test(source.url) || origin === 'null' || origin === shellOrigin) return SANDBOX
+  return `${SANDBOX} allow-same-origin`
+}
 
 /**
  * Whether any frame mounts. The offline switch refuses inline scenes too: the
@@ -388,7 +411,7 @@ export function createRuntimeShow(
   const blank = (title: string): HTMLIFrameElement => {
     const frame = document.createElement('iframe')
     frame.className = 'bento-runtime-frame'
-    frame.setAttribute('sandbox', 'allow-scripts allow-forms')
+    frame.setAttribute('sandbox', SANDBOX)
     frame.referrerPolicy = 'no-referrer'
     frame.title = title
     return frame
@@ -444,6 +467,8 @@ export function createRuntimeShow(
     // slide. Do not wait for bento:ready ALONE here; hosted pages never send it.
     //
     // content before insertion, so the frame navigates once, straight to the scene
+    // BETA FORK: a hosted page on another origin keeps its own origin (sceneSandbox).
+    frame.setAttribute('sandbox', sceneSandbox(source, typeof location === 'undefined' ? '' : location.origin))
     if (source.html != null) frame.srcdoc = source.html
     else frame.src = source.url!
     hold(h, surface)

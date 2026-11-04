@@ -345,6 +345,16 @@ try { rp = await import('../slides/src/runtime-present.ts') } catch (e) { consol
   // Access-gated asset Blobs go to inline scenes only, never to a hosted page
   ok(rp.sceneGetsAssets?.(inline) === true, 'an inline (srcdoc) scene receives bento:assets')
   ok(rp.sceneGetsAssets?.(hosted) === false, 'a url-override scene never receives bento:assets')
+  const shell = 'https://slides.betamobility.ai'
+  ok(rp.sceneSandbox?.(inline, shell) === 'allow-scripts allow-forms', 'an inline scene stays opaque')
+  ok(rp.sceneSandbox?.({ url: 'https://sonder.betamobility.com/app/x' }, shell) === 'allow-scripts allow-forms allow-same-origin',
+    'a hosted page on another origin keeps its own origin')
+  ok(rp.sceneSandbox?.({ url: 'https://slides.betamobility.ai/d/abc/x.html' }, shell) === 'allow-scripts allow-forms',
+    'a url on the shell\'s own origin stays opaque: it would share the deck\'s origin')
+  ok(rp.sceneSandbox?.({ url: 'http://example.com/' }, shell) === 'allow-scripts allow-forms', 'plain http never gets an origin')
+  ok(rp.sceneSandbox?.({ url: 'not a url' }, shell) === 'allow-scripts allow-forms', 'an unparsable url stays opaque')
+  ok(rp.sceneSandbox?.({ url: 'https://example.com/', html: '<p>x</p>' }, shell) === 'allow-scripts allow-forms',
+    'inline html wins over a url and stays opaque')
 
   // fetchAssets asks the store to revalidate, so a re-uploaded asset is not an hour stale
   if (rp.fetchAssets) {
