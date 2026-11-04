@@ -66,7 +66,7 @@ if (import.meta.url.endsWith('.ts')) {
   const storePath = join(root, 'slides/src/beta/store.ts')
   ok(existsSync(storePath), 'slides/src/beta/store.ts exists')
   const editor = readFileSync(join(root, 'slides/src/editor/editor.ts'), 'utf8')
-  ok(/Save to Beta…/.test(editor), 'editor.ts offers "Save to Beta…"')
+  ok(/Save to the cloud…/.test(editor), 'editor.ts offers "Save to the cloud…"')
   // After a conflict (§7): the latch leaves a marker, and the recovery banner
   // asks recoveryChoice() rather than always offering whole-document Restore.
   ok(/markStoreConflict\(/.test(editor), 'editor.ts marks the conflict when a save latches')

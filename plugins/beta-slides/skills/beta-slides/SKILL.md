@@ -249,7 +249,7 @@ that moved travel to their new place and new tokens fade in.
    ```
 
    A deck that exists only as a finished file is saved by the user instead:
-   they open it and pick **Share → Save to Beta**. **A deck that is already
+   they open it and pick **Share → Save to the cloud**. **A deck that is already
    in the store is changed only with `splice.mjs`.** There is no hand-written
    replace: the tool reads the deck, keeps what people arranged, and writes
    back only if nobody saved in between.
@@ -825,11 +825,11 @@ cannot be changed from there: the user edits it in the editor, or you change
 it from a shell that has `node`.
 
 > Open the file (download it and double-click, or drag it into Chrome), then
-> **Share → Save to Beta**. A store tab opens, you sign in, and you get back a
+> **Share → Save to the cloud**. A store tab opens, you sign in, and you get back a
 > `slides.betamobility.ai/d/<id>` link. From then on ⌘S in that tab saves back
 > in place.
 
-Save to Beta appears in the Share panel whenever the deck is open off the
+Save to the cloud appears in the Share panel whenever the deck is open off the
 store origin, and it needs a valid `@betamobility.io` identity. Anyone else
 gets the login page and keeps the file, which is a complete deck with the
 editor and Export PPTX already in it. Say that plainly rather than reporting

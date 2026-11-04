@@ -1696,8 +1696,8 @@ export class Editor {
       // share it as a link. On the store origin the deck already lives there
       // (⌘S saves in place; "Invite to edit" copies the link).
       if (!isStoreOrigin()) {
-        action(ICONS.globe, t('Save to Beta…'), () => void this.saveToBeta(),
-          t('Stores this deck at decks.betamobility.ai behind Beta’s login and gives you a link colleagues open instead of a file.'))
+        action(ICONS.globe, t('Save to the cloud…'), () => void this.saveToBeta(), // BETA FORK: cloud wording
+          t('Saves this deck to the cloud at slides.betamobility.ai, behind Beta’s login, and gives you a link colleagues open instead of a file.'))
       }
     } else {
       note(t('This is a view-only copy — it follows the live session but can’t change the deck.'))
@@ -2871,7 +2871,7 @@ export class Editor {
     if (slideId === null) return
     const i = this.store.doc.slides.findIndex((s) => s.id === slideId)
     if (i >= 0) this.store.goTo(i)
-    this.toast(t('This deck was updated in the store. You now have the latest version.'), 6000)
+    this.toast(t('This deck was updated in the cloud. You now have the latest version.'), 6000) // BETA FORK: cloud wording
   }
 
   /** Keep the dirty dot's tooltip honest about the backstop — the file is still
@@ -2984,7 +2984,9 @@ export class Editor {
     // is named by the file it came from — the URL is stale the moment a drop
     // replaces the document, and would otherwise label this deck with the name
     // of the file still sitting in the address bar.
-    const file = currentFileName() ?? this.openedAs ?? openedFileName()
+    // BETA FORK: a cloud deck has no file; its handle name is the deck id plus
+    // an extension, which said nothing to a person reading the tab or the chip.
+    const file = isStoreOrigin() ? null : currentFileName() ?? this.openedAs ?? openedFileName()
     const named = file && fileBase(file) !== this.store.doc.title
     // Two segments, never three: a tab is narrow, and once a file name is
     // shown the app name is the least informative thing competing for it.
@@ -3066,15 +3068,15 @@ export class Editor {
     // generated at runtime, not stored. That file is a perfectly good Bento
     // document; it just has nothing in it yet, so say that rather than call it
     // a foreign file.
-    if (el && !block) { alert(t('{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.', { name: named })); return true }
+    if (el && !block) { alert(t('{name} is an empty copy of Beta Slides, not a saved deck. Open it on its own to start one.', { name: named })); return true } // BETA FORK: cloud wording
     let parsed: unknown
-    try { parsed = JSON.parse(block) } catch { alert(t('{name} isn’t a Bento document.', { name: named })); return true }
+    try { parsed = JSON.parse(block) } catch { alert(t('{name} isn’t a Beta Slides file.', { name: named })); return true } // BETA FORK: cloud wording
     if ((parsed as { format?: string })?.format === 'bento/enc') {
       alert(t('{name} is password-protected. Open it directly to unlock it.', { name: named }))
       return true
     }
     const next = parseDoc(JSON.stringify(parsed))
-    if (!next) { alert(t('{name} isn’t a Bento document.', { name: named })); return true }
+    if (!next) { alert(t('{name} isn’t a Beta Slides file.', { name: named })); return true } // BETA FORK: cloud wording
     // a file is guarded by value only — its own identity, and no key dropped,
     // since it may come from a newer Bento (restoregate.ts guardOpenedDoc)
     const neutralised = guardOpenedDoc(next)
@@ -3163,7 +3165,7 @@ export class Editor {
     const bar = div('ed-recover')
     const when = new Date(snap.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })
     const msg = document.createElement('span')
-    msg.textContent = t('This deck changed in the store after your unsaved changes from {when}. Keep them as a new deck, or discard them.', { when })
+    msg.textContent = t('Someone saved a newer version of this deck in the cloud after your unsaved changes from {when}. Keep yours as a new deck, or discard them.', { when }) // BETA FORK: cloud wording
     const keep = document.createElement('button')
     keep.className = 'ed-btn ed-btn-primary'
     keep.textContent = t('Save my version as a new deck')
@@ -3323,7 +3325,7 @@ export class Editor {
     const ul = document.createElement('ul'); ul.className = 'ed-help-tips'
     for (const tip of [
       t('Paste an image or text straight onto the canvas with ⌘V.'),
-      t('Copy a slide (⌘C with nothing selected) and paste it into another Bento deck.'),
+      t('Copy a slide (⌘C with nothing selected) and paste it into another deck.'), // BETA FORK: cloud wording
       t('Make a chart from a table and it stays linked — edit the table, the chart updates.'),
       t('Your work auto-saves; restore earlier versions from Save → Version history.'),
     ]) { const li = document.createElement('li'); li.textContent = tip; ul.appendChild(li) }

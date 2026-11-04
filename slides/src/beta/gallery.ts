@@ -241,15 +241,15 @@ export function openGallery(host: GalleryHost): HTMLElement {
     if (avail !== 'ok') {
       let link: HTMLElement | undefined
       if (avail === 'not-store' && host.storeLink) {
-        const a = el('a', 'ed-gallery-link', t('Open the deck store'))
+        const a = el('a', 'ed-gallery-link', t('Open your cloud decks'))
         a.href = host.storeLink
         a.target = '_blank'
         a.rel = 'noopener'
         link = a
       }
       message(avail === 'offline'
-        ? t('You are offline. The scene library is read from the deck store.')
-        : t('The scene library is available in a deck opened from the deck store.'), avail, link)
+        ? t('You are offline. The scene library is loaded from the cloud.')
+        : t('The scene library is available in decks opened from the cloud.'), avail, link)
       return
     }
     message(t('Loading the scene library…'), 'loading')
@@ -261,8 +261,8 @@ export function openGallery(host: GalleryHost): HTMLElement {
       else shelf(scenes)
     }).catch((err) => {
       if (!overlay.isConnected) return
-      if (host.offline(err)) { message(t('You are offline. The scene library is read from the deck store.'), 'offline'); return }
-      if (host.signedOut(err)) { message(t('Sign in to the deck store to see the scene library, then try again.'), 'signed-out', retry()); return }
+      if (host.offline(err)) { message(t('You are offline. The scene library is loaded from the cloud.'), 'offline'); return }
+      if (host.signedOut(err)) { message(t('Sign in to Beta to see the scene library, then try again.'), 'signed-out', retry()); return }
       message(t('The scene library could not be read.'), 'failed', retry())
     })
   }
