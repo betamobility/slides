@@ -11,6 +11,9 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Live slides can show Beta's signed-in web apps.** A live scene that points at one of Beta's own apps (the Sonder viewer, for its street view) now runs with that app's own origin, so it starts inside the slide instead of stalling on its first screen. It still cannot reach the deck. Every other page, and inline scenes, keep the stricter sandbox.
+- **Claude can add editable slides to a deck in use.** The splice tool takes `{ slide, insertAfter }` in `edits.json` and adds a whole native slide to a stored deck, after any slide or at the end, without touching the slides already there. That is how slides from another deck are merged in while the deck keeps its link.
+
 ## [2026.10.12] — 2026-10-30
 
 - **Bullets are real lists.** The Beta bullet layouts hold their points in one box: Enter adds the next bullet inside it, an empty row no longer leaves a stray dot in the show, and typing into a fresh layout starts a bullet.

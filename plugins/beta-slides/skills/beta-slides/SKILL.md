@@ -64,8 +64,9 @@ Whichever kind, where the deck lives decides how you write it:
   itself. See "Publishing: one click in a browser" below; never ask for a
   token.
 - **A deck already in the store**: only `splice.mjs`, under the ownership
-  rule. You change content by element id and replace or add live scenes; you
-  never add, move or reorder native slides or elements.
+  rule. You change content by element id, replace or add live scenes, and add
+  whole native slides (`{ slide, insertAfter }` in `edits.json`); you never
+  move, reorder or remove slides, and never add elements to an existing one.
 
 ## Starting from nothing
 
@@ -157,9 +158,14 @@ only kind a person can fully edit in the bento UI, so it is the default.
 In a stored deck, a person may since have moved, resized or restyled what you
 wrote. Read the deck first, take ids from that copy, and change only content
 through `edits.json` (the key per type is listed under Runtime slides). If the
-brief needs a native slide that is not in a stored deck yet, you cannot add
-it: ask the person to add a slide from the right layout in the editor, then
-fill it by id. Never rebuild the deck to get round this.
+brief needs a native slide that is not in a stored deck yet, add it whole
+with an `edits.json` entry `{ "slide": { "id": "…", "elements": […], … },
+"insertAfter": "<slide id>" | "end" }`: instantiate it from a Beta layout as
+for a new deck, give it an id the deck does not have, and put images in as
+data: URIs (the tool moves them into the deck's assets). It lands as an
+ordinary slide people can edit; every slide already there stays as it was.
+This is also how slides from another deck are merged into a deck in use,
+keeping its link. Never rebuild the deck to get round the ownership rule.
 
 ## Code slides
 

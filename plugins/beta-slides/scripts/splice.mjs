@@ -61,11 +61,21 @@
 //                                    the store's asset route, never inlined
 //                                    (<projectDir>/assets/<name> also found)
 //
-// edits.json is a list of edits, each one of three kinds:
+// edits.json is a list of edits, each one of four kinds:
 //   { slideId, elementId, html | src | option | rows | url }   content of a native element
 //                                                        (url: a web embed, see THE EMBED URL CARVE-OUT)
 //   { slideId, values: { key: value } }                    settings of a library scene
 //   { library, id, insertAfter, preset?, values? }         a new library scene slide
+//   { slide, insertAfter }                                 a new native slide
+//
+// A NATIVE INSERT adds a whole native slide (elements, background, notes,
+// transition) after `insertAfter` (a slide id, or "end"), after any states of
+// it. It is an ordinary slide: everyone can move, restyle and retype it in the
+// editor afterwards. Its id must not be in the deck; it may carry no runtime
+// record (a live scene comes from a scene folder) and no stateOf. data: images
+// on its elements are moved into the deck's assets. This is how slides from
+// another deck are merged into a deck people already use, keeping its link:
+// every slide already there stays byte-identical, as for any other edit.
 //
 // THE SCENE LIBRARY (2026-10-13-2236 plan, U12, KTD9, KTD13). `--library`
 // prints the scenes the store offers, read with the run's own credential
@@ -93,7 +103,8 @@
 // KTD8). A runtime slide is Claude's and is replaced wholesale, presenter
 // values included (R14). A native slide is the person's: only the content of
 // an element named in edits.json may change, never its position, size or
-// rotation, and never the slide order. Before writing, the tool diffs what it
+// rotation, and never the order of the slides already there (new slides,
+// native or runtime, are only ever added). Before writing, the tool diffs what it
 // is about to write against what it read and refuses on any other difference,
 // so a bug in the derivation is caught by the same check as a bad edit. A
 // refusal writes nothing. After a 412 the whole derivation is redone against
@@ -305,10 +316,14 @@ export function readEdits(file) {
   if (!file) return []
   let list
   try { list = JSON.parse(readFileSync(file, 'utf8')) } catch (e) { throw new Refusal(`edits file does not parse: ${e.message}`) }
-  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of edits: { slideId, elementId, html | src | option | rows | url }, { slideId, values }, or { library, id, insertAfter, preset?, values? }')
+  if (!Array.isArray(list)) throw new Refusal('edits.json must be a list of edits: { slideId, elementId, html | src | option | rows | url }, { slideId, values }, { library, id, insertAfter, preset?, values? }, or { slide, insertAfter }')
   const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
   for (const e of list) {
     if (!plain(e)) throw new Refusal('every edit is an object')
+    if (e.slide !== undefined) {
+      checkNativeInsert(e)
+      continue
+    }
     if (e.library !== undefined) {
       if (typeof e.library !== 'string' || !LIBRARY_ID.test(e.library)) throw new Refusal(`library insert: ${JSON.stringify(e.library)} is not a library scene id`)
       if (typeof e.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(e.id)) throw new Refusal(`library insert of "${e.library}": id must name the new slide (letters, digits, - and _)`)
@@ -329,6 +344,44 @@ export function readEdits(file) {
     if (Object.keys(e).length < 3) throw new Refusal(`edit for ${e.slideId}/${e.elementId} changes nothing`)
   }
   return list
+}
+
+/**
+ * A native slide insert: `{ slide, insertAfter }`. The slide is a whole native
+ * slide (elements, background, notes, transition...) and stays fully editable
+ * in the deck; the tool adds it and never touches the slides already there.
+ * Images may come as data: URIs; they are moved into the deck's assets.
+ */
+const SLIDE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+function checkNativeInsert(e) {
+  const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
+  const s = e.slide
+  const name = plain(s) && typeof s.id === 'string' ? s.id : JSON.stringify(s?.id)
+  if (!plain(s)) throw new Refusal('slide insert: slide must be a slide object')
+  if (typeof s.id !== 'string' || !SLIDE_ID.test(s.id)) throw new Refusal(`slide insert ${name}: id must name the new slide (letters, digits, - and _)`)
+  if (typeof e.insertAfter !== 'string' || !e.insertAfter) throw new Refusal(`slide insert "${s.id}": insertAfter must be the id of a slide in the deck, or "end"`)
+  const extra = Object.keys(e).filter((k) => k !== 'slide' && k !== 'insertAfter')
+  if (extra.length) throw new Refusal(`slide insert "${s.id}": ${extra.map((k) => JSON.stringify(k)).join(', ')} is not part of a slide insert`)
+  if (s.runtime !== undefined) throw new Refusal(`slide insert "${s.id}": a runtime slide comes from a scene folder (scenes/${s.id} with insertAfter), not from edits.json`)
+  if (s.stateOf !== undefined) throw new Refusal(`slide insert "${s.id}": a state slide (stateOf) cannot be inserted on its own`)
+  if (!Array.isArray(s.elements)) throw new Refusal(`slide insert "${s.id}": elements must be a list`)
+  const seen = new Set()
+  for (const el of s.elements) {
+    if (!plain(el) || typeof el.id !== 'string' || !el.id || typeof el.type !== 'string') throw new Refusal(`slide insert "${s.id}": every element needs an id and a type`)
+    if (seen.has(el.id)) throw new Refusal(`slide insert "${s.id}": element id "${el.id}" is used twice`)
+    seen.add(el.id)
+  }
+}
+
+/** The slide to insert, its data: images interned as deck assets. */
+function nativeSlide(doc, slide) {
+  const out = structuredClone(slide)
+  for (const el of out.elements) {
+    for (const k of ['src', 'asset', 'poster']) {
+      if (typeof el[k] === 'string' && el[k].startsWith('data:')) el[k] = intern(doc, el[k], 'slide')
+    }
+  }
+  return out
 }
 
 // ---- deriving the document ----------------------------------------------------------
@@ -410,9 +463,11 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
   const sceneIds = new Set()
   const inserted = new Set()
   const inserts = new Map() // anchor id, or "end", to the scenes that go after it
-  const contentEdits = edits.filter((e) => e.library === undefined && e.values === undefined)
-  const valueEdits = edits.filter((e) => e.library === undefined && e.values !== undefined)
+  const contentEdits = edits.filter((e) => e.library === undefined && e.slide === undefined && e.values === undefined)
+  const valueEdits = edits.filter((e) => e.library === undefined && e.slide === undefined && e.values !== undefined)
   const libraryInserts = edits.filter((e) => e.library !== undefined)
+  const nativeInserts = edits.filter((e) => e.slide !== undefined)
+  const nativeIds = new Set()
   const anchorCheck = (what, anchor) => {
     if (anchor === 'end') return
     const at = read.slides.filter((s) => s && s.id === anchor).length
@@ -431,9 +486,18 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
     inserted.add(e.id)
     sceneIds.add(e.id)
   }
+  for (const e of nativeInserts) {
+    const sid = e.slide.id
+    if (byId(sid).length || inserted.has(sid)) throw new Refusal(`slide insert "${sid}": a slide with that id is already in the deck or in this run; nothing was written`)
+    anchorCheck(`slide insert "${sid}"`, e.insertAfter)
+    inserts.set(e.insertAfter, [...(inserts.get(e.insertAfter) || []), { nativeInsert: true, id: sid, slide: e.slide }])
+    inserted.add(sid)
+    nativeIds.add(sid)
+  }
   for (const scene of scenes) {
     const hits = byId(scene.id)
     if (!hits.length && scene.insertAfter !== undefined) {
+      if (inserted.has(scene.id)) throw new Refusal(`scene "${scene.id}": a slide with that id is also inserted by edits.json; nothing was written`)
       const anchor = scene.insertAfter
       if (anchor !== 'end') {
         const at = read.slides.filter((s) => s && s.id === anchor).length
@@ -461,6 +525,7 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
     const place = (anchor, neighbour) => {
       for (const scene of inserts.get(anchor) || []) {
         if (scene.libraryInsert) { out.push(librarySlide(doc, scene.scene, scene.values, scene.id)); continue }
+        if (scene.nativeInsert) { out.push(nativeSlide(doc, scene.slide)); continue }
         const slide = { id: scene.id, elements: [] }
         if (neighbour && neighbour.background !== undefined) slide.background = structuredClone(neighbour.background)
         out.push(slide)
@@ -477,6 +542,10 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
     })
     place('end', doc.slides[doc.slides.length - 1])
     doc.slides = out
+  }
+  for (const e of nativeInserts) {
+    const where = e.insertAfter === 'end' ? 'the last slide' : `"${e.insertAfter}"`
+    plan.push(`  ${e.slide.id}: new native slide inserted after ${where} (${e.slide.elements.length} elements)`)
   }
   for (const e of libraryInserts) {
     const where = e.insertAfter === 'end' ? 'the last slide' : `"${e.insertAfter}"`
@@ -532,7 +601,7 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
 
   const gone = prune(doc, pruneKeys)
   if (gone.length) plan.push(`  assets no longer referenced, removed: ${gone.join(', ')}`)
-  checkOwnership(read, doc, { scenes: sceneIds, edits: edited, inserted, title, valued })
+  checkOwnership(read, doc, { scenes: sceneIds, edits: edited, inserted, title, valued, native: nativeIds })
   return { doc, plan }
 }
 
@@ -544,7 +613,7 @@ export function derive(read, { scenes }, edits = [], { title, library } = {}) {
  * slide ids, the only slides the output may have that the read did not.
  * `title` is the --title value; only then may doc.title change, and only to it.
  */
-export function checkOwnership(read, out, { scenes, edits, inserted = new Set(), title, valued = new Map() }) {
+export function checkOwnership(read, out, { scenes, edits, inserted = new Set(), title, valued = new Map(), native = new Set() }) {
   for (const k of new Set([...Object.keys(read), ...Object.keys(out)])) {
     if (k === 'assets' || k === 'slides') continue
     if (k === 'title' && title !== undefined && out.title === title) continue
@@ -554,7 +623,13 @@ export function checkOwnership(read, out, { scenes, edits, inserted = new Set(),
   const readIds = ids(read)
   for (const nid of inserted) {
     if (readIds.includes(nid) || ids(out).filter((x) => x === nid).length !== 1) throw new Refusal(`slide "${nid}" cannot be inserted: the id is already in the deck; nothing was written`)
-    if (!isRuntime(out.slides.find((s) => s?.id === nid)) || !scenes.has(nid)) throw new Refusal(`slide "${nid}": only a runtime slide from a scene folder may be inserted; nothing was written`)
+    const slide = out.slides.find((s) => s?.id === nid)
+    if (native.has(nid)) {
+      // a native insert: a slide edits.json named, and not a runtime slide in disguise
+      if (isRuntime(slide) || scenes.has(nid)) throw new Refusal(`slide "${nid}": a native insert cannot carry a runtime record; nothing was written`)
+      continue
+    }
+    if (!isRuntime(slide) || !scenes.has(nid)) throw new Refusal(`slide "${nid}": only a runtime slide from a scene folder, or a native slide from edits.json, may be inserted; nothing was written`)
   }
   const kept = (out.slides || []).filter((s) => !inserted.has(s?.id))
   if (!same(readIds, kept.map((s) => s?.id))) throw new Refusal('slide order or count would change; slide order belongs to the person editing the deck')

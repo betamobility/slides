@@ -665,6 +665,60 @@ try {
     eq(r.code, 0, `insertAfter a slide with states exits 0${r.code ? `: ${r.err}` : ''}`)
     eq((await readDeck(id)).doc.slides.map((s: { id: string }) => s.id).join(','), 's1,s1-zoom,live,map,demo,numbers', 'the new slide goes after the anchor\'s states, never between them')
   }
+  const nativeEdits = (list: unknown) => {
+    const dir = mkdtempSync(join(tmpdir(), 'splice-native-edits-'))
+    temps.push(dir)
+    const f = join(dir, 'edits.json')
+    writeFileSync(f, JSON.stringify(list))
+    return f
+  }
+  console.log('\nnative insert: a whole editable slide into an existing deck')
+  {
+    const id = await seed()
+    const before = await readDeck(id)
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const slide = {
+      id: 'sim-title', background: '#FFFFFF', transition: 'none', notes: 'Spoken notes stay with the slide.',
+      elements: [
+        { id: 'title', type: 'text', x: 64, y: 64, w: 900, h: 120, rotation: 0, opacity: 1, html: 'What we simulate', fontSize: 46, color: '#1A1A1A', role: 'title', themeRefs: { color: 'tx1' } },
+        { id: 'pic', type: 'image', x: 64, y: 220, w: 200, h: 200, rotation: 0, opacity: 1, src: png, fit: 'contain', radius: 0 },
+      ],
+    }
+    log = []
+    const r = await runTool([id, '--edits', nativeEdits([{ slide, insertAfter: 's1' }, { slide: { ...slide, id: 'sim-close', elements: [slide.elements[0]] }, insertAfter: 'end' }])])
+    eq(r.code, 0, `a native insert exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).length, 1, 'one conditional PUT reached the store')
+    const after = await readDeck(id)
+    eq(after.doc.slides.map((x: { id: string }) => x.id).join(','), 's1,sim-title,map,demo,numbers,sim-close', 'both slides sit where insertAfter put them')
+    for (const sid of ['s1', 'map', 'demo', 'numbers']) ok(same(slideOf(after.doc, sid), slideOf(before.doc, sid)), `${sid} is byte-identical`)
+    const ins = slideOf(after.doc, 'sim-title')
+    ok(!ins.runtime, 'the inserted slide is native')
+    eq(ins.notes, 'Spoken notes stay with the slide.', 'its notes came with it')
+    eq(ins.elements.map((e: { id: string }) => e.id).join(','), 'title,pic', 'its elements in order')
+    const pic = ins.elements[1]
+    ok(typeof pic.src === 'string' && pic.src.startsWith('asset:') && after.doc.assets[pic.src.slice(6)] === png, 'its data: image moved into the deck assets')
+    ok(/new native slide inserted after "s1"/.test(r.out), 'the plan names the insert')
+    await refuses('a native insert whose id is in the deck', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'map' }, insertAfter: 's1' }])], /map/)
+    await refuses('a native insert after an unknown slide', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'n1' }, insertAfter: 'ghost' }])], /ghost/)
+    await refuses('a native insert carrying a runtime record', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'n2', runtime: { steps: 0, props: [] } }, insertAfter: 's1' }])], /n2/)
+    await refuses('a native insert with an element id twice', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'n3', elements: [slide.elements[0], slide.elements[0]] }, insertAfter: 's1' }])], /n3/)
+    await refuses('a native insert with a key it does not take', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'n4' }, insertAfter: 's1', x: 1 }])], /n4/)
+    await refuses('the same native id twice in one run', id, [id, '--edits', nativeEdits([{ slide: { ...slide, id: 'n5' }, insertAfter: 's1' }, { slide: { ...slide, id: 'n5' }, insertAfter: 'end' }])], /n5/)
+  }
+  console.log('\nnative insert and a 412 once: re-derived, not duplicated, the person\'s move kept')
+  {
+    const id = await seed()
+    bumps = 1; bumpX = 420
+    log = []
+    const r = await runTool([id, '--edits', nativeEdits([{ slide: { id: 'added', elements: [] }, insertAfter: 'map' }])])
+    eq(r.code, 0, `exits 0${r.code ? `: ${r.err}` : ''}`)
+    eq(putsTo(id).map((l) => l.status).join(','), '412,200', 'the first PUT is 412, the second 200')
+    const doc = (await readDeck(id)).doc
+    eq(doc.slides.map((x: { id: string }) => x.id).join(','), 's1,map,added,demo,numbers', 'exactly one inserted slide, after map')
+    eq(slideOf(doc, 's1').elements[0].x, 420, 'the person\'s move survives')
+    bumps = 0
+  }
+
   console.log('\ninsert and a 412 once: the insert is re-derived, not duplicated (R19)')
   {
     const id = await seed()

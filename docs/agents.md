@@ -764,7 +764,11 @@ only), `scenes/<slideId>/index.html`, exactly one of `still.png` or
 in `scenes/<slideId>/assets/` or the project's `assets/`. `edits.json` is a
 list of `{ slideId, elementId, html | src | option | rows | url }` (`url`
 for a web page embed, kept on its site; on a library web scene only its
-declared settings in the query change). Assets are
+declared settings in the query change), and of `{ slide, insertAfter }`
+to add a whole native slide after `insertAfter` (a slide id or `end`): an
+ordinary, editable slide with an id the deck does not have, no `runtime` and
+no `stateOf`, its images as data: URIs, which the tool moves into the deck's
+assets. Slides already in the deck are never moved or changed. Assets are
 stored per deck, so two scenes may list the same asset name only with the
 same bytes; the same name with different bytes is refused before any request.
 
