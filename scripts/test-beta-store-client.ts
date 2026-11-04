@@ -551,7 +551,7 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   decks.set('abc123XYZ0', { bytes: 'claude replaced this', etag: mint(), writer: 'service', gen: decks.get('abc123XYZ0')!.gen + 1 })
   const e = await rejects(() => save.writeUpdatedFile('stale edit'))
   ok(e instanceof store.StoreConflictError, `the next save rejects with StoreConflictError (${e?.name}: ${e?.message})`)
-  ok(/changed in the store/i.test(String(e?.message)) && /reload/i.test(String(e?.message)), `…whose message says the deck changed and to reload: "${e?.message}"`)
+  ok(/newer version of this deck in the cloud/i.test(String(e?.message)) && /reload/i.test(String(e?.message)), `…whose message says the deck changed and to reload: "${e?.message}"`)
   ok(!(e instanceof store.StoreSignedOutError), '…and is not mistaken for signed-out')
   ok(decks.get('abc123XYZ0')?.bytes === 'claude replaced this', 'the replacement is still what the store holds (AE11)')
 
