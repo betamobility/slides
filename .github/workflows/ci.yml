@@ -561,6 +561,13 @@ jobs:
         # at run time.
         run: node scripts/test-beta-store.ts
 
+      - name: Beta deck store block scanner
+        # topFields reads a deck's top-level fields without parsing the whole
+        # document (a full parse of a large deck hit Cloudflare's 1102). It
+        # must agree with JSON.parse; checked on fixed cases, 3000 random
+        # documents and damaged copies, and the general template.
+        run: node server/deck-store/test/block.test.mjs beta/templates/general.bento.html
+
       - name: Beta splice tool rig
         # Runtime slides U7: plugins/beta-slides/scripts/splice.mjs run as a
         # child process against the deck store under Miniflare, behind a proxy
