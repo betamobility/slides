@@ -1136,6 +1136,11 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   max-width: min(92vw, 560px);
 }
 .ed-recover .ed-btn { padding: 5px 12px; }
+/* BETA FORK: the banner is always dark, but a plain .ed-btn takes the THEME's
+   --ink-2, which in light mode is dark blue on dark blue, so Discard read as
+   disabled. Secondary buttons here follow the banner's own ink instead. */
+.ed-recover .ed-btn:not(.ed-btn-primary) { color: #f2f0ea; border-color: rgb(242 240 234 / 0.35); }
+.ed-recover .ed-btn:not(.ed-btn-primary):hover { background: rgb(242 240 234 / 0.12); }
 /* "Saved" / "Backed up in this browser" OVERLAYS the end of the deck title
    (editor.ts flashSaved places it) instead of taking a slot in the bar. As a
    flex item it pushed everything after it sideways on every auto-save, so the

@@ -2003,7 +2003,7 @@ export class PropsPanel {
         if (!file) return
         if (file.size > MEDIA_EMBED_BUDGET) {
           const mb = Math.round(file.size / (1024 * 1024))
-          if (!confirm(t('This file is {mb} MB. Embedding makes the .bento.html large and slow to open and save. Embed anyway?', { mb }))) return
+          if (!confirm(t('This file is {mb} MB. Embedding makes the deck file large and slow to open and save. Embed anyway?', { mb }))) return // BETA FORK: cloud wording
         }
         const reader = new FileReader()
         // interned, not inline — same reason as every other embed site: only

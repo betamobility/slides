@@ -106,7 +106,7 @@ export class StoreConflictError extends Error {
   etag: string | null
   gen: number | null
   constructor(info: { writer?: 'person' | 'service' | null; etag?: string | null; gen?: number | null } = {}) {
-    super(t('This deck changed in the store. Reload to get the latest version before saving.'))
+    super(t('Someone saved a newer version of this deck in the cloud. Reload to get it before saving.'))
     this.name = 'StoreConflictError'
     this.writer = info.writer ?? null
     this.etag = info.etag ?? null
@@ -151,7 +151,7 @@ export function storeHost(): string | null {
 }
 
 const storeHostName = () => {
-  try { return new URL(storeHost() ?? '').host } catch { return 'the deck store' }
+  try { return new URL(storeHost() ?? '').host } catch { return 'the cloud' }
 }
 
 /** Is this document being served BY the store (as opposed to a file)? */
@@ -256,7 +256,7 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
   }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
-    throw new Error(t('The store refused the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
+    throw new Error(t('The cloud refused to save the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
   }
   return res
 }
@@ -626,7 +626,7 @@ export function handoffToStore(html: string | Promise<string>, title = '', opts:
   if (!host) return Promise.reject(new Error('this app has no deck store'))
   if (offlineEnabled()) return Promise.reject(new OfflineError(host))
   const tab = window.open(`${host}/new`, '_blank')
-  if (!tab) return Promise.reject(new Error(t('Couldn’t open the store tab — allow pop-ups for this file, then try again.')))
+  if (!tab) return Promise.reject(new Error(t('Couldn’t open a tab to save to the cloud — allow pop-ups for this file, then try again.')))
 
   const timeoutMs = opts.timeoutMs ?? 10 * 60_000
   const pollMs = opts.pollMs ?? 1000
@@ -656,9 +656,9 @@ export function handoffToStore(html: string | Promise<string>, title = '', opts:
         finish(() => resolve(d.url))
       }
     }
-    const timer = setTimeout(() => finish(() => reject(new Error(t('The store tab gave no answer — timed out')))), timeoutMs)
+    const timer = setTimeout(() => finish(() => reject(new Error(t('Saving to the cloud timed out — the tab gave no answer')))), timeoutMs)
     const poll = setInterval(() => {
-      if (tab.closed) finish(() => reject(new Error(t('The store tab was closed before the deck was saved'))))
+      if (tab.closed) finish(() => reject(new Error(t('The tab was closed before the deck was saved to the cloud'))))
     }, pollMs)
     window.addEventListener('message', onMessage)
   })
