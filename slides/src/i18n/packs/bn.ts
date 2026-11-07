@@ -974,4 +974,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n}টি ছবি আপলোড হচ্ছে…",
   "Not rendered: {what}": "রেন্ডার হয়নি: {what}",
   "no space just inside the $ signs": "$ চিহ্নের ঠিক ভিতরে কোনো স্পেস নয়",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "ক্লাউড এইমাত্র প্রেজেন্টেশনটি সংরক্ষণ করতে পারেনি (ত্রুটি {status})। আপনার পরিবর্তনগুলো এই ট্যাবে রাখা আছে; সংরক্ষণ আবার চেষ্টা করা হবে।",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "প্রেজেন্টেশন সংরক্ষণের জন্য ক্লাউডে পৌঁছানো যায়নি। আপনার পরিবর্তনগুলো এই ট্যাবে রাখা আছে; সংরক্ষণ আবার চেষ্টা করা হবে।",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "এই প্রেজেন্টেশন ক্লাউডের গ্রহণযোগ্য আকারের চেয়ে বড়। সবচেয়ে বড় ছবি বা ভিডিও ছোট করুন বা সরিয়ে দিন, তারপর আবার সংরক্ষণ করুন।",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "এই ব্রাউজার শেষবার সংরক্ষণ করার পর প্রেজেন্টেশনটি ক্লাউডে বদলেছে। আপনার কাছে সর্বশেষ সংস্করণ খোলা আছে। এই ব্রাউজার {when}-এর একটি কপিও রেখে দিয়েছে: সেটি নতুন প্রেজেন্টেশন হিসেবে রাখুন, অথবা বাতিল করুন।",
 }

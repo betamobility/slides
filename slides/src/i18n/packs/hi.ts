@@ -971,4 +971,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} चित्र अपलोड हो रहे हैं…",
   "Not rendered: {what}": "रेंडर नहीं हुआ: {what}",
   "no space just inside the $ signs": "$ चिह्नों के ठीक अंदर कोई स्पेस नहीं",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "क्लाउड अभी प्रेज़ेंटेशन सहेज नहीं सका (त्रुटि {status})। आपके बदलाव इस टैब में सुरक्षित हैं; सहेजने की कोशिश दोबारा की जाएगी।",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "प्रेज़ेंटेशन सहेजने के लिए क्लाउड तक पहुँचा नहीं जा सका। आपके बदलाव इस टैब में सुरक्षित हैं; सहेजने की कोशिश दोबारा की जाएगी।",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "यह प्रेज़ेंटेशन क्लाउड की स्वीकार्य सीमा से बड़ा है। सबसे बड़ी तस्वीरों या वीडियो को छोटा करें या हटाएँ, फिर दोबारा सहेजें।",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "इस ब्राउज़र के पिछली बार सहेजने के बाद यह प्रेज़ेंटेशन क्लाउड में बदल गया है। आपके पास सबसे नया संस्करण खुला है। इस ब्राउज़र ने {when} की एक प्रति भी रखी है: उसे नए प्रेज़ेंटेशन के रूप में रखें, या हटा दें।",
 }

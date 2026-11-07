@@ -962,4 +962,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} obrazów przesyłanych…",
   "Not rendered: {what}": "Nie wyrenderowano: {what}",
   "no space just inside the $ signs": "bez spacji tuż wewnątrz znaków $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Chmura nie mogła teraz zapisać prezentacji (błąd {status}). Twoje zmiany pozostają w tej karcie, a zapis zostanie ponowiony.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Nie udało się połączyć z chmurą, aby zapisać prezentację. Twoje zmiany pozostają w tej karcie, a zapis zostanie ponowiony.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Ta prezentacja jest większa, niż akceptuje chmura. Zmniejsz lub usuń największe obrazy albo filmy, a następnie zapisz ponownie.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Ta prezentacja zmieniła się w chmurze od ostatniego zapisu w tej przeglądarce. Masz otwartą najnowszą wersję. Ta przeglądarka zachowała też kopię z {when}: zachowaj ją jako nową prezentację albo odrzuć.",
 }

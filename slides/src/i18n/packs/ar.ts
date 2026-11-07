@@ -971,4 +971,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} صور قيد الرفع…",
   "Not rendered: {what}": "لم يُعرَض: {what}",
   "no space just inside the $ signs": "بدون مسافة مباشرة داخل علامتي $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "تعذّر على السحابة حفظ العرض الآن (الخطأ {status}). تبقى تغييراتك محفوظة في هذا التبويب، وسيُعاد محاولة الحفظ.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "تعذّر الوصول إلى السحابة لحفظ العرض. تبقى تغييراتك محفوظة في هذا التبويب، وسيُعاد محاولة الحفظ.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "حجم هذا العرض أكبر مما تقبله السحابة. صغّر أكبر الصور أو مقاطع الفيديو أو احذفها، ثم احفظ مرة أخرى.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "تغيّر هذا العرض في السحابة منذ آخر مرة حفظه فيها هذا المتصفح. النسخة المفتوحة لديك هي الأحدث. احتفظ هذا المتصفح أيضًا بنسخة من {when}: احتفظ بها كعرض جديد أو تجاهلها.",
 }

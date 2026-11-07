@@ -961,4 +961,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} bilder laddas upp…",
   "Not rendered: {what}": "Inte återgiven: {what}",
   "no space just inside the $ signs": "inget mellanslag direkt innanför $-tecknen",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Molnet kunde inte spara presentationen just nu (fel {status}). Dina ändringar finns kvar i den här fliken och sparandet provas igen.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Det gick inte att nå molnet för att spara presentationen. Dina ändringar finns kvar i den här fliken och sparandet provas igen.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Den här presentationen är större än vad molnet tar emot. Förminska eller ta bort de största bilderna eller videorna och spara sedan igen.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Den här presentationen har ändrats i molnet sedan webbläsaren senast sparade den. Du har den senaste versionen öppen. Webbläsaren har också behållit en kopia från {when}: behåll den som en ny presentation eller släng den.",
 }

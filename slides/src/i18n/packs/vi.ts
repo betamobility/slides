@@ -961,4 +961,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} hình đang tải lên…",
   "Not rendered: {what}": "Không hiển thị được: {what}",
   "no space just inside the $ signs": "không có dấu cách ngay bên trong cặp dấu $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Đám mây không thể lưu bản trình bày lúc này (lỗi {status}). Các thay đổi của bạn vẫn được giữ trong thẻ này; hệ thống sẽ thử lưu lại.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Không thể kết nối đến đám mây để lưu bản trình bày. Các thay đổi của bạn vẫn được giữ trong thẻ này; hệ thống sẽ thử lưu lại.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Bản trình bày này lớn hơn mức đám mây chấp nhận. Hãy thu nhỏ hoặc xóa các ảnh hoặc video lớn nhất, rồi lưu lại.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Bản trình bày này đã thay đổi trên đám mây kể từ lần trình duyệt này lưu gần nhất. Bạn đang mở phiên bản mới nhất. Trình duyệt này cũng giữ một bản sao từ {when}: hãy giữ nó thành một bản trình bày mới, hoặc bỏ đi.",
 }

@@ -961,4 +961,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} gambar diunggah…",
   "Not rendered: {what}": "Tidak dirender: {what}",
   "no space just inside the $ signs": "tanpa spasi tepat di dalam tanda $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Cloud tidak dapat menyimpan presentasi saat ini (galat {status}). Perubahan Anda tetap tersimpan di tab ini; penyimpanan akan dicoba lagi.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Tidak dapat terhubung ke cloud untuk menyimpan presentasi. Perubahan Anda tetap tersimpan di tab ini; penyimpanan akan dicoba lagi.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Presentasi ini lebih besar daripada yang diterima cloud. Perkecil atau hapus gambar atau video terbesar, lalu simpan lagi.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Presentasi ini telah berubah di cloud sejak terakhir kali peramban ini menyimpannya. Versi terbaru sedang Anda buka. Peramban ini juga menyimpan salinan dari {when}: simpan sebagai presentasi baru, atau buang.",
 }

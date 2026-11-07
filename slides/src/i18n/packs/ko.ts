@@ -955,4 +955,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "그림 {n}개 업로드 중…",
   "Not rendered: {what}": "렌더링되지 않음: {what}",
   "no space just inside the $ signs": "$ 기호 바로 안쪽에 공백을 두지 마세요",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "클라우드가 지금 프레젠테이션을 저장하지 못했습니다(오류 {status}). 변경 내용은 이 탭에 보관되며, 저장을 다시 시도합니다.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "클라우드에 연결할 수 없어 프레젠테이션을 저장하지 못했습니다. 변경 내용은 이 탭에 보관되며, 저장을 다시 시도합니다.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "이 프레젠테이션은 클라우드에서 허용하는 크기를 초과합니다. 가장 큰 이미지나 동영상을 줄이거나 삭제한 다음 다시 저장하세요.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "이 브라우저가 마지막으로 저장한 이후 이 프레젠테이션이 클라우드에서 변경되었습니다. 현재 최신 버전이 열려 있습니다. 이 브라우저에는 {when}의 사본도 남아 있습니다. 새 프레젠테이션으로 보관하거나 삭제하세요.",
 }

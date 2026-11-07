@@ -962,4 +962,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} resim yükleniyor…",
   "Not rendered: {what}": "Görüntülenmedi: {what}",
   "no space just inside the $ signs": "$ işaretlerinin hemen içinde boşluk olmasın",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Bulut sunuyu şu anda kaydedemedi (hata {status}). Değişiklikleriniz bu sekmede korunuyor; kaydetme yeniden denenecek.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Sunuyu kaydetmek için buluta ulaşılamadı. Değişiklikleriniz bu sekmede korunuyor; kaydetme yeniden denenecek.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Bu sunu, bulutun kabul ettiğinden büyük. En büyük görselleri veya videoları küçültün ya da kaldırın, ardından yeniden kaydedin.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Bu tarayıcı sunuyu en son kaydettiğinden beri sunu bulutta değişti. En yeni sürüm açık. Bu tarayıcı ayrıca {when} tarihli bir kopyayı da sakladı: onu yeni bir sunu olarak saklayın ya da silin.",
 }

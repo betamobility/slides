@@ -1027,4 +1027,8 @@ export const pt: Catalog = {
   "{n} pictures still uploading…": "{n} imagens sendo enviadas…",
   "Not rendered: {what}": "Não renderizada: {what}",
   "no space just inside the $ signs": "sem espaço logo dentro dos sinais $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "A nuvem não conseguiu salvar a apresentação agora (erro {status}). Suas alterações ficam guardadas nesta aba; o salvamento será tentado de novo.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Não foi possível acessar a nuvem para salvar a apresentação. Suas alterações ficam guardadas nesta aba; o salvamento será tentado de novo.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Esta apresentação é maior do que a nuvem aceita. Reduza ou remova as imagens ou os vídeos maiores e salve novamente.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Esta apresentação mudou na nuvem desde a última vez que este navegador a salvou. Você está com a versão mais recente aberta. Este navegador também guardou uma cópia de {when}: mantenha-a como uma nova apresentação ou descarte-a.",
 }

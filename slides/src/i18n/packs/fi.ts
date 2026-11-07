@@ -968,4 +968,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} kuvaa latautuu…",
   "Not rendered: {what}": "Ei piirretty: {what}",
   "no space just inside the $ signs": "ei välilyöntiä heti $-merkkien sisäpuolelle",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Pilvi ei pystynyt tallentamaan esitystä juuri nyt (virhe {status}). Muutokset säilyvät tässä välilehdessä, ja tallennusta yritetään uudelleen.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Pilveen ei saatu yhteyttä esityksen tallentamiseksi. Muutokset säilyvät tässä välilehdessä, ja tallennusta yritetään uudelleen.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Tämä esitys on suurempi kuin pilvi hyväksyy. Pienennä tai poista suurimmat kuvat tai videot ja tallenna sitten uudelleen.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Tämä esitys on muuttunut pilvessä sen jälkeen, kun tämä selain tallensi sen viimeksi. Sinulla on avoinna uusin versio. Selain säilytti myös kopion ajalta {when}: säilytä se uutena esityksenä tai hylkää se.",
 }

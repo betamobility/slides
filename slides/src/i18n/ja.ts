@@ -1029,4 +1029,8 @@ export const ja: Catalog = {
   "{n} pictures still uploading…": "画像{n}枚をアップロード中…",
   "Not rendered: {what}": "表示できません: {what}",
   "no space just inside the $ signs": "$ 記号のすぐ内側に空白を入れないでください",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "クラウドにデッキを保存できませんでした（エラー {status}）。変更内容はこのタブに保持されており、保存は自動的に再試行されます。",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "クラウドに接続できず、デッキを保存できませんでした。変更内容はこのタブに保持されており、保存は自動的に再試行されます。",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "このデッキはクラウドで受け付けられるサイズを超えています。大きな画像や動画を縮小または削除してから、もう一度保存してください。",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "このブラウザが最後に保存してから、このデッキはクラウド上で変更されました。開いているのは最新バージョンです。このブラウザには {when} のコピーも残っています。新しいデッキとして残すか、破棄してください。",
 }

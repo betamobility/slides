@@ -980,4 +980,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} larawan ina-upload…",
   "Not rendered: {what}": "Hindi na-render: {what}",
   "no space just inside the $ signs": "walang espasyo agad sa loob ng mga $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Hindi na-save ng cloud ang presentasyon ngayon (error {status}). Nananatili ang iyong mga pagbabago sa tab na ito; susubukan ulit ang pag-save.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Hindi maabot ang cloud para i-save ang presentasyon. Nananatili ang iyong mga pagbabago sa tab na ito; susubukan ulit ang pag-save.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Mas malaki ang presentasyong ito kaysa sa tinatanggap ng cloud. Paliitin o alisin ang pinakamalalaking larawan o video, pagkatapos ay mag-save ulit.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Nagbago sa cloud ang presentasyong ito mula nang huli itong na-save ng browser na ito. Nakabukas sa iyo ang pinakabagong bersyon. May itinabi ring kopya ang browser na ito mula {when}: itago ito bilang bagong presentasyon, o itapon.",
 }

@@ -38,10 +38,15 @@
 //
 // SIGNED OUT. When the Access session has lapsed, Access answers a fetch with
 // a redirect to the team login page, not a 401. Requests are sent with
-// `redirect: 'manual'`, so that arrives as an `opaqueredirect`; a rejected
-// fetch or a login page served as a body mean the same thing. Every such case
-// rejects with StoreSignedOutError, so the kernel's failure path fires (the
-// editor toasts, autosave keeps the deck dirty) instead of a false "Saved".
+// `redirect: 'manual'`, so that arrives as an `opaqueredirect`, and that alone
+// is a sign-out for certain. A rejected fetch, an HTML body (Access's login
+// page, or Cloudflare's own error page for a 5xx or a 1102) are ambiguous, and
+// for those the tab asks Access (`signedInState`) before saying anything: a
+// signed-in tab gets StoreUnavailableError, which the editor retries, and only
+// a confirmed sign-out gets StoreSignedOutError. Either way the kernel's
+// failure path fires (autosave keeps the deck dirty) instead of a false
+// "Saved". Before 2026-11-07 every ambiguous answer said "Signed out", and a
+// signed-in person saving a large deck was told to sign in again.
 //
 // CHANGED IN THE STORE (plan 2026-09-14-001, U10, KTD12). Claude can replace a
 // deck in the store while someone has it open, so a save must not silently
@@ -97,6 +102,24 @@ export class StoreSignedOutError extends Error {
   }
 }
 
+/**
+ * The store could not be reached, or answered with an error page, while the
+ * person is (as far as Access says) still signed in: a dropped connection, a
+ * Cloudflare 5xx or 1102 page, a timeout. Worth trying again; never a reason
+ * to tell anyone to sign in. Until 2026-11-07 every one of these read as
+ * StoreSignedOutError, so a signed-in person was told they were signed out.
+ */
+export class StoreUnavailableError extends Error {
+  status: number | null
+  constructor(status: number | null = null) {
+    super(status
+      ? t('The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.', { status: String(status) })
+      : t('Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.'))
+    this.name = 'StoreUnavailableError'
+    this.status = status
+  }
+}
+
 /** A save refused because the deck was replaced in the store since this tab
  *  loaded or last saved it. Terminal for the tab: reload to continue. */
 export class StoreConflictError extends Error {
@@ -135,9 +158,11 @@ export function clearStoreConflict(docId: string): void {
  * deck, because on the store after a conflict the open document IS the store
  * change, and restoring over it then saving with the fresh ETag would erase it.
  */
-export function recoveryChoice(o: { mismatch: boolean; storeOrigin: boolean; conflicted: boolean }): 'none' | 'restore' | 'new-deck' {
+export function recoveryChoice(o: { mismatch: boolean; storeOrigin: boolean; conflicted: boolean; moved?: boolean }): 'none' | 'restore' | 'new-deck' {
   if (!o.mismatch) return 'none'
-  return o.storeOrigin && o.conflicted ? 'new-deck' : 'restore'
+  // `moved`: the store holds a version this browser never saved (see
+  // storeMovedSinceSave). Restoring over it would erase that write.
+  return o.storeOrigin && (o.conflicted || o.moved) ? 'new-deck' : 'restore'
 }
 
 /** The configured store origin, or null when this app has none. */
@@ -229,12 +254,42 @@ export async function adoptAccessName(): Promise<boolean> {
 
 const headers = { 'content-type': 'text/html; charset=utf-8' }
 
-/** Did the store answer, or did Access answer for it? */
-function signedOut(res: Response): boolean {
-  if (res.type === 'opaqueredirect' || res.status === 0 || res.status === 401) return true
-  // Access serves its login page with a 200 in some flows; the store never
-  // answers a write with HTML.
-  return /text\/html/i.test(res.headers?.get('content-type') ?? '')
+/** Access redirected or refused: the one answer that is a sign-out for sure. */
+function accessRefused(res: Response): boolean {
+  return res.type === 'opaqueredirect' || res.status === 0 || res.status === 401
+}
+
+const isHtml = (res: Response) => /text\/html/i.test(res.headers?.get('content-type') ?? '')
+
+/**
+ * Is this tab signed in to Access right now? Asked only when an answer was
+ * ambiguous, so "signed out" is never said on a guess. `unknown` when the
+ * question itself could not be answered (no network).
+ */
+export async function signedInState(): Promise<'in' | 'out' | 'unknown'> {
+  let res: Response
+  try {
+    res = await netFetch(`${storeHost()}/cdn-cgi/access/get-identity`, { credentials: 'same-origin', redirect: 'manual', cache: 'no-store' })
+  } catch {
+    return 'unknown'
+  }
+  if (accessRefused(res)) return 'out'
+  if (!res.ok) return 'unknown'
+  try {
+    const id = await res.json()
+    return id && typeof id === 'object' && (typeof id.email === 'string' || typeof id.name === 'string') ? 'in' : 'out'
+  } catch {
+    return 'out' // the login page, served as a 200
+  }
+}
+
+/**
+ * Turn "this request did not reach the store's own answer" into the error
+ * that says what happened. Signed out only when Access says so; everything
+ * else is the cloud being unavailable, which the editor retries.
+ */
+async function unreachable(status: number | null): Promise<Error> {
+  return (await signedInState()) === 'out' ? new StoreSignedOutError() : new StoreUnavailableError(status)
 }
 
 async function storeRequest(path: string, init: RequestInit): Promise<Response> {
@@ -243,9 +298,18 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
     res = await netFetch(`${storeHost()}${path}`, { ...init, credentials: 'same-origin', redirect: 'manual' })
   } catch (err) {
     if (err instanceof OfflineError) throw err
-    throw new StoreSignedOutError() // a followed cross-origin redirect, or no network
+    // No answer at all: the connection dropped, or the request never left.
+    // With redirect: 'manual' an Access redirect is an opaqueredirect, never
+    // a rejection, so this is not a sign-out unless Access says it is.
+    throw await unreachable(null)
   }
-  if (signedOut(res)) throw new StoreSignedOutError()
+  if (accessRefused(res)) throw new StoreSignedOutError()
+  // The store answers every route with JSON, text/plain or no body; HTML is
+  // somebody else answering for it. A 200 is Access's login page in some
+  // flows; an error status is Cloudflare's own error page (5xx, 1102 "Worker
+  // exceeded resource limits"), and the person is still signed in.
+  if (isHtml(res)) throw await unreachable(res.ok ? null : res.status)
+  if (res.status >= 500 || res.status === 429) throw new StoreUnavailableError(res.status)
   if (res.status === 412) {
     let writer: 'person' | 'service' | null = null
     try {
@@ -256,6 +320,7 @@ async function storeRequest(path: string, init: RequestInit): Promise<Response> 
   }
   if (!res.ok) {
     const why = await res.text().catch(() => '')
+    if (res.status === 413 || why.trim() === 'size') throw new Error(t('This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.'))
     throw new Error(t('The cloud refused to save the deck ({status}{why})', { status: String(res.status), why: why ? `: ${why}` : '' }))
   }
   return res
@@ -419,6 +484,46 @@ async function putDeckNow(id: string, html: string): Promise<void> {
     throw err
   }
   adoptVersion(id, res)
+  rememberSaved(id)
+}
+
+// --- what this browser last saved -------------------------------------------------
+//
+// THE STALE RECOVERY SNAPSHOT, CLOSED-TAB EDITION. The kernel writes a
+// recovery snapshot on every autosave, before the write. A tab that saved and
+// closed leaves one behind that equals what it saved. If anyone writes the
+// deck after that (Claude, a colleague), the next boot in this browser finds
+// snapshot ≠ store and offered "Unsaved changes from 11:03 were found.
+// Restore / Discard"; Restore then saved the old copy over the newer one with
+// a fresh ETag and no 412. The editor now clears the snapshot after a save
+// that left nothing unsaved, and for one that is still there (the tab closed
+// with work unsaved, or a save failed) this record says whether the store has
+// moved on since this browser last saved: if it has, Restore is not offered.
+
+const savedKey = (id: string) => `bento-store-saved-${id}`
+
+function rememberSaved(id: string): void {
+  const etag = versions.get(id)
+  if (etag) lsSet(savedKey(id), etag)
+  else lsDel(savedKey(id))
+}
+
+/** The version of the open deck this tab booted on (the boot HEAD), or null
+ *  when it could not be learned. Waits for that HEAD. */
+export async function bootVersion(id: string): Promise<string | null> {
+  if (versionCheck) await versionCheck
+  return versions.get(id) ?? null
+}
+
+/**
+ * Has the store moved on since this browser last saved deck `id`? `true` when
+ * it has, or when it cannot be told (nothing recorded, no version learned):
+ * a snapshot is then never restored over the store, only kept as a new deck.
+ */
+export async function storeMovedSinceSave(id: string): Promise<boolean> {
+  const now = await bootVersion(id)
+  const saved = lsGet(savedKey(id))
+  return !now || !saved || now !== saved
 }
 
 /** Store a NEW deck; the worker answers 201 {id, url}. */
@@ -428,9 +533,9 @@ export async function postDeck(html: string): Promise<{ id: string; url: string 
   try {
     out = await res.json()
   } catch {
-    throw new StoreSignedOutError() // a login page, not the store's JSON
+    throw await unreachable(null) // not the store's JSON: a login page, or an error page
   }
-  if (!out || typeof out.url !== 'string' || typeof out.id !== 'string') throw new StoreSignedOutError()
+  if (!out || typeof out.url !== 'string' || typeof out.id !== 'string') throw await unreachable(null)
   return { id: out.id, url: out.url }
 }
 

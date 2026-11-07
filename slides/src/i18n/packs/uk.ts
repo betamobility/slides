@@ -971,4 +971,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} зображень завантажуються…",
   "Not rendered: {what}": "Не відображено: {what}",
   "no space just inside the $ signs": "без пробілу одразу всередині знаків $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Хмара не змогла зараз зберегти презентацію (помилка {status}). Ваші зміни збережено в цій вкладці, збереження буде повторено.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Не вдалося зв’язатися з хмарою, щоб зберегти презентацію. Ваші зміни збережено в цій вкладці, збереження буде повторено.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Ця презентація більша, ніж приймає хмара. Зменште або видаліть найбільші зображення чи відео та збережіть знову.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Відтоді як цей браузер востаннє зберігав презентацію, вона змінилася в хмарі. У вас відкрито найновішу версію. Цей браузер також зберіг копію від {when}: залиште її як нову презентацію або відхиліть.",
 }
