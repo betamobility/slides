@@ -2763,8 +2763,8 @@ export class Editor {
         markFileSaved() // the packs went out with those bytes too
         // "Saved" only when the dot actually went out; an edit made during the
         // write stays dirty and its own 'doc' event has already re-armed us
-        if (out.current) { this.flashSaved(); void this.afterStoreSaved(doc.docId) }
-        this.storeRetries = 0
+        if (out.current) { this.flashSaved(); void this.afterStoreSaved(doc.docId) } // BETA FORK: afterStoreSaved
+        this.storeRetries = 0 // BETA FORK
         return
       }
       // failed: keep dirty; the IndexedDB snapshot is the backstop

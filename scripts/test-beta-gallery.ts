@@ -743,7 +743,12 @@ console.log('\nU11 independent round 5: compound limits and failure isolation')
     }
     setOffline(true)
     try { await fetchLibrary(); results.push('offline: accepted') } catch (e) { if (!(e instanceof OfflineError)) results.push(`offline: ${String(e)}`) }
-    ok(results.length === 0 && hits === 2 && requests.every((r) => r.url === 'https://slides.betamobility.ai/library/library.json' && r.credentials === 'same-origin' && r.redirect === 'manual'),
+    // An HTML answer is ambiguous since 2026-11-07 (a Cloudflare error page is
+    // HTML too), so the store asks Access once before saying signed out: three
+    // requests, the extra one to get-identity, which answered the login page.
+    const lib = requests.filter((r) => r.url === 'https://slides.betamobility.ai/library/library.json')
+    const who = requests.filter((r) => r.url === 'https://slides.betamobility.ai/cdn-cgi/access/get-identity')
+    ok(results.length === 0 && hits === 3 && lib.length === 2 && who.length === 1 && requests.every((r) => r.credentials === 'same-origin' && r.redirect === 'manual'),
       `R5 HTML login and redirect are signed-out; offline makes no request: ${results.join('; ')}, hits=${hits}`)
   } finally {
     globalThis.fetch = originalFetch

@@ -25,7 +25,7 @@ function method(name: string, deps: Record<string, any>, mutate = (s: string) =>
 }
 let writes = 0, backups = 0, marked = 0
 const store: any = { doc: newDoc(), revision: 0, dirty: true, setDirty(v: boolean) { this.dirty = v } }
-const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, storeConflictMessage() { return 'conflict' } }
+const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, storeConflictMessage() { return 'conflict' }, noteStoreSaveFailed() {}, async afterStoreSaved() {} }
 // noteStoreConflict is synchronous in production; extraction must preserve it.
 const noteNode = cls.members.find((n: any) => n.name?.getText(ast) === 'noteStoreConflict')
 ctx.noteStoreConflict = new Function('markStoreConflict', ts.transpile('function note(err, always = false) ' + noteNode.body.getText(ast), { target: ts.ScriptTarget.ES2022 }) + '; return note')(() => marked++).bind(ctx)
@@ -49,8 +49,8 @@ ctx.storeConflict = false
 const slow = method('runAutosave', { ...deps, writeUpdatedFile: async () => { store.revision++; store.doc.title = 'edit during save' } })
 await slow.call(ctx)
 assert.equal(store.dirty, true)
-let snap: any, conflicted = true, origin = true, banner = '', recovered: any
-const recover = method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => origin, recoveryChoice, clearStoreConflict: () => { conflicted = false } })
+let snap: any, conflicted = true, origin = true, moved = false, banner = '', recovered: any
+const recover = method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => origin, recoveryChoice, clearStoreConflict: () => { conflicted = false }, storeIdFromLocation: () => 'abc123XYZ0', storeMovedSinceSave: async () => moved })
 ctx.showConflictRecoveryBanner = (_: any, doc: any) => { banner = 'new-deck'; recovered = doc }
 ctx.showRecoveryBanner = () => { banner = 'restore' }
 const older = structuredClone(store.doc)
@@ -69,6 +69,8 @@ assert.deepEqual(recovered.slides[0].runtime, older.slides[0].runtime)
 assert.equal(store.doc.title, 'edit during save', 'recovery offer does not overwrite the open deck')
 origin = false; banner = ''; await recover.call(ctx); assert.equal(banner, 'restore')
 origin = true; conflicted = false; banner = ''; await recover.call(ctx); assert.equal(banner, 'restore')
+// the cloud moved on since this browser last saved: no Restore over it, even without a refused save
+moved = true; banner = ''; await recover.call(ctx); assert.equal(banner, 'new-deck'); moved = false
 for (const json of ['{broken', JSON.stringify(store.doc)]) {
   conflicted = true; banner = ''; snap = { json }; await recover.call(ctx)
   assert.equal(banner, '')
@@ -76,6 +78,6 @@ for (const json of ['{broken', JSON.stringify(store.doc)]) {
 }
 assert.equal(recoveryChoice({ mismatch: true, storeOrigin: true, conflicted: true }), 'new-deck')
 snap = { json: JSON.stringify(older) }; conflicted = true; banner = ''
-await method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => true, recoveryChoice: () => 'restore', clearStoreConflict() {} }).call(ctx)
+await method('checkRecovery', { isBodySealed: () => false, getRecovery: async () => snap, gateRestored, docContentKey, hasStoreConflict: () => conflicted, isStoreOrigin: () => true, recoveryChoice: () => 'restore', clearStoreConflict() {}, storeIdFromLocation: () => 'abc123XYZ0', storeMovedSinceSave: async () => false }).call(ctx)
 assert.throws(() => assert.equal(banner, 'new-deck'), 'removing the conflict policy must fail the recovery oracle')
 console.log('PASSED: store recovery chooses new deck only after conflict, gates content/credentials, and rejects malformed/equal snapshots')
