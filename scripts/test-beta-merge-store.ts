@@ -25,7 +25,7 @@ function method(name: string, deps: Record<string, any>, mutate = (s: string) =>
 }
 let writes = 0, backups = 0, marked = 0
 const store: any = { doc: newDoc(), revision: 0, dirty: true, setDirty(v: boolean) { this.dirty = v } }
-const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, storeConflictMessage() { return 'conflict' }, noteStoreSaveFailed() {}, async afterStoreSaved() {} }
+const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, storeConflictMessage() { return 'conflict' }, noteStoreSaveFailed() {}, async afterStoreSaved() {}, noteStoreBase() {}, canMergeStore() { return false } }
 // noteStoreConflict is synchronous in production; extraction must preserve it.
 const noteNode = cls.members.find((n: any) => n.name?.getText(ast) === 'noteStoreConflict')
 ctx.noteStoreConflict = new Function('markStoreConflict', ts.transpile('function note(err, always = false) ' + noteNode.body.getText(ast), { target: ts.ScriptTarget.ES2022 }) + '; return note')(() => marked++).bind(ctx)

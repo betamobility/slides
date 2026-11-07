@@ -436,6 +436,66 @@ export function reloadChoice(o: { probe: StoreProbe; live: boolean }): boolean {
 }
 
 /**
+ * May a tab WITH unsaved edits merge the store's version into its own? The
+ * same cases in which an idle tab would reload: a service write (it never
+ * travels through sync), or any change while this tab is not live. A live
+ * tab already holds a person's save through its room.
+ */
+export const mergeChoice = reloadChoice
+
+// --- merging the store's version into an open tab -------------------------------
+//
+// AFTER A CONFLICT, OR BEFORE ONE. A tab with unsaved edits used to latch on a
+// refused save and keep its edits only as a separate deck. Now the editor
+// fetches the store's version, merges it into the open deck over the version
+// the two last had in common (beta/merge.ts), adopts the store's ETag, and
+// saves the merge with it. `fetchStoreDeck` queues behind this tab's PUTs, so
+// it never reads the tab's own save as someone else's; `adoptMergedVersion`
+// lifts the latch, because the next PUT now carries the version it was
+// merged with. A 412 on THAT save starts the next merge.
+
+export interface StoreDeck {
+  html: string
+  etag: string
+  gen: number | null
+}
+
+/** The store's current bytes and version for `id`, or null (signed out,
+ *  offline, unreachable, no ETag, anything that is not the deck). Queued with
+ *  the PUTs and the probe. Never rejects; never changes the held version. */
+export function fetchStoreDeck(id: string): Promise<StoreDeck | null> {
+  const run = (queues.get(id) ?? Promise.resolve()).then(() => fetchNow(id))
+  const tail = run.then(() => {}, () => {})
+  queues.set(id, tail)
+  void tail.then(() => { if (queues.get(id) === tail) queues.delete(id) })
+  return run
+}
+
+async function fetchNow(id: string): Promise<StoreDeck | null> {
+  if (versionCheck) await versionCheck
+  let res: Response
+  try {
+    res = await netFetch(`${storeHost()}/d/${encodeURIComponent(id)}`, { method: 'GET', credentials: 'same-origin', redirect: 'manual', cache: 'no-store' })
+  } catch {
+    return null
+  }
+  const etag = res.status === 200 ? etagOf(res) : null
+  if (!etag) return null // a login page carries no deck ETag
+  let html: string
+  try { html = await res.text() } catch { return null }
+  return { html, etag, gen: genOf(res) }
+}
+
+/** This tab now holds (a merge over) the store's version `etag`: send it as
+ *  If-Match from here on, and lift the latch a refused save left. */
+export function adoptMergedVersion(id: string, etag: string, gen: number | null): void {
+  versions.set(id, etag)
+  if (gen !== null) gens.set(id, gen)
+  else gens.delete(id)
+  conflicted = false
+}
+
+/**
  * The scene library's manifest (2026-10-13-2236 plan, U11, KTD8), read from
  * the store's login route with the tab's Access cookie. Only on the store
  * origin; a lapsed session rejects with StoreSignedOutError, offline mode
