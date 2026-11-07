@@ -2911,9 +2911,12 @@ export class Editor {
         this.canvas.render()
       }
       if (this.store.dirty) this.scheduleAutosave()
-      this.toast(merged.conflicts.length
-        ? t('This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept.', { n: String(merged.conflicts.length) })
-        : t('This deck was changed in the cloud while you were editing. Those changes are in, and so are yours.'), 8000)
+      const n = merged.conflicts.length
+      this.toast(n === 0
+        ? t('This deck was changed in the cloud while you were editing. Those changes are in, and so are yours.')
+        : n === 1
+          ? t('This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept.')
+          : t('This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept.', { n: String(n) }), 8000)
     } finally {
       this.storeMerging = false
     }

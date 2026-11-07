@@ -16,9 +16,12 @@ A save that names the version of the deck the tab holds and is refused when the 
 Every save from a store tab is conditional. It exists so that a change made in the store while the deck is open is never overwritten silently.
 
 ### Latched tab
-A store tab whose conditional save was refused. It sends no further saves until it is reloaded.
+A store tab whose conditional save was refused. It sends no further saves until it merges the store's version or is reloaded.
 
-Its unsaved edits stay in the tab. After the reload they can be kept only as a new deck, never restored over the store's version, because the store's version is the change the refusal protected.
+Since 2026-11-07 a latched tab first tries a cloud merge, and stays latched only when it cannot (an encrypted deck, a failed fetch). Its unsaved edits stay in the tab. After a reload they can be kept only as a new deck, never restored over the store's version, because the store's version is the change the refusal protected.
+
+### Cloud merge
+Folding the store's newer version into a store tab that has unsaved edits, instead of latching it. Both sides are diffed against the version the tab last had in common with the store, through the sync engine, and the person's edit wins where both changed one property. The tab then adopts the store's version and saves the result.
 
 ### Idle tab
 A store tab that a reload would cost nothing: nothing unsaved, nothing being typed or drawn, no dialog waiting for an answer, no show running.
@@ -28,7 +31,7 @@ An idle tab reloads itself onto a newer store version. A tab that is not idle wa
 ### Recovery snapshot
 The browser-local copy of the last document a tab autosaved, offered back when the tab is reopened with something else loaded.
 
-It is never kept for an encrypted deck. It describes what the tab last had, not what the store has, so a snapshot that predates a store change must not be restored over it.
+It is never kept for an encrypted deck. It describes what the tab last had, not what the store has, so a snapshot that predates a store change must not be restored over it. A store save that leaves nothing unsaved deletes it, and a snapshot from before the store moved on is offered only as a new deck.
 
 ## Who writes a stored deck
 

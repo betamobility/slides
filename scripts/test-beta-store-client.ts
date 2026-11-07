@@ -810,6 +810,54 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   store.installStoreHost()
   ok(await store.storeMovedSinceSave('abc123XYZ0') === true, 'no version learned at boot → "moved" (cannot tell, so never restore over the store)')
   respond(fakeStore)
+
+  // §6e MERGING THE STORE'S VERSION INTO A TAB WITH UNSAVED EDITS. A refusedM
+  // save no longer ends the tab's saving: the editor fetches the store's
+  // version, merges it, adopts its ETag (lifting the latch), and saves.
+  const realFakeM = fakeStore
+  const withGetM = async (c: Call): Promise<Response> => {
+    const u = new URL(c.url)
+    const m = /^\/d\/([A-Za-z0-9]+)$/.exec(u.pathname)
+    if (m && (c.init.method ?? 'GET') === 'GET') {
+      const d = decks.get(m[1])!
+      return new Response(d.bytes, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', ...versionHeaders(d) } })
+    }
+    return realFakeM(c)
+  }
+  respond(withGetM)
+  store.installStoreHost()
+  await save.writeUpdatedFile('tab saves once')
+  decks.set('abc123XYZ0', { bytes: 'Claude wrote again', etag: mint(), writer: 'service', gen: decks.get('abc123XYZ0')!.gen + 1 })
+  let refusedM: any = null
+  try { await save.writeUpdatedFile('tab with unsaved edits') } catch (err) { refusedM = err }
+  ok(refusedM instanceof store.StoreConflictError && refusedM.writer === 'service', 'the stale save is refusedM (412, service)')
+  refusedM = null
+  try { await save.writeUpdatedFile('latched') } catch (err) { refusedM = err }
+  ok(refusedM instanceof store.StoreConflictError, '…and the tab is latched: nothing more is sent')
+  const cloudM = await store.fetchStoreDeck('abc123XYZ0')
+  ok(!!cloudM && cloudM.html === 'Claude wrote again' && cloudM.etag === decks.get('abc123XYZ0')!.etag && cloudM.gen === decks.get('abc123XYZ0')!.gen, 'fetchStoreDeck returns the store\'s bytes, ETag and generation')
+  ok(last().init.redirect === 'manual' && last().init.credentials === 'same-origin' && last().init.method === 'GET', '…through a credentialed, no-redirect GET of /d/<id>')
+  store.adoptMergedVersion('abc123XYZ0', cloudM!.etag, cloudM!.gen)
+  await save.writeUpdatedFile('merged: Claude and the tab')
+  ok(decks.get('abc123XYZ0')!.bytes === 'merged: Claude and the tab', 'after adoptMergedVersion the merge saves in place: the latch is lifted')
+  const putsNowM = calls.filter((c) => c.init.method === 'PUT')
+  ok(header(putsNowM[putsNowM.length - 1], 'if-match') === cloudM!.etag, '…conditionally, on the version it merged with')
+  // never reads the tab's own in-flight save as the store's
+  respond(async (c) => {
+    const res = await withGetM(c)
+    if (c.init.method === 'PUT') await new Promise((r) => setTimeout(r, 30))
+    return res
+  })
+  const racingM = save.writeUpdatedFile('this tab is saving')
+  await new Promise((r) => setTimeout(r, 10))
+  const duringM = await store.fetchStoreDeck('abc123XYZ0')
+  await racingM
+  ok(duringM?.html === 'this tab is saving', 'a fetch that overlaps this tab\'s own save waits for it (queued with the PUTs)')
+  respond(async () => new Response('<html>login</html>', { status: 200, headers: { 'content-type': 'text/html' } }))
+  ok(await store.fetchStoreDeck('abc123XYZ0') === null, 'a login page (no deck ETag) is not a deck: null, never a merge')
+  respond(async () => { throw new TypeError('offline') })
+  ok(await store.fetchStoreDeck('abc123XYZ0') === null, 'a failed fetch → null, no throw')
+  respond(fakeStore)
 }
 
 // ---- version history in the cloud -------------------------------------------------

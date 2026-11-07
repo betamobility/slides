@@ -581,13 +581,21 @@ jobs:
       - name: Beta deck store client rig
         # U8: slides/src/beta/store.ts against a fake browser. The store-backed
         # handle PUTs the kernel's bytes to /api/decks/<id> with a manual
-        # redirect; opaqueredirect, a rejected fetch, a 401 and a login page
-        # all reject as signed-out; picker ids map to PUT / POST+navigate /
+        # redirect; an opaqueredirect or a 401 rejects as signed-out, and an
+        # HTML page or a rejected fetch only when Access confirms it (else the
+        # cloud is unavailable and autosave retries); picker ids map to PUT / POST+navigate /
         # download; the file:// handoff accepts ready/saved only from the
         # store origin and the tab it opened, posts the document to the store
         # origin only, and times out. Bundles itself with esbuild, so after
         # `npm ci`.
         run: node scripts/test-beta-store-client.ts
+
+      - name: Beta merge of a cloud version into an open tab
+        # slides/src/beta/merge.ts: an agent's content edits, native and scene
+        # inserts, a colleague's deletes, reorders and deck-level edits, each
+        # folded into a tab with unsaved edits through the sync engine; where
+        # both changed one property the person's value stays and is reported.
+        run: node scripts/test-beta-merge.ts
 
       - name: Live-route checker's own logic
         # The checker itself needs the network and the live host, so it does

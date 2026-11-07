@@ -47,7 +47,7 @@ store.doc.title = 'first edit'
 let snapshot: any, banner = '', recovered: any
 const deps: any = { hasFileHandle, writeUpdatedFile, saveRevision, saveFile, serializeAuto: async (d: any) => { serializations++; return serializeAuto(d) }, isEncryptionActive: () => false, isBodySealed: () => false,
   putRecovery: async (d: any) => { snapshot = { at: Date.now(), json: JSON.stringify(d) }; return true }, addVersion: async () => {}, markFileSaved() {}, StoreConflictError, StoreSignedOutError, t: (s: string) => s, console: { error() {} } }
-const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, canvas: { commitTextEdit() {} }, storeConflictMessage: () => 'conflict', noteStoreSaveFailed() {}, async afterStoreSaved() {} }
+const ctx: any = { store, saveQueue: createSaveQueue(store), lastVersionAt: Date.now(), storeConflict: false, flashSaved() {}, refreshDirtyHint() {}, toast() {}, canvas: { commitTextEdit() {} }, storeConflictMessage: () => 'conflict', noteStoreSaveFailed() {}, async afterStoreSaved() {}, noteStoreBase() {}, canMergeStore() { return false } }
 ctx.noteStoreConflict = method('noteStoreConflict', 'err, always = false', { markStoreConflict }).bind(ctx)
 const auto = method('runAutosave', '', deps).bind(ctx), manual = method('save', 'forcePicker', deps).bind(ctx)
 const a = auto(); await firstPut
