@@ -3323,7 +3323,8 @@ export class Editor {
     try {
       rows = await listCloudVersions(id)
     } catch (err) {
-      note.textContent = err instanceof Error && err.message ? err.message : t('The cloud’s versions could not be loaded.')
+      // The store's errors are worded for saves; only a sign-out reads right here.
+      note.textContent = err instanceof StoreSignedOutError ? err.message : t('The cloud’s versions could not be loaded.')
       return
     }
     if (!rows.length) {
