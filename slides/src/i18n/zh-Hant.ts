@@ -1043,4 +1043,7 @@ export const zhHant: Catalog = {
   "That version is password-protected; open it from a file to restore it.": "該版本受密碼保護；請從檔案中開啟以進行還原。",
   "The cloud keeps a version whenever someone else saves over it, when Claude changes the deck, or after ten minutes of editing. Versions kept in this browser are never in the file or online. Restoring is undoable.": "當其他人覆寫儲存、Claude 修改簡報，或編輯滿十分鐘時，雲端會保留一個版本。保留在此瀏覽器中的版本不會出現在檔案中，也不會上傳到網路。還原操作可以復原。",
   "Restore an earlier version of this deck: the ones the cloud kept, and the ones this browser kept.": "還原此簡報的較早版本：包括雲端保留的版本和此瀏覽器保留的版本。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.": "你在編輯時，此簡報已在雲端發生變更。這些變更已合併，你的變更也已保留。 按 ⌘Z 可復原合併。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.": "你在編輯時，此簡報已在雲端發生變更。這些變更已合併，但有一處你也修改過，該處保留了你的版本。 按 ⌘Z 可復原合併。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.": "你在編輯時，此簡報已在雲端發生變更。這些變更已合併，但有 {n} 處你也修改過，這些位置保留了你的版本。 按 ⌘Z 可復原合併。",
 }

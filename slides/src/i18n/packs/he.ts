@@ -978,4 +978,7 @@ export const strings: Catalog = {
   "That version is password-protected; open it from a file to restore it.": "הגרסה הזו מוגנת בסיסמה; פתח אותה מקובץ כדי לשחזר אותה.",
   "The cloud keeps a version whenever someone else saves over it, when Claude changes the deck, or after ten minutes of editing. Versions kept in this browser are never in the file or online. Restoring is undoable.": "הענן שומר גרסה כשמישהו אחר שומר מעליה, כש-Claude משנה את המצגת, או אחרי עשר דקות של עריכה. גרסאות שנשמרו בדפדפן הזה אינן נמצאות לעולם בקובץ או באינטרנט. אפשר לבטל שחזור.",
   "Restore an earlier version of this deck: the ones the cloud kept, and the ones this browser kept.": "שחזר גרסה קודמת של המצגת הזו: אלה שהענן שמר ואלה שהדפדפן הזה שמר.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.": "המצגת הזו שונתה בענן בזמן שערכת אותה. השינויים האלה נכללו, וגם שלך. ⌘Z מבטל את המיזוג.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.": "המצגת הזו שונתה בענן בזמן שערכת אותה. השינויים האלה נכללו, מלבד מקום אחד ששינית גם אתה, ושם נשמרה הגרסה שלך. ⌘Z מבטל את המיזוג.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.": "המצגת הזו שונתה בענן בזמן שערכת אותה. השינויים האלה נכללו, מלבד {n} מקומות ששינית גם אתה, ושם נשמרה הגרסה שלך. ⌘Z מבטל את המיזוג.",
 }

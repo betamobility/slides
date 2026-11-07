@@ -2913,10 +2913,10 @@ export class Editor {
       if (this.store.dirty) this.scheduleAutosave()
       const n = merged.conflicts.length
       this.toast(n === 0
-        ? t('This deck was changed in the cloud while you were editing. Those changes are in, and so are yours.')
+        ? t('This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.')
         : n === 1
-          ? t('This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept.')
-          : t('This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept.', { n: String(n) }), 8000)
+          ? t('This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.')
+          : t('This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.', { n: String(n) }), 8000)
     } finally {
       this.storeMerging = false
     }
