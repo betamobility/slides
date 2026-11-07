@@ -526,6 +526,55 @@ export async function storeMovedSinceSave(id: string): Promise<boolean> {
   return !now || !saved || now !== saved
 }
 
+// --- version history in the cloud ---------------------------------------------
+//
+// The store keeps the version a write replaces whenever it is worth keeping
+// (another writer's, an agent's, or one that stood ten minutes: worker.js,
+// "deck history"). These two read that list and one version, for the editor's
+// Version history. The browser's own timeline only holds what THIS browser
+// saw; this one holds what everyone, Claude included, saved.
+
+export interface CloudVersion {
+  /** The version's name in the store; pass it back to readCloudVersion. */
+  v: string
+  /** When that version was written (ISO). */
+  at: string
+  /** Who wrote it: an email, `grant:<email>` for an agent acting for that
+   *  person, or a service token's id. Null when the store did not record it. */
+  writer: string | null
+  title: string
+  size: number
+  deleted: boolean
+}
+
+/** The kept versions of deck `id`, newest first. Rejects as every store
+ *  request does (signed out, unavailable, offline). */
+export async function listCloudVersions(id: string): Promise<CloudVersion[]> {
+  const res = await storeRequest(`/api/decks/${encodeURIComponent(id)}/history`, { method: 'GET', headers: { accept: 'application/json' }, cache: 'no-store' })
+  let out: any
+  try { out = await res.json() } catch { throw await unreachable(null) }
+  const rows = Array.isArray(out?.versions) ? out.versions : []
+  return rows.filter((r: any) => r && typeof r.v === 'string' && typeof r.at === 'string').map((r: any) => ({
+    v: r.v, at: r.at, writer: typeof r.writer === 'string' && r.writer ? r.writer : null,
+    title: typeof r.title === 'string' ? r.title : '', size: Number(r.size) || 0, deleted: !!r.deleted,
+  }))
+}
+
+/** One kept version's bytes (the whole .bento.html). */
+export async function readCloudVersion(id: string, v: string): Promise<string> {
+  const res = await storeRequest(`/api/decks/${encodeURIComponent(id)}/history/${encodeURIComponent(v)}`, { method: 'GET', cache: 'no-store' })
+  return res.text()
+}
+
+/** A writer as a person reads it: "Johan Hal", "Claude, for Johan Hal", or
+ *  "An automated run". */
+export function writerLabel(writer: string | null): string {
+  if (!writer) return ''
+  const grant = /^grant:(.+)$/.exec(writer)
+  if (grant) return t('An agent, for {name}', { name: grant[1].includes('@') ? nameFromEmail(grant[1]) : grant[1] })
+  return writer.includes('@') ? nameFromEmail(writer) : t('An automated run')
+}
+
 /** Store a NEW deck; the worker answers 201 {id, url}. */
 export async function postDeck(html: string): Promise<{ id: string; url: string }> {
   const res = await storeRequest('/api/decks', { method: 'POST', body: html, headers })

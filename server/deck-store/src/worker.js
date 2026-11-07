@@ -25,6 +25,9 @@
 //   DELETE /api/decks/:id          owner only → 204, the deck's assets with it
 //                                  (the deck itself is kept under history/, see
 //                                  "deck history" below)
+//   GET    /api/decks/:id/history  the kept versions of a deck, newest first
+//                                  (people only; see "deck history")
+//   GET    /api/decks/:id/history/:v  one kept version's bytes, as text/plain
 //   GET    /d/:id                  the stored bytes, streamed, unchanged, + ETag
 //   HEAD   /d/:id                  the same headers, no body (the editor's boot)
 //   GET    /d/:id/assets/:name     a scene asset, sandboxed, no-cache + ETag
@@ -406,11 +409,20 @@ function tracked(ctx, req, name, res) {
 //
 // in the same bucket. `-deleted` marks the copy taken just before a delete. R2's
 // etag is the MD5 of the bytes, so the same bytes written in the same second
-// share a key: one object, nothing lost. Nothing serves, lists or routes that prefix — listDecks
-// reads `decks/`, every route matches an id shape, remove() touches `decks/`
-// and `assets/` — so a history object is reachable by the maintainer alone
-// (README, "Restoring a deck"). A lifecycle rule on `history/` expires them;
-// the worker never deletes one.
+// share a key: one object, nothing lost. listDecks reads `decks/` and remove()
+// touches `decks/` and `assets/`, so history never shows up as a deck and a
+// delete never reaches it. A lifecycle rule on `history/` expires them; the
+// worker never deletes one.
+//
+// READ BY PEOPLE (2026-11-07). The editor's Version history lists a deck's
+// kept versions (`GET /api/decks/:id/history`) and restores one into the open
+// deck as an ordinary, undoable edit (`GET …/history/:v`). Both sit behind
+// the person gate: anyone signed in can already open and edit every deck, so
+// this shows them nothing they could not read; a grant or a service token
+// gets 403, as for every person route. The bytes go out as text/plain with
+// nosniff and as an attachment, so a kept version is never served as a page
+// on this origin. Restoring through the store, by a key, stays the
+// maintainer's (README, "Restoring a deck").
 //
 // WHEN a version is kept. Every person save is an autosave (a 2.5 s debounce),
 // so a copy per save would be one 1 MB object every few seconds of editing.
@@ -466,6 +478,52 @@ async function keepVersion(env, id, { deleting = false } = {}) {
   } catch {
     return false
   }
+}
+
+/** A kept version's name: the history key's last segment, minus the suffix. */
+const HISTORY_V_RE = /^(\d{8}T\d{6}Z)-([0-9a-f]{8})(-deleted)?$/
+
+/** The kept versions of deck `id`, newest first: name, when, who wrote it. */
+async function listHistory(env, id) {
+  const rows = []
+  let cursor
+  do {
+    const page = await env.DECKS.list({ prefix: HISTORY_PREFIX(id), cursor, include: ['customMetadata'] })
+    for (const o of page.objects) {
+      const v = o.key.slice(HISTORY_PREFIX(id).length).replace(/\.bento\.html$/, '')
+      const m = HISTORY_V_RE.exec(v)
+      if (!m) continue
+      const meta = o.customMetadata || {}
+      rows.push({
+        v,
+        // when that version was WRITTEN (the key's stamp), not when it was kept
+        at: m[1].replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z'),
+        writer: decMeta(meta.writer) || null,
+        title: decMeta(meta.title) || '',
+        size: o.size,
+        deleted: !!m[3],
+      })
+    }
+    cursor = page.truncated ? page.cursor : undefined
+  } while (cursor)
+  rows.sort((a, b) => (a.v < b.v ? 1 : a.v > b.v ? -1 : 0))
+  return rows
+}
+
+/** One kept version's bytes. Never as HTML: see "READ BY PEOPLE" above. */
+async function readHistory(env, id, v) {
+  if (!HISTORY_V_RE.test(v)) return empty(404)
+  const obj = await env.DECKS.get(`${HISTORY_PREFIX(id)}${v}.bento.html`)
+  if (!obj) return empty(404)
+  return new Response(obj.body, {
+    status: 200,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'x-content-type-options': 'nosniff',
+      'content-disposition': `attachment; filename="${id}-${v}.bento.html"`,
+      'cache-control': 'private, no-store',
+    },
+  })
 }
 
 // --- handlers -----------------------------------------------------------------
@@ -1209,6 +1267,10 @@ export default {
     const dm = new RegExp(`^/api/decks/(${ID_PAT})$`).exec(path)
     if (dm && m === 'PUT') return replace(req, env, ctx, who, dm[1])
     if (dm && m === 'DELETE') return remove(env, who, dm[1])
+    const hl = new RegExp(`^/api/decks/(${ID_PAT})/history$`).exec(path)
+    if (hl && m === 'GET') return json(200, { versions: await listHistory(env, hl[1]) })
+    const hv = new RegExp(`^/api/decks/(${ID_PAT})/history/([^/]+)$`).exec(path)
+    if (hv && m === 'GET') return readHistory(env, hv[1], hv[2])
     const sm = new RegExp(`^/d/(${ID_PAT})$`).exec(path)
     if (sm && m === 'GET') return serve(env, ctx, req, sm[1])
     if (sm && m === 'HEAD') return serveHead(env, sm[1])

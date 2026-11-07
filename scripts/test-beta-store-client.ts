@@ -812,6 +812,31 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   respond(fakeStore)
 }
 
+// ---- version history in the cloud -------------------------------------------------
+console.log('\n§6d version history in the cloud')
+{
+  respond(async (c) => {
+    if (c.url === `${STORE}/api/decks/abc123XYZ0/history`) return new Response(JSON.stringify({ versions: [
+      { v: '20261107T100000Z-aaaaaaaa', at: '2026-11-07T10:00:00Z', writer: 'ola.nordmann@betamobility.io', title: 'T', size: 10, deleted: false },
+      { v: '20261107T093000Z-bbbbbbbb', at: '2026-11-07T09:30:00Z', writer: 'grant:ola.nordmann@betamobility.io', title: 'T', size: 9, deleted: false },
+      { bogus: true },
+    ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (c.url === `${STORE}/api/decks/abc123XYZ0/history/20261107T100000Z-aaaaaaaa`) return new Response('<html>kept</html>', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+    return new Response(null, { status: 404 })
+  })
+  const rows = await store.listCloudVersions('abc123XYZ0')
+  ok(rows.length === 2 && rows[0].v === '20261107T100000Z-aaaaaaaa' && rows[1].writer === 'grant:ola.nordmann@betamobility.io', `listCloudVersions reads the rows and drops malformed ones (${rows.length})`)
+  ok(last().init.redirect === 'manual' && last().init.credentials === 'same-origin', '…through the same credentialed, no-redirect request as every store call')
+  ok(await store.readCloudVersion('abc123XYZ0', rows[0].v) === '<html>kept</html>', 'readCloudVersion returns the kept bytes; text/plain is not mistaken for a login page')
+  ok(store.writerLabel('ola.nordmann@betamobility.io') === 'Ola Nordmann', 'a person reads as their name')
+  ok(store.writerLabel('grant:ola.nordmann@betamobility.io') === 'An agent, for Ola Nordmann', "an agent's write names whom it acted for")
+  ok(store.writerLabel('ci-token-id') === 'An automated run' && store.writerLabel(null) === '', 'a service token is an automated run; nothing recorded is blank')
+  respond(async () => ({ type: 'opaqueredirect', status: 0, ok: false, headers: new Headers(), text: async () => '', json: async () => { throw new Error('x') } } as any))
+  let e: any = null
+  try { await store.listCloudVersions('abc123XYZ0') } catch (err) { e = err }
+  ok(e instanceof store.StoreSignedOutError, 'a lapsed sign-in rejects as signed out, as every store call does')
+}
+
 // ---- after a conflict, the recovery banner ----------------------------------------
 console.log('\n§7 conflict marker and the recovery choice')
 {

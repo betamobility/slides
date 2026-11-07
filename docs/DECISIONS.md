@@ -12517,3 +12517,38 @@ harness `PUT`, never a raw `wrangler r2 object put`, which would drop the
 owner and title. A deleted deck comes back as a new deck with a new link.
 Procedure and maintainer commands: `server/deck-store/README.md`, "Deck
 history and restore".
+
+## 2026-11-07 — BETA FORK: people read the store's version history; "signed out" only when Access says so
+
+**Version history in the editor reads the store's `history/`.** Until now the
+kept versions were reachable by the maintainer alone, and the editor's
+Version history held only what one browser had autosaved. That missed every
+version written somewhere else, and every agent write. Two person-only routes
+now list a deck's kept versions and return one (`GET /api/decks/:id/history`,
+`…/history/:v`). Anyone signed in can already open and edit every deck, so
+this exposes nothing new to them. The bytes go out as `text/plain`, `nosniff`
+and as an attachment, so a kept version is never served as a page on the
+store's origin. Grants and service tokens get `403`, because an agent that
+needs an old version should ask the person. A restore in the editor is a
+`replaceDoc`: it can be undone, and its save keeps the version it replaces.
+The maintainer's restore through the harness route is unchanged.
+
+**A save error names its cause.** The store client read every HTML answer
+and every rejected fetch as an expired Access session. A Cloudflare error
+page (5xx, 1102) is HTML too, and a dropped connection is a rejected fetch,
+so signed-in people were told to sign in again. Only an `opaqueredirect` or a
+`401` is a sign-out without asking. For anything ambiguous the tab asks
+`/cdn-cgi/access/get-identity` once, and says "signed out" only when Access
+does. Everything else is `StoreUnavailableError`, which autosave retries on a
+backoff. The cost is one extra same-origin request on a failure path.
+
+**A recovery snapshot is not offered as Restore over a newer cloud version.**
+The editor clears the snapshot after a store save that leaves nothing
+unsaved. The store client also records the version this browser last saved
+(`bento-store-saved-<id>` in localStorage), and a snapshot that survives
+(work left unsaved) is offered as Restore only when the cloud still holds
+that version. Otherwise it is offered only as a new deck, the same as after a
+refused save. When the client cannot tell, it treats the cloud as moved,
+because a wrong Restore deletes someone else's work and a wrong "new deck"
+costs one click.
+
