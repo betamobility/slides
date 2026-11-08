@@ -2607,6 +2607,36 @@ export async function run(Miniflare) {
       r = await call('GET', `/d/history/${hid}`, { as: 'alice' })
       eq(r.status, 404, 'and no route serves one')
 
+      // Version history in the editor (2026-11-07): people list and read the
+      // kept versions; nothing else does, and a version never serves as a page.
+      r = await call('GET', `/api/decks/${hid}/history`, { as: 'bob' })
+      eq(r.status, 200, 'any signed-in person lists a deck\'s kept versions')
+      const listed = (await r.json()).versions
+      eq(listed.length, 3, 'all three kept versions are listed')
+      ok(listed.every((x, i) => i === 0 || listed[i - 1].v > x.v), 'newest first')
+      ok(listed.every((x) => /^\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(x.v) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(x.at) && typeof x.size === 'number' && x.deleted === false), `each row names its version, when it was written and its size (${JSON.stringify(listed[0])})`)
+      const first = listed.find((x) => x.title === 'Styremøte, versjon 1')
+      ok(!!first && first.writer === 'alice@betamobility.io', 'with the title and writer of that version')
+      ok(listed.some((x) => x.title === 'Overwritten by a bad agent run' && !!x.writer && x.writer !== 'alice@betamobility.io'), "the agent's version is listed too, under the agent's name")
+      r = await call('GET', `/api/decks/${hid}/history/${first.v}`, { as: 'bob' })
+      eq(r.status, 200, 'one kept version reads back')
+      ok(Buffer.from(await r.arrayBuffer()).equals(Buffer.from(v1)), '…byte for byte')
+      ok(/^text\/plain/.test(r.headers.get('content-type') || '') && r.headers.get('x-content-type-options') === 'nosniff' && /^attachment/.test(r.headers.get('content-disposition') || ''), 'as text/plain, nosniff, an attachment: never a page on this origin')
+      r = await call('GET', `/api/decks/${hid}/history/${first.v.replace(/-[0-9a-f]{8}$/, '-00000000')}`, { as: 'bob' })
+      eq(r.status, 404, 'a version that was never kept is 404')
+      for (const bad of ['..%2F..%2Fdecks%2Fx', 'decks', `${first.v}.bento.html`, '20260101T000000Z-zzzzzzzz']) {
+        r = await call('GET', `/api/decks/${hid}/history/${bad}`, { as: 'bob' })
+        eq(r.status, 404, `a name that is not a version is 404 (${bad})`)
+      }
+      r = await call('GET', `/api/decks/${hid}/history`, { as: 'service' })
+      eq(r.status, 403, 'a service token cannot list history: it is a person route')
+      r = await call('GET', `/api/decks/${hid}/history/${first.v}`, { as: 'service' })
+      eq(r.status, 403, 'nor read a version')
+      r = await call('GET', `/api/decks/${hid}/history`)
+      eq(r.status, 401, 'and nobody unsigned')
+      r = await call('GET', '/api/decks/ZZZZZZZZZZ/history', { as: 'bob' })
+      ok(r.status === 200 && (await r.json()).versions.length === 0, 'a deck with no history lists nothing')
+
       // README "Restoring a deck", steps 1 to 4, to get version 1 back.
       // 1. list history/<id>/ and pick the version by its title, writer and time
       const picks = (await historyOf(hid)).filter((o) => decodeURIComponent(o.customMetadata.title) === 'Styremøte, versjon 1'

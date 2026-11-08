@@ -36,6 +36,8 @@ Anything not on that list is gated, so a path nobody thought about costs a login
 | `POST /api/decks` | person | body = the `.bento.html`; `201 {id,url}`. `?new=1` only changes the analytics event |
 | `PUT /api/decks/:id` | person | replace in place; keeps `owner` and `created`, records `writer`. `200` carries the new `ETag`. `If-Match` is honoured when sent (`412` if the deck changed) and never required, because shells already on disk save without it. A `412` from either PUT route carries the current `ETag` and a JSON body whose `writer` is `person` or `service`, naming who wrote the current version; the editor retries against it only for a person's save while live in the deck's sync room, and only when the `412`'s `x-bento-service-gen` equals the one it last received |
 | `DELETE /api/decks/:id` | owner | `204`, and the deck's assets go with it; `403` for anyone else. The deck itself is kept under `history/` first (see "Deck history and restore"); `503` and nothing deleted if that copy fails |
+| `GET /api/decks/:id/history` | person | `{versions:[{v,at,writer,title,size,deleted}]}`, newest first: the versions kept under `history/<id>/`, for the editor's Version history. `at` is when that version was written; `writer` is an email, `grant:<email>` or a service token id |
+| `GET /api/decks/:id/history/:v` | person | one kept version's bytes, as `text/plain` with `nosniff` and `Content-Disposition: attachment`, so it never renders as a page on this origin; `404` for a name that is not a kept version |
 | `GET /d/:id` | person | the stored bytes, `text/html; charset=utf-8`, `private, no-store`, `nosniff`, report-only CSP, `ETag` |
 | `HEAD /d/:id` | person | the same headers with no body; how the editor learns the version it is showing. Not tracked |
 | `GET /d/:id/assets/:name` | person | a scene asset with its stored content type, `private, no-cache` with the object's `ETag` (`If-None-Match` with the current one answers `304`, so a re-uploaded asset is seen on the next load), `nosniff`, `content-security-policy: sandbox` |
@@ -287,7 +289,7 @@ The rig also pins the pairing flow (start, the approval page's copy and refusals
 history/<id>/<when that version was written, UTC, YYYYMMDDTHHMMSSZ>-<first 8 of its etag>[-deleted].bento.html
 ```
 
-in the same bucket. A [lifecycle rule](https://developers.cloudflare.com/r2/buckets/object-lifecycles/) on the `history/` prefix expires them. Nothing serves, lists or routes `history/`: the deck list reads `decks/`, and every route matches an id shape.
+in the same bucket. A [lifecycle rule](https://developers.cloudflare.com/r2/buckets/object-lifecycles/) on the `history/` prefix expires them. The deck list reads `decks/`, so a kept version never shows up as a deck. Since 2026-11-07 people can list and read a deck's kept versions (`GET /api/decks/:id/history`, `…/history/:v`), and the editor's Version history shows them under "Saved in the cloud". Restoring one there is an ordinary, undoable edit of the open deck that saves back like any other; the version it replaces is kept in turn. Service tokens and grants cannot use those routes, and the maintainer's restore below is unchanged.
 
 **When a version is kept** (`keepBeforeWrite` in `src/worker.js`):
 
@@ -298,7 +300,7 @@ in the same bucket. A [lifecycle rule](https://developers.cloudflare.com/r2/buck
 
 What is *not* kept is a version one person overwrites within ten minutes of writing it. Every save from a store tab is an autosave, so copying each one would mean a 1 MB object every few seconds of editing. Those intermediate versions still live in that tab's own version history. The same bytes written in the same second share a key, and nothing is lost by that.
 
-**It fails closed.** If the copy cannot be written, the save or delete is refused with `503` and nothing changes. A save that skipped its copy without saying so would be the gap this exists to close. In a store tab that `503` shows as "The store refused the deck (503: …)" (`slides/src/beta/store.ts`). It is not a conflict, so the tab does not latch, and its unsaved edits stay in the tab for the next save. The splice tool reports it as a failed write.
+**It fails closed.** If the copy cannot be written, the save or delete is refused with `503` and nothing changes. A save that skipped its copy without saying so would be the gap this exists to close. In a store tab that `503` shows as "The cloud could not save the deck just now (error 503)…" (`slides/src/beta/store.ts`, `StoreUnavailableError`). It is not a conflict, so the tab does not latch: its unsaved edits stay in the tab and autosave tries again after 5, 15 and 30 seconds, then every minute. The splice tool reports it as a failed write.
 
 **Not covered:** scene assets (`assets/`) and the scene library (`library/`). The splice tool re-uploads assets, and the library is rebuilt from `beta/library/` in the repo. Grants in KV are not backed up either: a lost grant is a new pairing.
 

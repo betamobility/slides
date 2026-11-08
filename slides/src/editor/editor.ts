@@ -22,6 +22,8 @@ import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, ap
 import { LightTable, thumbBase } from '../beta/lighttable' // BETA FORK: the slide list as a grid
 import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
 import { storeMovedSinceSave, StoreUnavailableError } from '../beta/store' // BETA FORK: honest save errors, stale-snapshot guard
+import { listCloudVersions, readCloudVersion, writerLabel, type CloudVersion } from '../beta/store' // BETA FORK: version history in the cloud
+import { embeddedDocBlock } from '../save' // BETA FORK: a cloud version's document block
 import { fetchLibrary, storeHost } from '../beta/store' // BETA FORK (U11): the scene library
 import { adoptAccessName } from '../beta/store' // BETA FORK: presence names from Access
 import { initialsOf } from '../beta/initials' // BETA FORK: two-letter avatars
@@ -1081,7 +1083,9 @@ export class Editor {
       // the other file operations now (they were buried in the About dialog)
       into.appendChild(tag(div('ed-menu-sep')))
       item(ICONS.history, t('Version history…'),
-        t('Restore an earlier auto-saved version of this deck (kept locally in this browser).'),
+        isStoreOrigin() // BETA FORK: on the cloud the history is everyone's, not only this browser's
+          ? t('Restore an earlier version of this deck: the ones the cloud kept, and the ones this browser kept.')
+          : t('Restore an earlier auto-saved version of this deck (kept locally in this browser).'),
         () => void this.openVersionHistory())
       item(ICONS.code, t('Copy document JSON'),
         t('Copies this deck as plain JSON — content only, no live-session keys. Edit it in another tool, then bring it back with Replace from JSON.'),
@@ -3247,6 +3251,18 @@ export class Editor {
     const h = document.createElement('h2')
     h.textContent = t('Version history')
     box.appendChild(h)
+    // BETA FORK: on the cloud, every version anyone saved (Claude included)
+    // comes first; this browser's own timeline follows under its own heading.
+    const sid = isStoreOrigin() && !isBodySealed() ? storeIdFromLocation() : null
+    if (sid) {
+      const cloud = div('ed-version-cloud')
+      box.appendChild(cloud)
+      void this.fillCloudVersions(cloud, sid, () => close())
+      const mine = document.createElement('h3')
+      mine.className = 'ed-version-head'
+      mine.textContent = t('Kept in this browser')
+      box.appendChild(mine)
+    }
     if (!versions.length) {
       const empty = document.createElement('p')
       empty.className = 'ed-about-fine'
@@ -3277,7 +3293,9 @@ export class Editor {
       box.appendChild(list)
     }
     const fine = div('ed-about-fine')
-    fine.textContent = t('Versions are stored only in this browser, never in the file or online. Restoring is undoable.')
+    fine.textContent = sid // BETA FORK: on the cloud the dialog holds both kinds
+      ? t('The cloud keeps a version whenever someone else saves over it, when Claude changes the deck, or after ten minutes of editing. Versions kept in this browser are never in the file or online. Restoring is undoable.')
+      : t('Versions are stored only in this browser, never in the file or online. Restoring is undoable.')
     box.appendChild(fine)
     overlay.appendChild(box)
     const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true) }
@@ -3285,6 +3303,71 @@ export class Editor {
     overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close() })
     document.addEventListener('keydown', onKey, true)
     document.body.appendChild(overlay)
+  }
+
+  /**
+   * BETA FORK: the cloud's kept versions of this deck (store.ts
+   * listCloudVersions), each restorable into the open deck. A restore is an
+   * ordinary edit: undoable with ⌘Z, and saved back like any other, so the
+   * version it replaces is kept in the cloud in turn.
+   */
+  private async fillCloudVersions(into: HTMLElement, id: string, close: () => void) {
+    const head = document.createElement('h3')
+    head.className = 'ed-version-head'
+    head.textContent = t('Saved in the cloud')
+    const note = document.createElement('p')
+    note.className = 'ed-about-fine'
+    note.textContent = t('Loading…')
+    into.append(head, note)
+    let rows: CloudVersion[]
+    try {
+      rows = await listCloudVersions(id)
+    } catch (err) {
+      // The store's errors are worded for saves; only a sign-out reads right here.
+      note.textContent = err instanceof StoreSignedOutError ? err.message : t('The cloud’s versions could not be loaded.')
+      return
+    }
+    if (!rows.length) {
+      note.textContent = t('No earlier versions in the cloud yet. A version is kept when someone else saves over it, when Claude changes the deck, or after ten minutes.')
+      return
+    }
+    note.remove()
+    const list = div('ed-version-list')
+    for (const v of rows) {
+      const row = document.createElement('button')
+      row.className = 'ed-version-row'
+      const when = new Date(v.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      const cells = [when, writerLabel(v.writer), t('Restore')].map((text, i) => {
+        const c = document.createElement('span')
+        c.className = ['vh-when', 'vh-tag', 'vh-do'][i]
+        c.textContent = text
+        return c
+      })
+      row.title = v.title
+      row.append(...cells)
+      row.addEventListener('click', async () => {
+        row.disabled = true
+        try {
+          const html = await readCloudVersion(id, v.v)
+          const block = embeddedDocBlock(html)
+          if (!block) throw new Error('no document')
+          if (/^\s*\{\s*"format"\s*:\s*"bento\/enc"/.test(block)) { this.toast(t('That version is password-protected; open it from a file to restore it.'), 6000); row.disabled = false; return }
+          const gated = gateRestored(block, this.store.doc) // foreign input, as the browser's versions
+          if (!gated) throw new Error('not a document')
+          if (gated.dropped.length) console.info('[bento] restore: dropped', gated.dropped)
+          this.store.replaceDoc(gated.doc)
+          this.canvas.render()
+          close()
+          this.toast(t('Restored the version from {when} — ⌘Z undoes', { when }))
+        } catch (err) {
+          console.error(err)
+          row.disabled = false
+          this.toast(err instanceof StoreSignedOutError || err instanceof StoreUnavailableError ? (err as Error).message : t('That version could not be read'))
+        }
+      })
+      list.appendChild(row)
+    }
+    into.appendChild(list)
   }
 
   /** Shortcuts + tips overlay (press ? or the topbar help button). */
