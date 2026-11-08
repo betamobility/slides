@@ -1029,4 +1029,8 @@ export const de: Catalog = {
   "{n} pictures still uploading…": "{n} Bilder werden noch hochgeladen…",
   "Not rendered: {what}": "Nicht gerendert: {what}",
   "no space just inside the $ signs": "kein Leerzeichen direkt innerhalb der $-Zeichen",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Die Cloud konnte die Präsentation gerade nicht speichern (Fehler {status}). Ihre Änderungen bleiben in diesem Tab erhalten; das Speichern wird erneut versucht.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Die Cloud war zum Speichern der Präsentation nicht erreichbar. Ihre Änderungen bleiben in diesem Tab erhalten; das Speichern wird erneut versucht.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Diese Präsentation ist größer, als die Cloud annimmt. Verkleinern oder entfernen Sie die größten Bilder oder Videos und speichern Sie dann erneut.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Diese Präsentation wurde in der Cloud geändert, seit dieser Browser sie zuletzt gespeichert hat. Sie haben die neueste Version geöffnet. Dieser Browser hat außerdem eine Kopie vom {when} behalten: Behalten Sie sie als neue Präsentation oder verwerfen Sie sie.",
 }

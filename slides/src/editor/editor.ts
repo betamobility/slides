@@ -21,6 +21,7 @@ import { BETA_WORDMARK_SVG } from './brand'
 import { aboutCreditsText, aboutHeaderHtml, aboutHeaderTitle, aboutPromoHtml, applyUpdateStatus, whatsNewUrl } from '../beta/about' // BETA FORK
 import { LightTable, thumbBase } from '../beta/lighttable' // BETA FORK: the slide list as a grid
 import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, markStoreConflict, postDeck, probeStore, recoveryChoice, reloadChoice, saveToDisk, setLiveCheck, storeIdFromLocation, StoreConflictError, StoreSignedOutError } from '../beta/store' // BETA FORK (v1.1 U8)
+import { storeMovedSinceSave, StoreUnavailableError } from '../beta/store' // BETA FORK: honest save errors, stale-snapshot guard
 import { fetchLibrary, storeHost } from '../beta/store' // BETA FORK (U11): the scene library
 import { adoptAccessName } from '../beta/store' // BETA FORK: presence names from Access
 import { initialsOf } from '../beta/initials' // BETA FORK: two-letter avatars
@@ -2762,11 +2763,13 @@ export class Editor {
         markFileSaved() // the packs went out with those bytes too
         // "Saved" only when the dot actually went out; an edit made during the
         // write stays dirty and its own 'doc' event has already re-armed us
-        if (out.current) this.flashSaved()
+        if (out.current) { this.flashSaved(); void this.afterStoreSaved(doc.docId) } // BETA FORK: afterStoreSaved
+        this.storeRetries = 0 // BETA FORK
         return
       }
       // failed: keep dirty; the IndexedDB snapshot is the backstop
       if (out.kind === 'failed' && out.error instanceof StoreConflictError) this.noteStoreConflict(out.error) // BETA FORK
+      if (out.kind === 'failed') this.noteStoreSaveFailed(out.error) // BETA FORK
     }
     // No handle (Safari/Firefox/iOS) or the write failed: the file on disk is
     // STALE and the deck stays dirty — saying "Saved" here would be a lie. But
@@ -2781,6 +2784,36 @@ export class Editor {
       this.lastBackupAt = Date.now()
       this.flashSaved(t('Backed up in this browser'))
       this.refreshDirtyHint()
+    }
+  }
+
+  /**
+   * BETA FORK: a store save landed and nothing is left unsaved, so the
+   * recovery snapshot holds only what the store already has. Left in place, it
+   * would be offered as "unsaved changes" on the next boot once anyone else
+   * writes the deck, and Restore would put it over their version.
+   */
+  private async afterStoreSaved(docId: string) {
+    if (!isStoreOrigin() || this.store.dirty) return
+    await clearRecovery(docId)
+  }
+
+  /**
+   * BETA FORK: an autosave the store did not take. A cloud that was briefly
+   * unreachable is retried on a backoff (5 s, 15 s, 30 s, then every 60 s), so
+   * a dropped connection does not leave the deck unsaved until the next edit.
+   * Said once per run of failures; a sign-out is said once until it clears.
+   */
+  private storeRetries = 0
+  private storeRetryTimer = 0
+  private noteStoreSaveFailed(err: unknown) {
+    if (!isStoreOrigin() || err instanceof StoreConflictError) return
+    if (err instanceof StoreUnavailableError || err instanceof StoreSignedOutError) {
+      if (this.storeRetries === 0) this.toast((err as Error).message, 8000)
+      const wait = [5_000, 15_000, 30_000][this.storeRetries] ?? 60_000
+      this.storeRetries++
+      clearTimeout(this.storeRetryTimer)
+      this.storeRetryTimer = window.setTimeout(() => { if (this.store.dirty) void this.runAutosave() }, wait)
     }
   }
 
@@ -2905,9 +2938,15 @@ export class Editor {
     // older one. A Restore then a save (with the fresh ETag) would erase the
     // store change without a 412, so the snapshot may only become a new deck.
     const conflicted = hasStoreConflict(doc.docId)
-    const choice = recoveryChoice({ mismatch, storeOrigin: isStoreOrigin(), conflicted })
+    // BETA FORK: and when the store holds a version this browser never saved
+    // (Claude or a colleague wrote after this tab last did), the snapshot is
+    // older than the open deck even without a refused save. Waits for the boot
+    // HEAD; only asked when there is a snapshot to decide about.
+    const sid = storeIdFromLocation()
+    const moved = mismatch && isStoreOrigin() && !!sid ? await storeMovedSinceSave(sid) : false
+    const choice = recoveryChoice({ mismatch, storeOrigin: isStoreOrigin(), conflicted, moved })
     if (choice === 'none') { if (conflicted) clearStoreConflict(doc.docId); return }
-    if (choice === 'new-deck') this.showConflictRecoveryBanner(snap!, gated!.doc)
+    if (choice === 'new-deck') this.showConflictRecoveryBanner(snap!, gated!.doc, conflicted)
     else this.showRecoveryBanner(snap!)
   }
 
@@ -3159,13 +3198,17 @@ export class Editor {
    * `this.store.doc`: replacing the open document would schedule an autosave
    * that PUTs the snapshot over the store's version with the fresh ETag.
    */
-  private showConflictRecoveryBanner(snap: Snapshot, recovered: import('../model').BentoDoc) {
+  private showConflictRecoveryBanner(snap: Snapshot, recovered: import('../model').BentoDoc, conflicted = true) {
     document.querySelector('.ed-recover')?.remove()
     const docId = this.store.doc.docId
     const bar = div('ed-recover')
     const when = new Date(snap.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })
     const msg = document.createElement('span')
-    msg.textContent = t('Someone saved a newer version of this deck in the cloud after your unsaved changes from {when}. Keep yours as a new deck, or discard them.', { when }) // BETA FORK: cloud wording
+    // Without a refused save the snapshot may be unsaved work or just an older
+    // copy this browser kept; either way the cloud's version is the newer one.
+    msg.textContent = conflicted
+      ? t('Someone saved a newer version of this deck in the cloud after your unsaved changes from {when}. Keep yours as a new deck, or discard them.', { when }) // BETA FORK: cloud wording
+      : t('This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.', { when })
     const keep = document.createElement('button')
     keep.className = 'ed-btn ed-btn-primary'
     keep.textContent = t('Save my version as a new deck')
@@ -3378,9 +3421,12 @@ export class Editor {
       // (a manual save always answers, even after autosave said it once), and
       // an expired Access session is a sign-in, not a bug.
       if (out.error instanceof StoreConflictError) { this.noteStoreConflict(out.error, true); return }
-      this.toast(out.error instanceof StoreSignedOutError ? out.error.message : t('Save failed — see console'), out.error instanceof StoreSignedOutError ? 6000 : undefined)
+      const said = out.error instanceof StoreSignedOutError || out.error instanceof StoreUnavailableError || (isStoreOrigin() && out.error instanceof Error && !!out.error.message)
+      this.toast(said ? (out.error as Error).message : t('Save failed — see console'), said ? 6000 : undefined)
       return
     }
+    // BETA FORK: a ⌘S that left nothing unsaved, same as an autosave
+    if (out.kind === 'written' && out.current) void this.afterStoreSaved(this.store.doc.docId)
     const result = out.result
     // "Save a copy…" wrote ANOTHER file and leaves you editing this one (#705):
     // nothing about the open deck changes — not its title, file chip, ⌘S target

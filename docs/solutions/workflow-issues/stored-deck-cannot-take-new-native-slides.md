@@ -15,11 +15,20 @@ symptoms:
   - "That slide shows Scenes in the toolbar and a Live scene panel (Inline scene, No adjustable values) instead of the full element editor"
   - "To get an editable slide the person must add a blank one in the editor so the agent can fill it by element id"
 root_cause: missing_capability
-resolution_type: workaround
+resolution_type: code_fix
+resolved: "2026-11-04, betamobility/slides#84: splice takes { slide, insertAfter } in edits.json"
 tags: [splice, ownership-rule, native-slides, runtime-slides, merge, store]
 ---
 
 # An agent cannot add a native slide to a deck in the store, so merging two decks has no clean path
+
+> **Resolved by #84 (2026-11-04).** `splice.mjs` now takes a native insert,
+> `{ "slide": { … }, "insertAfter": "<slide id>" | "end" }` in `edits.json`,
+> and `checkOwnership` accepts it on the terms set out under "The fix to build"
+> below. SKILL.md and `docs/agents.md` say so. Merging two decks is a series of
+> native inserts into the deck people already use: no new link, nothing for
+> the person to prepare. `scripts/test-beta-splice.ts` ("native insert")
+> covers it. The rest of this page is the history of why it was needed.
 
 ## What happened
 

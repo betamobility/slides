@@ -988,4 +988,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} surat ýüklenýär…",
   "Not rendered: {what}": "Görkezilmedi: {what}",
   "no space just inside the $ signs": "$ belgileriň edil içinde boşluk bolmaly däl",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Bulut prezentasiýany häzir saklap bilmedi (säwlik {status}). Üýtgeşmeleriňiz şu goýmada saklanýar; saklamak ýene synanyşylar.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Prezentasiýany saklamak üçin bulut bilen baglanyşyp bolmady. Üýtgeşmeleriňiz şu goýmada saklanýar; saklamak ýene synanyşylar.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Bu prezentasiýa bulutyň kabul edýänden uly. Iň uly suratlary ýa-da wideolary kiçeldiň ýa-da aýyryň, soňra ýene saklaň.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Bu brauzer iň soňky gezek saklanyndan bäri bu prezentasiýa bulutda üýtgedi. Size iň täze wersiýa açyk. Bu brauzer {when} senesinden bir nusga hem saklady: ony täze prezentasiýa hökmünde saklaň ýa-da taşlaň.",
 }

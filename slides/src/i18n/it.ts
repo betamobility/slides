@@ -1029,4 +1029,8 @@ export const it: Catalog = {
   "{n} pictures still uploading…": "{n} immagini in caricamento…",
   "Not rendered: {what}": "Non visualizzata: {what}",
   "no space just inside the $ signs": "nessuno spazio subito dentro i segni $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Il cloud non è riuscito a salvare la presentazione in questo momento (errore {status}). Le tue modifiche restano in questa scheda; il salvataggio verrà ritentato.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Impossibile raggiungere il cloud per salvare la presentazione. Le tue modifiche restano in questa scheda; il salvataggio verrà ritentato.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Questa presentazione è più grande di quanto il cloud accetti. Riduci o rimuovi le immagini o i video più pesanti, poi salva di nuovo.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "Questa presentazione è cambiata nel cloud dall’ultima volta che questo browser l’ha salvata. Hai aperto la versione più recente. Questo browser ha anche conservato una copia del {when}: tienila come nuova presentazione oppure scartala.",
 }

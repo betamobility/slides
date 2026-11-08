@@ -1029,4 +1029,8 @@ export const zhHans: Catalog = {
   "{n} pictures still uploading…": "{n} 张图片上传中…",
   "Not rendered: {what}": "未能渲染：{what}",
   "no space just inside the $ signs": "$ 符号内侧不要紧挨空格",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "云端暂时无法保存此演示文稿（错误 {status}）。你的更改保留在此标签页中，系统会自动重试保存。",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "无法连接云端以保存此演示文稿。你的更改保留在此标签页中，系统会自动重试保存。",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "此演示文稿超出了云端可接受的大小。请缩小或移除体积最大的图片或视频，然后再次保存。",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "自此浏览器上次保存以来，此演示文稿已在云端发生更改。你打开的是最新版本。此浏览器还保留了 {when} 的一份副本：请将其保留为新的演示文稿，或放弃它。",
 }

@@ -71,6 +71,11 @@ if (import.meta.url.endsWith('.ts')) {
   // asks recoveryChoice() rather than always offering whole-document Restore.
   ok(/markStoreConflict\(/.test(editor), 'editor.ts marks the conflict when a save latches')
   ok(/recoveryChoice\(/.test(editor) && /hasStoreConflict\(/.test(editor), 'editor.ts decides the recovery banner through recoveryChoice()')
+  ok(/storeMovedSinceSave\(sid\)/.test(editor) && /recoveryChoice\(\{ mismatch, storeOrigin: isStoreOrigin\(\), conflicted, moved \}\)/.test(editor), 'editor.ts tells recoveryChoice() whether the store moved since this browser saved')
+  {
+    const after = /private async afterStoreSaved\([\s\S]*?\n  }\n/.exec(editor)?.[0] ?? ''
+    ok(/isStoreOrigin\(\)/.test(after) && /this\.store\.dirty/.test(after) && /clearRecovery\(docId\)/.test(after), 'a store save that left nothing unsaved clears the recovery snapshot')
+  }
   // The v1.2.7 merge moved every save behind upstream's save queue, which turns
   // a throwing write into an outcome (`out.kind === 'failed'`, `out.error`)
   // instead of an exception. The fork's handling sat in a catch that no longer
@@ -239,16 +244,45 @@ async function rejects(fn: () => Promise<unknown>): Promise<any> {
   let e = await rejects(() => writeThrough(h, html))
   ok(e instanceof store.StoreSignedOutError, `opaqueredirect → StoreSignedOutError (${e?.name})`)
   ok(/sign in/i.test(String(e?.message)), `…whose message tells the author to sign in: "${e?.message}"`)
+  // A rejected fetch, or an HTML answer, is ambiguous: the tab asks Access
+  // (get-identity) before it says "signed out". Before 2026-11-07 every one of
+  // these said so, and a signed-in person saving a large deck (the worker's
+  // 1102 page) was told to sign in again.
+  const IDENTITY = `${STORE}/cdn-cgi/access/get-identity`
+  const signedIn = (call: Call) => call.url === IDENTITY ? Promise.resolve(new Response(JSON.stringify({ email: 'johan@betamobility.io', name: 'Johan' }), { status: 200, headers: { 'content-type': 'application/json' } })) : null
+  const loggedOut = (call: Call) => call.url === IDENTITY ? Promise.resolve({ type: 'opaqueredirect', status: 0, ok: false, headers: new Headers(), json: async () => { throw new Error('x') } } as any) : null
   respond(async () => { throw new TypeError('Failed to fetch') })
   e = await rejects(() => writeThrough(h, html))
-  ok(e instanceof store.StoreSignedOutError, 'a rejected fetch → StoreSignedOutError')
+  ok(e instanceof store.StoreUnavailableError, `a rejected fetch, with Access unreachable too → StoreUnavailableError, not signed out (${e?.name})`)
+  respond(async (c) => signedIn(c) ?? (() => { throw new TypeError('Failed to fetch') })())
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreUnavailableError && /tries again/.test(String(e.message)), `a rejected fetch while signed in → StoreUnavailableError that says it retries (${e?.name}: "${e?.message}")`)
+  respond(async (c) => loggedOut(c) ?? (() => { throw new TypeError('Failed to fetch') })())
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreSignedOutError, 'a rejected fetch while Access says signed out → StoreSignedOutError')
   respond(async () => new Response(null, { status: 401 }))
   e = await rejects(() => writeThrough(h, html))
   ok(e instanceof store.StoreSignedOutError, 'a bare 401 → StoreSignedOutError')
-  respond(async () => new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': 'text/html' } }))
+  respond(async (c) => loggedOut(c) ?? new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': 'text/html' } }))
   e = await rejects(() => writeThrough(h, html))
-  ok(e instanceof store.StoreSignedOutError, 'a 200 that is an HTML page (a login page) → StoreSignedOutError')
-  respond(async () => new Response('size', { status: 400 }))
+  ok(e instanceof store.StoreSignedOutError, 'a 200 that is an HTML page (a login page), Access confirming → StoreSignedOutError')
+  respond(async (c) => signedIn(c) ?? new Response('<html>odd</html>', { status: 200, headers: { 'content-type': 'text/html' } }))
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreUnavailableError, `a 200 HTML page while Access says signed in → StoreUnavailableError (${e?.name})`)
+  respond(async (c) => signedIn(c) ?? new Response('<html><title>Worker exceeded resource limits</title>Error 1102</html>', { status: 503, headers: { 'content-type': 'text/html; charset=UTF-8' } }))
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreUnavailableError && e.status === 503, `Cloudflare's 1102 error page (503, text/html) while signed in → StoreUnavailableError(503), not signed out (${e?.name})`)
+  ok(!/sign in/i.test(String(e?.message)), `…and its message does not tell a signed-in person to sign in: "${e?.message}"`)
+  respond(async (c) => signedIn(c) ?? new Response('<html>Bad gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }))
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreUnavailableError && e.status === 502, 'a 502 error page → StoreUnavailableError(502)')
+  respond(async () => new Response('store: the previous version could not be kept, so nothing was saved; try again', { status: 503, headers: { 'content-type': 'text/plain' } }))
+  e = await rejects(() => writeThrough(h, html))
+  ok(e instanceof store.StoreUnavailableError && e.status === 503, "the worker's own 503 (history copy failed) → StoreUnavailableError, retried")
+  respond(async () => new Response('size', { status: 413 }))
+  e = await rejects(() => writeThrough(h, html))
+  ok(e && !(e instanceof store.StoreSignedOutError) && !(e instanceof store.StoreUnavailableError) && /larger than the cloud accepts/.test(String(e.message)), `a 413 says the deck is too large, not signed out and not retried: "${e?.message}"`)
+  respond(async () => new Response('shell', { status: 400 }))
   e = await rejects(() => writeThrough(h, html))
   ok(e && !(e instanceof store.StoreSignedOutError) && /400/.test(String(e.message)), `a 400 rejects with the status, NOT as signed-out: "${e?.message}"`)
   ls.set('bento-offline', 'on')
@@ -750,6 +784,32 @@ console.log('\n§6 conditional save: HEAD, If-Match, 412')
   ok(reload({ probe: 'changed', live: false }) === true, 'a person\'s save reloads a tab that is not live')
   ok(reload({ probe: 'changed', live: true }) === false, 'a person\'s save does NOT reload a live tab: it holds that save through sync, and two tabs would reload each other on every autosave')
   ok(reload({ probe: 'same', live: false }) === false && reload({ probe: 'unknown', live: false }) === false && reload({ probe: 'unknown', live: true }) === false, 'same and unknown never reload')
+
+  // §6c THE CLOSED TAB'S SNAPSHOT. A tab that saved and closed leaves a
+  // recovery snapshot equal to what it saved. When someone writes the deck
+  // after that, the next boot must not offer Restore over their version.
+  respond(fakeStore)
+  serveEtag = true; serveGen = true; edgeStrips = false; conflictBody = 'json'; onConflict = null
+  ls.delete('bento-store-saved-abc123XYZ0')
+  store.installStoreHost()
+  ok(await store.storeMovedSinceSave('abc123XYZ0') === true, 'nothing recorded for this browser → "moved" (an unknown snapshot is never restored over the store)')
+  await save.writeUpdatedFile('saved by this tab')
+  const savedEtag = decks.get('abc123XYZ0')!.etag
+  ok(ls.get('bento-store-saved-abc123XYZ0') === savedEtag, `a successful PUT records the version this browser saved (${ls.get('bento-store-saved-abc123XYZ0')})`)
+  store.installStoreHost() // the tab closes and reopens, nobody else wrote
+  ok(await store.bootVersion('abc123XYZ0') === savedEtag, 'the next boot learns the same version')
+  ok(await store.storeMovedSinceSave('abc123XYZ0') === false, '…so the store has not moved since this browser saved: Restore stays safe')
+  decks.set('abc123XYZ0', { bytes: 'Claude wrote', etag: mint(), writer: 'service', gen: decks.get('abc123XYZ0')!.gen + 1 })
+  store.installStoreHost() // reopened after Claude's write
+  ok(await store.storeMovedSinceSave('abc123XYZ0') === true, 'after another writer, the next boot sees the store moved on')
+  const choice = store.recoveryChoice
+  ok(choice({ mismatch: true, storeOrigin: true, conflicted: false, moved: true }) === 'new-deck', '…and the recovery choice is keep-as-new-deck, never Restore over their write')
+  ok(choice({ mismatch: true, storeOrigin: true, conflicted: false, moved: false }) === 'restore', 'unsaved work on an unchanged store → Restore, as before')
+  ok(choice({ mismatch: true, storeOrigin: false, conflicted: false, moved: true }) === 'restore', '"moved" means nothing off the store origin')
+  respond(async () => { throw new TypeError('offline') })
+  store.installStoreHost()
+  ok(await store.storeMovedSinceSave('abc123XYZ0') === true, 'no version learned at boot → "moved" (cannot tell, so never restore over the store)')
+  respond(fakeStore)
 }
 
 // ---- after a conflict, the recovery banner ----------------------------------------

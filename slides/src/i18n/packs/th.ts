@@ -965,4 +965,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "กำลังอัปโหลดรูปภาพ {n} รูป…",
   "Not rendered: {what}": "แสดงผลไม่ได้: {what}",
   "no space just inside the $ signs": "ห้ามเว้นวรรคชิดด้านในเครื่องหมาย $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "คลาวด์บันทึกงานนำเสนอไม่ได้ในตอนนี้ (ข้อผิดพลาด {status}) การเปลี่ยนแปลงของคุณยังอยู่ในแท็บนี้ และระบบจะลองบันทึกอีกครั้ง",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "เชื่อมต่อคลาวด์เพื่อบันทึกงานนำเสนอไม่ได้ การเปลี่ยนแปลงของคุณยังอยู่ในแท็บนี้ และระบบจะลองบันทึกอีกครั้ง",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "งานนำเสนอนี้มีขนาดใหญ่เกินกว่าที่คลาวด์รับได้ ย่อหรือลบรูปภาพหรือวิดีโอที่ใหญ่ที่สุด แล้วบันทึกอีกครั้ง",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "งานนำเสนอนี้มีการเปลี่ยนแปลงในคลาวด์ตั้งแต่เบราว์เซอร์นี้บันทึกครั้งล่าสุด คุณเปิดเวอร์ชันล่าสุดอยู่ เบราว์เซอร์นี้ยังเก็บสำเนาจาก {when} ไว้ด้วย: เก็บไว้เป็นงานนำเสนอใหม่ หรือทิ้งไป",
 }

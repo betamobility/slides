@@ -40,7 +40,7 @@ async function probe(negative: boolean) {
   }
   const source = negative ? body.replace('JSON.stringify(recovered)', 'JSON.stringify(this.store.doc)') : body
   assert(!negative || source !== body)
-  const js = ts.transpile('function banner(snap, recovered) ' + source, { target: ts.ScriptTarget.ES2022 })
+  const js = ts.transpile('function banner(snap, recovered, conflicted = true) ' + source, { target: ts.ScriptTarget.ES2022 })
   const banner = new Function(...Object.keys(deps), js + '; return banner')(...Object.values(deps))
   banner.call({ store: { doc: live }, toast: (s: string) => toasts.push(s) }, { at: Date.now() }, recovered)
   const bar = root.children[0], keep = bar.children[1]

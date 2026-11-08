@@ -1029,4 +1029,8 @@ export const zhHant: Catalog = {
   "{n} pictures still uploading…": "{n} 張圖片上傳中…",
   "Not rendered: {what}": "未能呈現：{what}",
   "no space just inside the $ signs": "$ 符號內側不要緊貼空格",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "雲端暫時無法儲存此簡報（錯誤 {status}）。你的變更保留在此分頁中，系統會自動重試儲存。",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "無法連線至雲端以儲存此簡報。你的變更保留在此分頁中，系統會自動重試儲存。",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "此簡報超出雲端可接受的大小。請縮小或移除檔案最大的圖片或影片，然後再次儲存。",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "自此瀏覽器上次儲存以來，此簡報已在雲端變更。你開啟的是最新版本。此瀏覽器還保留了 {when} 的一份副本：請將其保留為新簡報，或捨棄。",
 }

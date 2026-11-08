@@ -964,4 +964,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} תמונות מועלות…",
   "Not rendered: {what}": "לא הוצג: {what}",
   "no space just inside the $ signs": "ללא רווח מיד בתוך סימני ה־$",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "הענן לא הצליח לשמור את המצגת כרגע (שגיאה {status}). השינויים שלך נשמרים בלשונית הזו, והשמירה תנוסה שוב.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "לא ניתן היה להגיע לענן כדי לשמור את המצגת. השינויים שלך נשמרים בלשונית הזו, והשמירה תנוסה שוב.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "המצגת הזו גדולה ממה שהענן מקבל. הקטן או הסר את התמונות או הסרטונים הגדולים ביותר ואז שמור שוב.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "המצגת הזו השתנתה בענן מאז שהדפדפן הזה שמר אותה לאחרונה. הגרסה האחרונה פתוחה אצלך. הדפדפן הזה שמר גם עותק מ-{when}: שמור אותו כמצגת חדשה, או מחק אותו.",
 }

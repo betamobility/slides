@@ -963,4 +963,8 @@ export const strings: Catalog = {
   "{n} pictures still uploading…": "{n} изображений загружаются…",
   "Not rendered: {what}": "Не отображено: {what}",
   "no space just inside the $ signs": "без пробела сразу внутри знаков $",
+  "The cloud could not save the deck just now (error {status}). Your changes are kept in this tab; saving tries again.": "Облако не смогло сохранить презентацию (ошибка {status}). Ваши изменения сохранены в этой вкладке, сохранение будет повторено.",
+  "Couldn’t reach the cloud to save the deck. Your changes are kept in this tab; saving tries again.": "Не удалось связаться с облаком, чтобы сохранить презентацию. Ваши изменения сохранены в этой вкладке, сохранение будет повторено.",
+  "This deck is larger than the cloud accepts. Shrink or remove the largest images or videos, then save again.": "Эта презентация больше, чем принимает облако. Уменьшите или удалите самые большие изображения или видео и сохраните снова.",
+  "This deck changed in the cloud since this browser last saved it. You have the latest version open. This browser also kept a copy from {when}: keep it as a new deck, or discard it.": "С момента последнего сохранения в этом браузере презентация изменилась в облаке. У вас открыта последняя версия. Браузер также сохранил копию от {when}: оставьте её как новую презентацию или отбросьте.",
 }
