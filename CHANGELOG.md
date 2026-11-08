@@ -9,10 +9,10 @@ below opens files from every earlier version, and unknown fields are preserved.
 This project's versions roughly follow semantic-ish `0.MINOR.PATCH` while it is
 pre-1.0.
 
-## [Unreleased]
+## [2026.11.3] — 2026-11-08
 
 - **Claude can change a deck you have open.** When Claude (or a colleague) saves a deck while you are editing it outside a live session, your tab now merges their changes into yours instead of locking and offering your work only as a new deck. Where you both changed the same text, yours is kept and the message says how many places. Encrypted decks still lock.
-- **Version history includes the cloud.** On a deck at slides.betamobility.ai, Version history lists the versions the cloud kept, written by anyone or by an agent, and restores one with ⌘Z to undo. Needs the deck store deployed with the history routes.
+- **Version history includes the cloud.** On a deck at slides.betamobility.ai, Version history lists the versions the cloud kept, written by anyone or by an agent, and restores one with ⌘Z to undo.
 - **"Signed out" only when you are.** A save that fails because the cloud is briefly unreachable or answers with an error page says so and tries again after 5, 15 and 30 seconds, then every minute. It no longer tells a signed-in person to sign in again.
 - **No more Restore offers over someone else's work.** Reopening a deck that changed in the cloud since you last saved no longer offers "Unsaved changes … Restore", which would have overwritten the newer version. Unsaved work from a closed tab is offered as a new deck when the cloud has moved on.
 
