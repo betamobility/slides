@@ -969,4 +969,7 @@ export const strings: Catalog = {
   "That version is password-protected; open it from a file to restore it.": "해당 버전은 비밀번호로 보호되어 있습니다. 복원하려면 파일에서 여세요.",
   "The cloud keeps a version whenever someone else saves over it, when Claude changes the deck, or after ten minutes of editing. Versions kept in this browser are never in the file or online. Restoring is undoable.": "클라우드는 다른 사람이 덮어써서 저장하거나, Claude가 프레젠테이션을 변경하거나, 편집 후 10분이 지나면 버전을 보관합니다. 이 브라우저에 보관된 버전은 파일에도 온라인에도 포함되지 않습니다. 복원은 실행 취소할 수 있습니다.",
   "Restore an earlier version of this deck: the ones the cloud kept, and the ones this browser kept.": "이 프레젠테이션의 이전 버전을 복원합니다. 클라우드가 보관한 버전과 이 브라우저가 보관한 버전이 있습니다.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.": "편집하는 동안 이 프레젠테이션이 클라우드에서 변경되었습니다. 해당 변경 사항이 반영되었고, 내 변경 사항도 그대로입니다. ⌘Z로 병합을 실행 취소할 수 있습니다.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.": "편집하는 동안 이 프레젠테이션이 클라우드에서 변경되었습니다. 해당 변경 사항이 반영되었으며, 내가 함께 변경한 한 곳은 내 버전을 유지했습니다. ⌘Z로 병합을 실행 취소할 수 있습니다.",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.": "편집하는 동안 이 프레젠테이션이 클라우드에서 변경되었습니다. 해당 변경 사항이 반영되었으며, 내가 함께 변경한 {n}곳은 내 버전을 유지했습니다. ⌘Z로 병합을 실행 취소할 수 있습니다.",
 }

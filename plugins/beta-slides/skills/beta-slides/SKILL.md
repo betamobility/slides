@@ -628,9 +628,17 @@ upload then fails, the error carries the deck id, and you finish with
   is not framing-checked: the site is the one the person already chose.
 - **`--dry-run`** reads the deck and prints the plan without writing. Run it
   first.
-- An encrypted deck is refused; the tool does not decrypt. A deck that is in
-  a live session while the tool writes is unsupported: collaborators are not
-  told the store copy changed.
+- An encrypted deck is refused; the tool does not decrypt. A deck that is
+  open in someone's tab (not in a live session) while the tool writes takes
+  the write in: a tab with nothing unsaved reloads onto it, and a tab with
+  unsaved edits merges it into what the person is doing, on its next save or
+  when it next takes focus.
+  Where you and the person changed the same element, the person's version
+  stays (the store keeps yours in the deck's version history), so edit what
+  you were asked to and leave the rest alone. Encrypted decks and shells
+  from release 2026.11.2 or earlier still lock instead of merging. A deck in
+  a live session while the tool writes is still unsupported: it has not been
+  tested, so ask the people in it to stop editing first.
 
 ### The scene library: insert a reviewed scene, change its settings
 

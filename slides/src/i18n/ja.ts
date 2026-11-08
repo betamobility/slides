@@ -1043,4 +1043,7 @@ export const ja: Catalog = {
   "That version is password-protected; open it from a file to restore it.": "このバージョンはパスワードで保護されています。復元するにはファイルから開いてください。",
   "The cloud keeps a version whenever someone else saves over it, when Claude changes the deck, or after ten minutes of editing. Versions kept in this browser are never in the file or online. Restoring is undoable.": "クラウドは、他の人が上書き保存したとき、Claude がデッキを変更したとき、または編集から 10 分後にバージョンを保持します。このブラウザーに保持されたバージョンは、ファイルにもオンラインにも含まれません。復元は元に戻せます。",
   "Restore an earlier version of this deck: the ones the cloud kept, and the ones this browser kept.": "このデッキの以前のバージョンを復元します。クラウドが保持したものと、このブラウザーが保持したものがあります。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.": "編集中に、このデッキがクラウド上で変更されました。その変更は取り込まれており、あなたの変更も反映されています。 ⌘Z でマージを元に戻せます。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.": "編集中に、このデッキがクラウド上で変更されました。その変更は取り込まれていますが、あなたも変更していた 1 か所だけは、あなたのバージョンを残しました。 ⌘Z でマージを元に戻せます。",
+  "This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.": "編集中に、このデッキがクラウド上で変更されました。その変更は取り込まれていますが、あなたも変更していた {n} か所は、あなたのバージョンを残しました。 ⌘Z でマージを元に戻せます。",
 }

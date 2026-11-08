@@ -822,8 +822,14 @@ same bytes; the same name with different bytes is refused before any request.
   the store creates it, and a later upload failure names the deck id so the
   run can be finished with `splice.mjs <deckId> <projectDir>`.
 - Exit codes: 0 success, 1 refusal or store error, 2 usage.
-- A deck that is in a live session while the tool writes is unsupported:
-  collaborators are not told the store copy changed.
+- A deck open in someone's tab (not in a live session) while the tool writes takes the write in: a
+  tab with nothing unsaved reloads onto it, and a tab with unsaved edits
+  merges it (slides/src/beta/merge.ts) on its next save or when it next takes
+  focus. Where both changed one element the person's version stays and the
+  store keeps the tool's in the deck's history. Encrypted decks and shells
+  from release 2026.11.2 or earlier still lock the tab instead.
+- A deck in a live session while the tool writes is still unsupported (the
+  merge in a live room is untested): ask the people in it to stop editing.
 
 Publishing is one click in a browser, and nobody handles a secret. The first
 command that reaches the store with no approval on the machine prints one URL

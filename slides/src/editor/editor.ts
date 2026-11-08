@@ -24,6 +24,8 @@ import { clearStoreConflict, handoffToStore, hasStoreConflict, isStoreOrigin, ma
 import { storeMovedSinceSave, StoreUnavailableError } from '../beta/store' // BETA FORK: honest save errors, stale-snapshot guard
 import { listCloudVersions, readCloudVersion, writerLabel, type CloudVersion } from '../beta/store' // BETA FORK: version history in the cloud
 import { embeddedDocBlock } from '../save' // BETA FORK: a cloud version's document block
+import { adoptMergedVersion, fetchStoreDeck, mergeChoice } from '../beta/store' // BETA FORK: merge the cloud's version into an open tab
+import { mergeCloudVersion } from '../beta/merge' // BETA FORK
 import { fetchLibrary, storeHost } from '../beta/store' // BETA FORK (U11): the scene library
 import { adoptAccessName } from '../beta/store' // BETA FORK: presence names from Access
 import { initialsOf } from '../beta/initials' // BETA FORK: two-letter avatars
@@ -2769,6 +2771,7 @@ export class Editor {
         // write stays dirty and its own 'doc' event has already re-armed us
         if (out.current) { this.flashSaved(); void this.afterStoreSaved(doc.docId) } // BETA FORK: afterStoreSaved
         this.storeRetries = 0 // BETA FORK
+        this.noteStoreBase(out.doc) // BETA FORK: what the cloud now holds, the base of the next merge
         return
       }
       // failed: keep dirty; the IndexedDB snapshot is the backstop
@@ -2830,7 +2833,93 @@ export class Editor {
     markStoreConflict(this.store.doc.docId)
     if (this.storeConflict && !always) return
     this.storeConflict = true
+    // BETA FORK: fold the store's version in instead, when this tab can. The
+    // latch holds until the merge lands; the old message is the fallback.
+    if (this.canMergeStore()) { void this.mergeStoreVersion(err); return }
     this.toast(this.storeConflictMessage(err), 12000)
+  }
+
+  /**
+   * BETA FORK: the version this tab last had in common with the cloud, the
+   * base a merge diffs both sides against (beta/merge.ts). The deck as it
+   * booted, then whatever each store save wrote, then each merge's cloud side.
+   */
+  private storeBase: import('../model').BentoDoc | null = null
+  private noteStoreBase(doc: import('../model').BentoDoc) {
+    if (isStoreOrigin()) this.storeBase = JSON.parse(JSON.stringify(doc))
+  }
+
+  /** Whether a merge is possible at all here: a cloud deck, not encrypted
+   *  (its bytes are ciphertext), with a base to merge over. */
+  private canMergeStore(): boolean {
+    return isStoreOrigin() && !!storeIdFromLocation() && !!this.storeBase && !isEncryptionActive() && !isBodySealed() && !this.store.doc.readonly
+  }
+
+  /** Whether a merge may replace the open document NOW: nothing half-typed
+   *  that a re-render would drop, no gesture, no show. Unsaved edits are fine;
+   *  they are what the merge keeps. */
+  private mergeableNow(): boolean {
+    if (document.visibilityState !== 'visible' || this.presenting) return false
+    if (this.canvas.isEditingText || this.canvas.isDrawing) return false
+    const a = document.activeElement as HTMLElement | null
+    return !(a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))
+  }
+
+  /**
+   * BETA FORK: bring the cloud's newer version into this tab without losing
+   * its unsaved edits. Fetch it, merge it over the common base with the open
+   * deck on top (the person's edit wins where both changed one property),
+   * adopt its version so the next save is no longer refused, and save.
+   *
+   * Waits for a moment that is mergeable: a caret in a text box or a field
+   * being typed in would lose its pending input to the re-render, so the
+   * watch (every 15 s, and on focus) tries again. Anything that makes the
+   * merge impossible (encrypted, the fetch failed, the bytes are not a deck)
+   * leaves the latch and says what it always said.
+   */
+  private storeMerging = false
+  private storeMergePending = false
+  private async mergeStoreVersion(err?: StoreConflictError): Promise<void> {
+    const id = storeIdFromLocation()
+    if (!id || this.storeMerging) return
+    if (!this.canMergeStore()) { if (err) this.toast(this.storeConflictMessage(err), 12000); return }
+    if (!this.mergeableNow()) { this.storeMergePending = true; return }
+    this.storeMerging = true
+    try {
+      const cloud = await fetchStoreDeck(id)
+      const block = cloud ? embeddedDocBlock(cloud.html) : null
+      const theirs = block && !/^\s*\{\s*"format"\s*:\s*"bento\/enc"/.test(block) ? gateRestored(block, this.store.doc)?.doc ?? null : null
+      if (!cloud || !theirs || !this.storeBase) {
+        this.storeMergePending = false
+        this.toast(this.storeConflictMessage(err ?? new StoreConflictError()), 12000)
+        return
+      }
+      if (!this.mergeableNow()) { this.storeMergePending = true; return } // the fetch took a moment; look again
+      this.storeMergePending = false
+      const merged = mergeCloudVersion(this.storeBase, this.store.doc, theirs)
+      this.storeBase = JSON.parse(JSON.stringify(theirs))
+      adoptMergedVersion(id, cloud.etag, cloud.gen)
+      this.storeConflict = false
+      clearStoreConflict(this.store.doc.docId)
+      if (merged.changed) {
+        // replaceDoc lands on the first slide and drops the selection; keep the
+        // person where they were
+        const at = this.store.slide?.id
+        this.store.replaceDoc(merged.doc)
+        const i = at ? this.store.doc.slides.findIndex((s) => s.id === at) : -1
+        if (i > 0) this.store.goTo(i)
+        this.canvas.render()
+      }
+      if (this.store.dirty) this.scheduleAutosave()
+      const n = merged.conflicts.length
+      this.toast(n === 0
+        ? t('This deck was changed in the cloud while you were editing. Those changes are in, and so are yours. ⌘Z undoes the merge.')
+        : n === 1
+          ? t('This deck was changed in the cloud while you were editing. Those changes are in, except in one place you had also changed, where your version was kept. ⌘Z undoes the merge.')
+          : t('This deck was changed in the cloud while you were editing. Those changes are in, except in {n} places you had also changed, where your version was kept. ⌘Z undoes the merge.', { n: String(n) }), 8000)
+    } finally {
+      this.storeMerging = false
+    }
   }
 
   /** The conflict message, plus where the edits go after the reload. Not for
@@ -2854,6 +2943,7 @@ export class Editor {
   private wireStoreWatch() {
     const id = storeIdFromLocation()
     if (!isStoreOrigin() || !id || this.store.doc.readonly) return
+    this.noteStoreBase(this.store.doc) // BETA FORK: the deck as the cloud served it is the first merge base
     this.noteStoreReload()
     const check = () => { void this.followStore(id) }
     window.setInterval(check, 15_000)
@@ -2878,6 +2968,7 @@ export class Editor {
   }
 
   private async followStore(id: string) {
+    if (await this.followStoreWhileEditing(id)) return // BETA FORK: a tab with unsaved edits merges instead
     if (this.storeWatchBusy || !this.idleForStoreReload()) return
     this.storeWatchBusy = true
     try {
@@ -2895,6 +2986,29 @@ export class Editor {
     } finally {
       this.storeWatchBusy = false
     }
+  }
+
+  /**
+   * BETA FORK: the watch for a tab that is NOT idle. A merge a refused save
+   * left waiting runs as soon as it may; and a tab with unsaved edits asks
+   * the store, and merges a newer version before its next save would be
+   * refused. True when this took the tick (the idle reload is skipped).
+   */
+  private async followStoreWhileEditing(id: string): Promise<boolean> {
+    if (this.storeWatchBusy || this.storeMerging) return true
+    if (this.storeConflict || this.storeMergePending) {
+      if (this.storeMergePending && this.canMergeStore()) await this.mergeStoreVersion()
+      return true
+    }
+    if (!this.store.dirty || !this.canMergeStore() || !this.mergeableNow()) return false
+    this.storeWatchBusy = true
+    try {
+      const probe = await probeStore(id)
+      if (mergeChoice({ probe, live: onlineTransport()?.status === 'open' })) await this.mergeStoreVersion()
+    } finally {
+      this.storeWatchBusy = false
+    }
+    return true
   }
 
   /** After that reload: back to the slide the person was on, and one line on
@@ -3510,6 +3624,7 @@ export class Editor {
     }
     // BETA FORK: a ⌘S that left nothing unsaved, same as an autosave
     if (out.kind === 'written' && out.current) void this.afterStoreSaved(this.store.doc.docId)
+    if (out.kind === 'written' && (out.result as string) !== 'copied') this.noteStoreBase(out.doc) // BETA FORK: the merge base
     const result = out.result
     // "Save a copy…" wrote ANOTHER file and leaves you editing this one (#705):
     // nothing about the open deck changes — not its title, file chip, ⌘S target
