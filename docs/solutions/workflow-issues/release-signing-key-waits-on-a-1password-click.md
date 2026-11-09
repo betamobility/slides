@@ -15,9 +15,11 @@ symptoms:
   - "`op document get` ends with `[ERROR] … authorization timeout` after roughly a minute, twice in a row"
   - "A background watcher waited an hour for a key file that never arrived because nobody was at the Mac"
   - "Colleagues building decks with Claude were shown 1Password prompts"
+  - "`authorization timeout` with the maintainer at the Mac and no prompt on screen, also for a `!` run (2026-11-09: the session ran under herdr)"
+  - "`release.mjs` stops at `derive-pins.mjs` with `Cannot find package 'playwright'`"
 root_cause: missing_workflow_step
 resolution_type: workflow_improvement
-tags: [release, signing-key, 1password, op-cli, pairing, grant, beta-toolkit]
+tags: [release, signing-key, 1password, op-cli, pairing, grant, beta-toolkit, herdr, playwright]
 ---
 
 # An agent-run release waits on one 1Password click, and the click expires in about a minute
@@ -68,9 +70,47 @@ agent doing a release should:
 
 3. Do not retry blindly after an `authorization timeout`. Each retry is
    another minute that only a person's click can end. Two timeouts mean
-   nobody is there: say so, and hand over the one command to run with `!`.
+   nobody is there, or the session cannot reach the person's screen (next
+   section). Check that first, then hand over the one command.
 4. Sign with `node scripts/release.mjs --key <file>`, then delete the key
    (`rm -P`) before publishing. Nothing after signing needs it.
+
+**A session outside the login session can never get the prompt.** Release
+2026.11.3 (2026-11-09) timed out four times with the maintainer sitting at
+the mini, and a `!` run timed out too. The session had been started by
+`herdr`, whose daemon `herdr-core` is a child of `launchd`, not of a
+terminal the maintainer opened. 1Password shows its approval prompt only to
+processes in the logged-in GUI session, so it never appeared, and `op`
+timed out silently. `op whoami` saying "account is not signed in" was a red
+herring. Opening Terminal from the session (`open -a Terminal x.command`)
+did not help either: the AppleEvent timed out and no window appeared.
+
+Check before the first fetch:
+
+```sh
+p=$$; while [ "$p" -gt 1 ]; do ps -o pid=,comm= -p "$p"; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+```
+
+If the chain ends in `herdr-core` → `launchd` (or tmux started outside the
+GUI), do not run `op` from the session. Write the fetch to a script in the
+scratchpad and ask the person to run it from a terminal **they open on the
+Mac**. It succeeded on the first try that way. A `!` command does not help,
+because it runs in the session's own shell.
+
+**Signing also needs Playwright.** `release.mjs` runs
+`scripts/derive-pins.mjs`, which boots the shell in Chromium. If no
+`playwright` package resolves, install CI's version outside the repo and
+point it at the installed Chrome:
+
+```sh
+npm install --prefix <scratchpad>/bento-browser --no-package-lock --ignore-scripts playwright@1.61.1
+PLAYWRIGHT_MODULE=<scratchpad>/bento-browser/node_modules/playwright/index.mjs \
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+BENTO_SITE_DIR=<site clone> node scripts/release.mjs --key <file>
+```
+
+Do this before the key fetch, so a fetched key does not sit on disk while
+the tooling is fixed. The version is the one in `.github/workflows/ci.yml`.
 
 **Colleagues should never meet 1Password at all.** Their prompts came from
 agent-facing text, not from the release. Until 2026-10-14 the beta-slides
